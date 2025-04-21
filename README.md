@@ -1,4 +1,4 @@
-# Pipeline Refactor - Unified Conversion and Processing Pipeline
+# TensorSwitch
 
 This package provides a unified entry point and organized task modules for managing N5/Zarr dataset conversions and downsampling. It centralizes your workflow into a single pipeline to reduce manual work and errors.
 
