@@ -25,7 +25,7 @@ def test_n5_to_n5_submit():
         --output_path tests/temp/test_n5_to_n5
         --submit"""
     subprocess.run(command.split())
-    #shutil.rmtree(temp_dir)
+    shutil.rmtree(temp_dir)
     return None
 
 def create_n5(temp_dir=None):
@@ -60,5 +60,5 @@ def create_n5(temp_dir=None):
     return temp_dir  # Return path to N5 dataset
 
 if __name__ == "__main__":
-    #test_n5_to_n5()
+    test_n5_to_n5()
     test_n5_to_n5_submit()
