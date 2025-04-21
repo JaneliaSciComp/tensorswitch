@@ -27,6 +27,21 @@ tensorswitch/
     └── test_zarr3_to_downsample_shard_zarr3.py
 ```
 
+## Installation
+
+### Pip
+
+```
+pip install git+https://github.com/JaneliaSciComp/tensorswitch
+```
+
+### Pixi
+
+```
+pixi add python
+pixi add --pypi "tensorswitch @ git+https://github.com/JaneliaSciComp/tensorswitch"
+```
+
 ## How to Use
 
 ### 1. Run the Main Pipeline
