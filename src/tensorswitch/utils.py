@@ -2,6 +2,7 @@ import tensorstore as ts
 import numpy as np
 import requests
 import psutil
+import os
 
 def get_chunk_domains(chunk_shape, array):
     first_chunk_domain = ts.IndexDomain(inclusive_min=array.origin, shape=chunk_shape)
@@ -82,7 +83,7 @@ def zarr3_store_spec(path, shape, dtype, use_shard=True):
 def downsample_spec(base_spec):
     return {
         'driver': 'downsample',
-        'base': base_spec,
+        'base': get_zarr_store_spec(base_spec),
         'downsample_factors': [2, 2, 2],
         'downsample_method': 'mode'
     }
@@ -117,13 +118,61 @@ def fetch_http_json(url):
 def build_job_name(task, level, volume_idx):
     return f"{task}_s{level}_vol{volume_idx}"
 
-def get_total_chunks(dataset_path):
-    """Retrieve total number of chunks dynamically from the dataset."""
-    dataset_spec = {
-        'driver': 'n5' if dataset_path.endswith(".n5") else 'zarr',
-        'kvstore': {'driver': 'file', 'path': dataset_path},
+def get_input_driver(input_path):
+    """
+    Detect whether input is N5, Zarr2, or Zarr3
+
+    Checks if there is a attributes.json, .zarray, or zarr.json
+    """
+
+    if not os.path.exists(input_path):
+        raise ValueError(f"""
+        ❌ Could not detect N5/Zarr version at: {input_path}.
+        {input_path} does not exist.
+        """)
+    
+    n5_path = os.path.join(input_path, "attributes.json")
+    zarr2_path = os.path.join(input_path, ".zarray")
+    zarr3_path = os.path.join(input_path, "zarr.json")
+
+    if os.path.exists(n5_path):
+        input_driver = "n5"
+    elif os.path.exists(zarr2_path):
+        input_driver = "zarr"
+    elif os.path.exists(zarr3_path):
+        input_driver = "zarr3"
+    else:
+        raise ValueError(f"""
+        ❌ Could not detect N5/Zarr version at: {input_path}.
+        {n5_path} does not exist.
+        {zarr2_path} does not exist.
+        {zarr3_path} does not exist.
+        """)
+    return input_driver
+
+def get_zarr_store_spec(path):
+    if isinstance(path, dict):
+        return path
+        
+    input_driver = get_input_driver(path)
+        
+    zarr_store_spec = {
+        'driver': input_driver,
+        'kvstore': {'driver': 'file', 'path': path}
     }
-    dataset_store = ts.open(dataset_spec).result()
+    return zarr_store_spec
+
+def get_total_chunks(dataset):
+    """Retrieve total number of chunks dynamically from the dataset."""
+
+    if isinstance(dataset, dict):
+        dataset_spec = dataset
+    elif isinstance(dataset, str):
+        dataset_spec = get_zarr_store_spec(dataset)
+    else:
+        raise RuntimeError("dataset must either be a dict or str")
+    
+    dataset_store = ts.open(dataset_spec, create=True, open=True, delete_existing=False).result()
 
     shape = np.array(dataset_store.shape)
     chunk_shape = np.array(dataset_store.chunk_layout.read_chunk.shape)
