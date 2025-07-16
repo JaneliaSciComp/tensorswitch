@@ -11,7 +11,7 @@ def process(base_path, output_path, use_shard=False, memory_limit=50, start_idx=
     print(f"Volume shape: {volume.shape}, dtype: {volume.dtype}", flush=True)
 
     # Enable Dask opportunistic cache with 8 GB RAM
-    cache = Cache(8e9)  # 8 gigabytes
+    cache = Cache(8 * 1024**3)  # 8 GiB = 8 × 1024³ = 8,589,934,592 bytes
     cache.register()
 
     # Create or open the output Zarr3 store
