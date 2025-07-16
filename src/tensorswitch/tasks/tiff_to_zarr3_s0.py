@@ -1,3 +1,4 @@
+from dask.cache import Cache
 from ..utils import load_tiff_stack, zarr3_store_spec, get_chunk_domains, commit_tasks
 import tensorstore as ts
 import numpy as np
@@ -8,6 +9,10 @@ def process(base_path, output_path, use_shard=False, memory_limit=50, start_idx=
     print(f"Loading TIFF stack from: {base_path}", flush=True)
     volume = load_tiff_stack(base_path)
     print(f"Volume shape: {volume.shape}, dtype: {volume.dtype}", flush=True)
+
+    # Enable Dask opportunistic cache with 8 GB RAM
+    cache = Cache(8e9)  # 8 gigabytes
+    cache.register()
 
     # Create or open the output Zarr3 store
     store_spec = zarr3_store_spec(
