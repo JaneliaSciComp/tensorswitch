@@ -45,3 +45,12 @@ psutil = ">=7.0.0,<8"
 requests = ">=2.32.3,<3"
 pytest = ">=8.3.5,<9"
 numpy = ">=2.2.5,<3"
+tifffile = ">=2025.6.11,<2026"
+dask = ">=2025.5.1,<2026"
+dask-image = ">=2024.5.3,<2025"
+
+[tool.pixi.feature.ipykernel.dependencies]
+ipykernel = "*"
+
+[tool.pixi.environments]
+jupyter = ["ipykernel"]

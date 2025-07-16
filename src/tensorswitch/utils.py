@@ -3,6 +3,9 @@ import numpy as np
 import requests
 import psutil
 import os
+import tifffile
+import dask_image
+from dask_image import imread as dask_imread
 
 def get_chunk_domains(chunk_shape, array):
     first_chunk_domain = ts.IndexDomain(inclusive_min=array.origin, shape=chunk_shape)
@@ -120,14 +123,14 @@ def build_job_name(task, level, volume_idx):
 
 def get_input_driver(input_path):
     """
-    Detect whether input is N5, Zarr2, or Zarr3
+    Detect whether input is TIFF, N5, Zarr2, or Zarr3
 
-    Checks if there is a attributes.json, .zarray, or zarr.json
+    Checks if there is a attributes.json, .zarray, zarr.json, or .tiff/.tif files
     """
 
     if not os.path.exists(input_path):
         raise ValueError(f"""
-        ❌ Could not detect N5/Zarr version at: {input_path}.
+        ❌ Could not detect N5/Zarr version or dataset format at: {input_path}.
         {input_path} does not exist.
         """)
     
@@ -142,11 +145,20 @@ def get_input_driver(input_path):
     elif os.path.exists(zarr3_path):
         input_driver = "zarr3"
     else:
+        # Check for .tiff or .tif files
+        tiff_files = [
+            f for f in os.listdir(input_path)
+            if f.lower().endswith((".tiff", ".tif"))
+        ]
+        if tiff_files:
+            return "tiff"
+            
         raise ValueError(f"""
-        ❌ Could not detect N5/Zarr version at: {input_path}.
+        ❌ Could not detect N5/Zarr version or dataset format at: {input_path}.
         {n5_path} does not exist.
         {zarr2_path} does not exist.
         {zarr3_path} does not exist.
+        And no TIFF files found in folder.
         """)
     return input_driver
 
@@ -155,6 +167,9 @@ def get_zarr_store_spec(path):
         return path
         
     input_driver = get_input_driver(path)
+
+    if input_driver == "tiff":
+        raise ValueError(f"❌ Cannot build TensorStore spec for TIFF folder: {path}")
         
     zarr_store_spec = {
         'driver': input_driver,
@@ -178,3 +193,32 @@ def get_total_chunks(dataset):
     chunk_shape = np.array(dataset_store.chunk_layout.read_chunk.shape)
     chunk_counts = np.ceil(shape / chunk_shape).astype(int)
     return np.prod(chunk_counts)
+
+def load_tiff_stack(folder):
+    return dask_imread.imread(folder + "/*.tiff")
+
+def estimate_total_chunks_for_tiff(input_path, chunk_shape=(64, 64, 64)):
+    """
+    Estimate total number of chunks for a TIFF stack,
+    given a default chunk shape.
+    """
+    print(f"Estimating total chunks for TIFF input at {input_path}...")
+
+    file_list = sorted([
+        os.path.join(input_path, f)
+        for f in os.listdir(input_path)
+        if f.lower().endswith((".tiff", ".tif"))
+    ])
+    if not file_list:
+        raise ValueError("No TIFF files found.")
+
+    # Load the shape of a single slice
+    sample = tifffile.imread(file_list[0])
+    volume_shape = (len(file_list),) + sample.shape  # (z, y, x)
+
+    chunk_shape = np.array(chunk_shape)
+    chunk_counts = np.ceil(np.array(volume_shape) / chunk_shape).astype(int)
+    total_chunks = int(np.prod(chunk_counts))
+    
+    return total_chunks
+
