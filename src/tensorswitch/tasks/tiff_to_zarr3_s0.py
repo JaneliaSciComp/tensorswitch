@@ -50,5 +50,5 @@ def process(base_path, output_path, use_shard=False, memory_limit=50, start_idx=
     for task in tasks:
         task.result()
     
-    txn.commit()
+    txn.commit_sync()
     print(f"Completed writing Zarr3 s0 at: {output_path} [{start_idx}:{stop_idx}]", flush=True)
