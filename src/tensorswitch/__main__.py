@@ -13,7 +13,7 @@ if not __package__:
     sys.path.insert(0, package_source_path)
 
 from . import tasks
-from .utils import get_total_chunks, downsample_spec, zarr3_store_spec, estimate_total_chunks_for_tiff, get_input_driver
+from .utils import get_total_chunks, downsample_spec, zarr3_store_spec, get_chunk_domains, estimate_total_chunks_for_tiff, get_input_driver
 from .tasks import downsample_shard_zarr3
 from .tasks import n5_to_n5
 from .tasks import n5_to_zarr2
@@ -27,33 +27,18 @@ def submit_job(args):
     output_dir = os.path.join(os.getcwd(), "output")
     os.makedirs(output_dir, exist_ok=True)
 
-    """
-    if args.downsample and args.level > 0:
-        # Figure out the number of downsampled chunks
-        downsample_spec_dict = downsample_spec(args.base_path)
-        downsample_store = ts.open(downsample_spec_dict).result()
-        downsampled_saved_path = f"{args.output_path}/multiscale/s{args.level}"
-        # TODO generalize beyond zarr3
-        downsampled_saved_spec = zarr3_store_spec(
-            downsampled_saved_path,
-            downsample_store.shape,
-            downsample_store.dtype.name,
-            args.use_shard
-        )
-        total_chunks = get_total_chunks(downsampled_saved_spec)
-    else:
-        total_chunks = get_total_chunks(args.base_path)
-    """
-
     input_driver = get_input_driver(args.base_path)
     
     if args.task == "tiff_to_zarr3_s0" and input_driver == "tiff":
         total_chunks = estimate_total_chunks_for_tiff(args.base_path)
     else:
         if args.downsample and args.level > 0:
+            """
+            # Figure out the number of downsampled chunks
             downsample_spec_dict = downsample_spec(args.base_path)
             downsample_store = ts.open(downsample_spec_dict).result()
             downsampled_saved_path = f"{args.output_path}/multiscale/s{args.level}"
+            # TODO generalize beyond zarr3
             downsampled_saved_spec = zarr3_store_spec(
                 downsampled_saved_path,
                 downsample_store.shape,
@@ -61,6 +46,33 @@ def submit_job(args):
                 args.use_shard
             )
             total_chunks = get_total_chunks(downsampled_saved_spec)
+            """
+            # Always get chunks from the true input, not from the (possibly non-existent) output
+            # Use s(level-1) as input
+            prev_level = args.level - 1
+            if args.base_path.endswith(f"s{prev_level}"):
+                input_path = args.base_path
+            else:
+                input_path = os.path.join(args.base_path, "multiscale", f"s{prev_level}")
+
+            # Build the input spec and open it
+            downsample_spec_dict = downsample_spec(input_path)
+            downsample_store = ts.open(downsample_spec_dict).result()
+
+            # Create output spec as it would be written
+            downsampled_saved_path = f"{args.output_path}/multiscale/s{args.level}"
+            downsampled_saved_spec = zarr3_store_spec(
+                downsampled_saved_path,
+                downsample_store.shape,
+                downsample_store.dtype.name,
+                args.use_shard
+            )
+
+            # Count output chunks
+            # total_chunks = get_total_chunks(downsampled_saved_spec) 
+            chunk_shape = downsample_store.chunk_layout.read_chunk.shape
+            total_chunks = len(get_chunk_domains(chunk_shape, downsample_store))
+
         else:
             total_chunks = get_total_chunks(args.base_path)
 
@@ -70,13 +82,21 @@ def submit_job(args):
     num_volumes = min(total_chunks, args.num_volumes)
     for i in range(num_volumes):
         start_idx = i * (total_chunks // num_volumes)
-        stop_idx = (i + 1) * (total_chunks // num_volumes) if i < num_volumes - 1 else None
+        # stop_idx = (i + 1) * (total_chunks // num_volumes) if i < num_volumes - 1 else None
+        # for evenly split chunks per job with final chunk from last job be the total_chunks - 1 (inclusive), covering the full dataset
+        if i == num_volumes - 1:
+            stop_idx = total_chunks
+        else:
+            stop_idx = (i + 1) * (total_chunks // num_volumes)
+        print(f"vol{i}: {start_idx}–{stop_idx}")
+
+            
         job_name = f"{args.task}_vol{i}"
         
         command = [
             "bsub",
             "-J", job_name,
-            "-n", "24",
+            "-n", "25",
             "-W", "24:00",
             "-P", args.project,
             "-g", "/scicompsoft/chend/tensorstore",

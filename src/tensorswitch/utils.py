@@ -186,7 +186,7 @@ def get_total_chunks(dataset):
         dataset_spec = get_zarr_store_spec(dataset)
     else:
         raise RuntimeError("dataset must either be a dict or str")
-    
+
     dataset_store = ts.open(dataset_spec, create=True, open=True, delete_existing=False).result()
 
     shape = np.array(dataset_store.shape)

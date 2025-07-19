@@ -57,8 +57,14 @@ def process(base_path, output_path, level, start_idx=0, stop_idx=None, downsampl
 
     downsampled_saved = create_output_store(downsampled_saved_spec)
 
-    chunk_shape = downsampled_saved.chunk_layout.write_chunk.shape
-    chunk_domains = get_chunk_domains(chunk_shape, downsampled_saved)
+    #chunk_shape = downsampled_saved.chunk_layout.write_chunk.shape
+    #chunk_domains = get_chunk_domains(chunk_shape, downsampled_saved)
+    
+    chunk_shape = downsample_store.chunk_layout.read_chunk.shape
+    print("Shape of downsample_store:", downsample_store.shape)
+    print("Chunk shape used:", chunk_shape)
+    chunk_domains = get_chunk_domains(chunk_shape, downsample_store) # compute chunk domains based on the downsampled input when goes from s0 to s1
+
 
     if stop_idx is None:
         stop_idx = len(chunk_domains)
