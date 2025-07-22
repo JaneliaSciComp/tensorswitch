@@ -54,9 +54,12 @@ def convert(base_path, output_path, number, level, start_idx=0, stop_idx=None, m
     tasks = []
     txn = ts.Transaction()
     for chunk_domain in chunk_domains[start_idx:stop_idx]:
-        task = n5_output_store[chunk_domain].with_transaction(txn).write(n5_store[chunk_domain])
+        #task = n5_output_store[chunk_domain].with_transaction(txn).write(n5_store[chunk_domain])
+        array = n5_store[chunk_domain].read().result()
+        task = n5_output_store[chunk_domain].with_transaction(txn).write(array)
         tasks.append(task)
         txn = commit_tasks(tasks, txn, memory_limit)
+        print(f"Writing chunk: {chunk_domain}")
 
     if txn.open:
         print("Committing final transaction...")
