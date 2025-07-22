@@ -18,6 +18,7 @@ def convert(base_path, output_path, number, level, start_idx=0, stop_idx=None, m
     n5_store = ts.open(n5_store_spec(n5_level_path)).result()
 
     shape, chunk_shape = n5_store.shape, [64, 64, 64]
+
     n5_output_spec = {
         'driver': 'n5',
         'kvstore': {'driver': 'file', 'path': n5_output_path},
@@ -36,6 +37,14 @@ def convert(base_path, output_path, number, level, start_idx=0, stop_idx=None, m
 
     n5_output_store = create_output_store(n5_output_spec)
     chunk_domains = get_chunk_domains(chunk_shape, n5_output_store)
+    print(f"Generated {len(chunk_domains)} chunk domains")
+    print(f"Start index: {start_idx}, Stop index: {stop_idx}")
+    print("First few chunk domains:", chunk_domains[:3])
+
+    print("Reading from source N5...")
+    sample = n5_store[chunk_domains[0]].read().result()
+    print("Sample shape:", sample.shape)
+
 
     if stop_idx is None:
         stop_idx = len(chunk_domains)
@@ -50,7 +59,10 @@ def convert(base_path, output_path, number, level, start_idx=0, stop_idx=None, m
         txn = commit_tasks(tasks, txn, memory_limit)
 
     if txn.open:
+        print("Committing final transaction...")
         txn.commit_sync()
+        print("Transaction committed.")
+        
     print(f"Conversion complete for {n5_level_path} to {n5_output_path}")
 
 

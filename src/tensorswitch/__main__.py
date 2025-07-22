@@ -27,7 +27,8 @@ def submit_job(args):
     output_dir = os.path.join(os.getcwd(), "output")
     os.makedirs(output_dir, exist_ok=True)
 
-    input_driver = get_input_driver(args.base_path)
+    #input_driver = get_input_driver(args.base_path)
+    input_driver = "n5" if args.base_path.startswith("http") else get_input_driver(args.base_path)
     
     if args.task == "tiff_to_zarr3_s0" and input_driver == "tiff":
         total_chunks = estimate_total_chunks_for_tiff(args.base_path)
@@ -97,7 +98,7 @@ def submit_job(args):
             "bsub",
             "-J", job_name,
             "-n", "25",
-            "-W", "24:00",
+            "-W", "72:00",
             "-P", args.project,
             "-g", "/scicompsoft/chend/tensorstore",
             "-o", f"{output_dir}/output__vol{i}_%J.log",

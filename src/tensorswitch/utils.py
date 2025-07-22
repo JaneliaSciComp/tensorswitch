@@ -6,6 +6,7 @@ import os
 import tifffile
 import dask_image
 from dask_image import imread as dask_imread
+from urllib.parse import urlparse, unquote
 
 def get_chunk_domains(chunk_shape, array):
     first_chunk_domain = ts.IndexDomain(inclusive_min=array.origin, shape=chunk_shape)
@@ -22,12 +23,33 @@ def get_chunk_domains(chunk_shape, array):
                 chunk_domains.append(chunk_domain)
 
     return chunk_domains
-
+"""
 def n5_store_spec(n5_level_path):
     return {
         'driver': 'n5',
         'kvstore': {'driver': 'file', 'path': n5_level_path}
     }
+"""
+
+def n5_store_spec(n5_level_path):
+    if n5_level_path.startswith("http"):
+        parsed = urlparse(n5_level_path)
+        return {
+            'driver': 'n5',
+            'kvstore': {
+                'driver': 'http',
+                'base_url': f"{parsed.scheme}://{parsed.netloc}",
+                'path': unquote(parsed.path)
+            }
+        }
+    else:
+        return {
+            'driver': 'n5',
+            'kvstore': {
+                'driver': 'file',
+                'path': n5_level_path
+            }
+        }
 
 def zarr2_store_spec(zarr_level_path, shape, chunks):
     return {
@@ -165,6 +187,13 @@ def get_input_driver(input_path):
 def get_zarr_store_spec(path):
     if isinstance(path, dict):
         return path
+    
+    # If HTTP path, assume N5 driver directly
+    if isinstance(path, str) and path.startswith("http"):
+        return {
+            'driver': 'n5',
+            'kvstore': {'driver': 'http', 'base_url': path}
+        }
         
     input_driver = get_input_driver(path)
 
@@ -187,7 +216,8 @@ def get_total_chunks(dataset):
     else:
         raise RuntimeError("dataset must either be a dict or str")
 
-    dataset_store = ts.open(dataset_spec, create=True, open=True, delete_existing=False).result()
+    #dataset_store = ts.open(dataset_spec, create=True, open=True, delete_existing=False).result()
+    dataset_store = ts.open(dataset_spec, open=True).result() # for "HTTP"
 
     shape = np.array(dataset_store.shape)
     chunk_shape = np.array(dataset_store.chunk_layout.read_chunk.shape)
