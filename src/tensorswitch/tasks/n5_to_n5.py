@@ -17,14 +17,19 @@ def convert(base_path, output_path, number, level, start_idx=0, stop_idx=None, m
 
     n5_store = ts.open(n5_store_spec(n5_level_path)).result()
 
-    shape, chunk_shape = n5_store.shape, [64, 64, 64]
+    #shape, chunk_shape = n5_store.shape, [64, 64, 64]
+    
+    # Read from original(HTTP) chunk shape but write in specific output chunk shape
+    shape, chunk_shape = n5_store.shape, n5_store.chunk_layout.read_chunk.shape
+    output_chunk_shape = [64, 64, 64]
+
 
     n5_output_spec = {
         'driver': 'n5',
         'kvstore': {'driver': 'file', 'path': n5_output_path},
         'metadata': {
             'dimensions': shape,
-            'blockSize': chunk_shape,
+            'blockSize': output_chunk_shape, # Write in different chunk shape from source
             'dataType': "uint16",
             'compression': {
                 "type": "blosc",
@@ -53,13 +58,29 @@ def convert(base_path, output_path, number, level, start_idx=0, stop_idx=None, m
 
     tasks = []
     txn = ts.Transaction()
+    """
     for chunk_domain in chunk_domains[start_idx:stop_idx]:
         #task = n5_output_store[chunk_domain].with_transaction(txn).write(n5_store[chunk_domain])
         array = n5_store[chunk_domain].read().result()
         task = n5_output_store[chunk_domain].with_transaction(txn).write(array)
         tasks.append(task)
         txn = commit_tasks(tasks, txn, memory_limit)
-        print(f"Writing chunk: {chunk_domain}")
+        print(f"Writing chunk: {chunk_domain}, array shape: {array.shape}")
+
+    """
+
+    for idx, chunk_domain in enumerate(chunk_domains[start_idx:stop_idx], start=start_idx):
+        try:
+            array = n5_store[chunk_domain].read().result()
+        except Exception as e:
+            print(f"[WARNING] Skipping corrupted chunk index {idx} at {chunk_domain}: {e}")
+            continue
+    
+        task = n5_output_store[chunk_domain].with_transaction(txn).write(array)
+        tasks.append(task)
+        txn = commit_tasks(tasks, txn, memory_limit)
+        print(f"Writing chunk index {idx}: {chunk_domain}, array shape: {array.shape}")
+
 
     if txn.open:
         print("Committing final transaction...")

@@ -5,6 +5,7 @@ import time
 import tensorstore as ts
 import numpy as np
 import sys
+import re
 
 if not __package__:
     # Make CLI runnable from source tree with
@@ -92,17 +93,26 @@ def submit_job(args):
         print(f"vol{i}: {start_idx}–{stop_idx}")
 
             
-        job_name = f"{args.task}_vol{i}"
-        
+        #job_name = f"{args.task}_vol{i}"
+
+        # Extract setup number from base_path if any
+        match = re.search(r"setup(\d+)", args.base_path)
+        if match:
+            setup_number = match.group(1)
+            job_name = f"{args.task}_setup{setup_number}_s{args.level}_vol{i}"
+        else:
+            job_name = f"{args.task}_s{args.level}_vol{i}"
+
+
         command = [
             "bsub",
             "-J", job_name,
-            "-n", "25",
-            "-W", "72:00",
+            "-n", "2",
+            "-W", "1:00",
             "-P", args.project,
             "-g", "/scicompsoft/chend/tensorstore",
-            "-o", f"{output_dir}/output__vol{i}_%J.log",
-            "-e", f"{output_dir}/error_vol{i}_%J.log",
+            "-o", f"{output_dir}/output__{job_name}_%J.log",
+            "-e", f"{output_dir}/error__{job_name}_%J.log",
             sys.executable,
             "-m", "tensorswitch",
         ]
