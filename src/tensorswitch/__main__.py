@@ -107,8 +107,8 @@ def submit_job(args):
         command = [
             "bsub",
             "-J", job_name,
-            "-n", "2",
-            "-W", "1:00",
+            "-n", args.cores,        # Changed from "2" to args.cores
+            "-W", args.wall_time,    # Changed from "1:00" to args.wall_time
             "-P", args.project,
             "-g", "/scicompsoft/chend/tensorstore",
             "-o", f"{output_dir}/output__{job_name}_%J.log",
@@ -153,6 +153,8 @@ def main():
     parser.add_argument("--submit", action="store_true", help="Submit to the cluster scheduler")
     parser.add_argument("--memory_limit", type=int, default=50, help="memory limit percentage" )
     parser.add_argument("--project", default="None", help="Project to charge")
+    parser.add_argument("--cores", type=str, default="2", help="Number of cores for LSF job (-n flag)")
+    parser.add_argument("--wall_time", type=str, default="1:00", help="Wall time for LSF job (-W flag)")
 
     args = parser.parse_args()
 
