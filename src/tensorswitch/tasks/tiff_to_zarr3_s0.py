@@ -4,9 +4,14 @@ import tensorstore as ts
 import numpy as np
 import psutil
 import time
+# lazy loading
+import tifffile
+import dask.array as da
+import os
 
 def process(base_path, output_path, use_shard=False, memory_limit=50, start_idx=0, stop_idx=None):
     print(f"Loading TIFF stack from: {base_path}", flush=True)
+
     volume = load_tiff_stack(base_path)
     print(f"Volume shape: {volume.shape}, dtype: {volume.dtype}", flush=True)
 
@@ -43,13 +48,15 @@ def process(base_path, output_path, use_shard=False, memory_limit=50, start_idx=
                 domain.inclusive_min[2]:domain.exclusive_max[2],
             ].compute()
         )
+
         tasks.append(task)
         ntasks += 1
-    
+
         txn = commit_tasks(tasks, txn, memory_limit=memory_limit)
     
         if ntasks % 512 == 0:
-            chunk_idx = range(start_idx, stop_idx)[ntasks]
+            #chunk_idx = range(start_idx, stop_idx)[ntasks]
+            chunk_idx = range(start_idx, stop_idx)[ntasks] if stop_idx else start_idx + ntasks
             print(f"Queued {ntasks} chunk writes up to {chunk_idx}...", flush=True)
     
     for task in tasks:

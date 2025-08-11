@@ -7,7 +7,8 @@ import tifffile
 import dask_image
 from dask_image import imread as dask_imread
 from urllib.parse import urlparse, unquote
-
+import dask.array as da
+"""
 def get_chunk_domains(chunk_shape, array):
     first_chunk_domain = ts.IndexDomain(inclusive_min=array.origin, shape=chunk_shape)
     chunk_number = -(np.array(array.shape) // -np.array(chunk_shape))
@@ -23,6 +24,38 @@ def get_chunk_domains(chunk_shape, array):
                 chunk_domains.append(chunk_domain)
 
     return chunk_domains
+"""
+
+def get_chunk_domains(chunk_shape, array):
+    first_chunk_domain = ts.IndexDomain(inclusive_min=array.origin, shape=chunk_shape)
+    chunk_number = -(np.array(array.shape) // -np.array(chunk_shape))
+    
+    # Handle both 3D and 4D arrays
+    if len(chunk_shape) == 4:
+        cc, cz, cy, cx = chunk_shape
+        cn, zn, yn, xn = chunk_number
+        
+        chunk_domains = []
+        for ci in range(cn):
+            for zi in range(zn):
+                for yi in range(yn):
+                    for xi in range(xn):
+                        chunk_domain = first_chunk_domain.translate_by[cc*ci, cz*zi, cy*yi, cx*xi].intersect(array.domain)
+                        chunk_domains.append(chunk_domain)
+    else:
+        # Original 3D logic
+        cz, cy, cx = chunk_shape
+        zn, yn, xn = chunk_number
+
+        chunk_domains = []
+        for zi in range(zn):
+            for yi in range(yn):
+                for xi in range(xn):
+                    chunk_domain = first_chunk_domain.translate_by[cz*zi, cy*yi, cx*xi].intersect(array.domain)
+                    chunk_domains.append(chunk_domain)
+
+    return chunk_domains
+    
 """
 def n5_store_spec(n5_level_path):
     return {
@@ -90,7 +123,13 @@ def zarr3_store_spec(path, shape, dtype, use_shard=True):
             {'name': 'bytes', 'configuration': {'endian': 'little'}},
             {'name': 'zstd', 'configuration': {'level': 1}}
         ]
-        chunk_shape = [64, 64, 64]
+        #chunk_shape = [64, 64, 64]
+        # Handle 4D vs 3D arrays
+        # In zarr3_store_spec function:
+        if len(shape) == 4:
+            chunk_shape = [1, 64, 256, 17635]  # Use full X width to avoid alignment error
+        else:
+            chunk_shape = [64, 256, 17635]
 
     return {
         'driver': 'zarr3',
@@ -224,8 +263,21 @@ def get_total_chunks(dataset):
     chunk_counts = np.ceil(shape / chunk_shape).astype(int)
     return np.prod(chunk_counts)
 
+"""
 def load_tiff_stack(folder):
     return dask_imread.imread(folder + "/*.tiff")
+"""
+def load_tiff_stack(folder_or_file):
+    """Load TIFF data lazily to avoid memory issues with large files."""
+    # Use tifffile's lazy loading instead of dask_image
+    if os.path.isfile(folder_or_file):
+        # Single TIFF file - use lazy loading
+        tiff_store = tifffile.imread(folder_or_file, aszarr=True)
+        return da.from_zarr(tiff_store, zarr_format=2)
+    else:
+        # Multiple TIFF files
+        return dask_imread.imread(folder_or_file + "/*.tiff")
+
 
 def estimate_total_chunks_for_tiff(input_path, chunk_shape=(64, 64, 64)):
     """
@@ -234,6 +286,21 @@ def estimate_total_chunks_for_tiff(input_path, chunk_shape=(64, 64, 64)):
     """
     print(f"Estimating total chunks for TIFF input at {input_path}...")
 
+    if os.path.isfile(input_path):
+        # Single TIFF file - get shape lazily
+        tiff_store = tifffile.imread(input_path, aszarr=True)
+        volume = da.from_zarr(tiff_store, zarr_format=2)
+        volume_shape = volume.shape
+    else:
+        # Multiple TIFF files
+        file_list = sorted([
+            os.path.join(input_path, f)
+            for f in os.listdir(input_path)
+            if f.lower().endswith((".tiff", ".tif"))
+        ])
+        if not file_list:
+            raise ValueError("No TIFF files found.")
+    """        
     file_list = sorted([
         os.path.join(input_path, f)
         for f in os.listdir(input_path)
@@ -241,14 +308,22 @@ def estimate_total_chunks_for_tiff(input_path, chunk_shape=(64, 64, 64)):
     ])
     if not file_list:
         raise ValueError("No TIFF files found.")
-
+    """
+    
     # Load the shape of a single slice
     sample = tifffile.imread(file_list[0])
     volume_shape = (len(file_list),) + sample.shape  # (z, y, x)
+
+    # Handle 4D vs 3D chunk shapes
+    if len(volume_shape) == 4:
+        chunk_shape = (1, 64, 256, 17635)  # Match zarr3_store_spec
+    else:
+        chunk_shape = (64, 256, 17635)     # Match zarr3_store_spec
 
     chunk_shape = np.array(chunk_shape)
     chunk_counts = np.ceil(np.array(volume_shape) / chunk_shape).astype(int)
     total_chunks = int(np.prod(chunk_counts))
     
     return total_chunks
+
 

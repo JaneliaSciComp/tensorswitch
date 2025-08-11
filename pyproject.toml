@@ -50,6 +50,7 @@ dask = ">=2025.5.1,<2026"
 dask-image = ">=2024.5.3,<2025"
 cachey = ">=0.2.1,<0.3"
 matplotlib = ">=3.10.3,<4"
+zarr = ">=3.1.1,<4"
 
 [tool.pixi.feature.ipykernel.dependencies]
 ipykernel = "*"
