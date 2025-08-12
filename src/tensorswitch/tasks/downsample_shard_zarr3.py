@@ -2,18 +2,12 @@ import tensorstore as ts
 import numpy as np
 import time
 import psutil
-from ..utils import get_chunk_domains, create_output_store, commit_tasks, print_processing_info, downsample_spec, zarr3_store_spec, get_input_driver
+from ..utils import get_chunk_domains, create_output_store, commit_tasks, print_processing_info, downsample_spec, zarr3_store_spec, get_input_driver, get_total_chunks_from_store
 import os
 
 def process(base_path, output_path, level, start_idx=0, stop_idx=None, downsample=True, use_shard=True, memory_limit=50, **kwargs):
 
     """Downsample and optionally apply sharding to Zarr3 dataset."""
-    '''
-    if level == 0:
-        zarr_input_path = base_path
-    else:
-        zarr_input_path = f"{base_path}/multiscale/s{level-1}"
-    '''
     if base_path.endswith(f"s{level - 1}") or level == 0:
         zarr_input_path = base_path
     else:
@@ -34,12 +28,6 @@ def process(base_path, output_path, level, start_idx=0, stop_idx=None, downsampl
     print(f"Reading from: {zarr_input_path}")
     print(f"Writing to: {downsampled_saved_path}")
 
-    '''
-    zarr_store_spec = {
-        'driver': 'zarr' + ('3' if level > 0 else ''),
-        'kvstore': {'driver': 'file', 'path': zarr_input_path}
-    }
-    '''
     zarr_store = ts.open(zarr_store_spec).result()
 
     if downsample and level > 0:
@@ -63,17 +51,18 @@ def process(base_path, output_path, level, start_idx=0, stop_idx=None, downsampl
     chunk_shape = downsample_store.chunk_layout.read_chunk.shape
     print("Shape of downsample_store:", downsample_store.shape)
     print("Chunk shape used:", chunk_shape)
-    chunk_domains = get_chunk_domains(chunk_shape, downsample_store) # compute chunk domains based on the downsampled input when goes from s0 to s1
-
+    # compute chunk domains based on the downsampled input when goes from s0 to s1
+    total_chunks = get_total_chunks_from_store(downsample_store, chunk_shape=chunk_shape)
 
     if stop_idx is None:
-        stop_idx = len(chunk_domains)
+        stop_idx = total_chunks
 
-    print_processing_info(level, start_idx, stop_idx, len(chunk_domains))
+    print_processing_info(level, start_idx, stop_idx, total_chunks)
 
     tasks = []
     txn = ts.Transaction()
-    for chunk_domain in chunk_domains[start_idx:stop_idx]:
+    linear_indices_to_process = range(start_idx, stop_idx)
+    for chunk_domain in get_chunk_domains(chunk_shape, downsample_store, linear_indices_to_process=linear_indices_to_process):
         task = downsampled_saved[chunk_domain].with_transaction(txn).write(downsample_store[chunk_domain])
         tasks.append(task)
         txn = commit_tasks(tasks, txn, memory_limit)

@@ -2,7 +2,7 @@ import tensorstore as ts
 import os
 import time
 import psutil
-from ..utils import get_chunk_domains, n5_store_spec, create_output_store, commit_tasks, print_processing_info, fetch_http_json
+from ..utils import get_chunk_domains, n5_store_spec, create_output_store, commit_tasks, print_processing_info, fetch_http_json, get_total_chunks_from_store
 
 def convert(base_path, output_path, number, level, start_idx=0, stop_idx=None, memory_limit=50, **kwargs):
     """Convert N5 to N5 format."""
@@ -41,35 +41,25 @@ def convert(base_path, output_path, number, level, start_idx=0, stop_idx=None, m
     }
 
     n5_output_store = create_output_store(n5_output_spec)
-    chunk_domains = get_chunk_domains(chunk_shape, n5_output_store)
-    print(f"Generated {len(chunk_domains)} chunk domains")
+    total_chunks = get_total_chunks_from_store(n5_output_store, chunk_shape=chunk_shape)
+    print(f"Generated {total_chunks} chunk domains")
     print(f"Start index: {start_idx}, Stop index: {stop_idx}")
-    print("First few chunk domains:", chunk_domains[:3])
 
     print("Reading from source N5...")
-    sample = n5_store[chunk_domains[0]].read().result()
+
+    sample_chunk_domain_for_print = next(iter(get_chunk_domains(chunk_shape, n5_output_store)))
+    sample = n5_store[sample_chunk_domain_for_print].read().result()
     print("Sample shape:", sample.shape)
 
-
     if stop_idx is None:
-        stop_idx = len(chunk_domains)
+        stop_idx = total_chunks
 
-    print_processing_info(level, start_idx, stop_idx, len(chunk_domains))
+    print_processing_info(level, start_idx, stop_idx, total_chunks)
 
     tasks = []
     txn = ts.Transaction()
-    """
-    for chunk_domain in chunk_domains[start_idx:stop_idx]:
-        #task = n5_output_store[chunk_domain].with_transaction(txn).write(n5_store[chunk_domain])
-        array = n5_store[chunk_domain].read().result()
-        task = n5_output_store[chunk_domain].with_transaction(txn).write(array)
-        tasks.append(task)
-        txn = commit_tasks(tasks, txn, memory_limit)
-        print(f"Writing chunk: {chunk_domain}, array shape: {array.shape}")
-
-    """
-
-    for idx, chunk_domain in enumerate(chunk_domains[start_idx:stop_idx], start=start_idx):
+    linear_indices_to_process = range(start_idx, stop_idx)
+    for idx, chunk_domain in enumerate(get_chunk_domains(chunk_shape, n5_output_store, linear_indices_to_process=linear_indices_to_process), start=start_idx):
         try:
             array = n5_store[chunk_domain].read().result()
         except Exception as e:

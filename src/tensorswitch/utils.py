@@ -8,61 +8,24 @@ import dask_image
 from dask_image import imread as dask_imread
 from urllib.parse import urlparse, unquote
 import dask.array as da
-"""
-def get_chunk_domains(chunk_shape, array):
+import itertools
+
+def get_chunk_domains(chunk_shape, array, linear_indices_to_process=None):
     first_chunk_domain = ts.IndexDomain(inclusive_min=array.origin, shape=chunk_shape)
     chunk_number = -(np.array(array.shape) // -np.array(chunk_shape))
     
-    cz, cy, cx = chunk_shape
-    zn, yn, xn = chunk_number
-
-    chunk_domains = []
-    for zi in range(zn):
-        for yi in range(yn):
-            for xi in range(xn):
-                chunk_domain = first_chunk_domain.translate_by[cz*zi, cy*yi, cx*xi].intersect(array.domain)
-                chunk_domains.append(chunk_domain)
-
-    return chunk_domains
-"""
-
-def get_chunk_domains(chunk_shape, array):
-    first_chunk_domain = ts.IndexDomain(inclusive_min=array.origin, shape=chunk_shape)
-    chunk_number = -(np.array(array.shape) // -np.array(chunk_shape))
-    
-    # Handle both 3D and 4D arrays
-    if len(chunk_shape) == 4:
-        cc, cz, cy, cx = chunk_shape
-        cn, zn, yn, xn = chunk_number
-        
-        chunk_domains = []
-        for ci in range(cn):
-            for zi in range(zn):
-                for yi in range(yn):
-                    for xi in range(xn):
-                        chunk_domain = first_chunk_domain.translate_by[cc*ci, cz*zi, cy*yi, cx*xi].intersect(array.domain)
-                        chunk_domains.append(chunk_domain)
+    if linear_indices_to_process is not None:
+        linear_indices_iterator = linear_indices_to_process
     else:
-        # Original 3D logic
-        cz, cy, cx = chunk_shape
-        zn, yn, xn = chunk_number
+        total_chunks = np.prod(chunk_number)
+        linear_indices_iterator = range(total_chunks)
 
-        chunk_domains = []
-        for zi in range(zn):
-            for yi in range(yn):
-                for xi in range(xn):
-                    chunk_domain = first_chunk_domain.translate_by[cz*zi, cy*yi, cx*xi].intersect(array.domain)
-                    chunk_domains.append(chunk_domain)
+    for linear_idx in linear_indices_iterator:
+        idx = np.unravel_index(linear_idx, chunk_number)
 
-    return chunk_domains
-    
-"""
-def n5_store_spec(n5_level_path):
-    return {
-        'driver': 'n5',
-        'kvstore': {'driver': 'file', 'path': n5_level_path}
-    }
-"""
+        yield first_chunk_domain.translate_by[
+            tuple(map(lambda i, s: i * s, idx, chunk_shape))
+        ].intersect(array.domain)
 
 def n5_store_spec(n5_level_path):
     if n5_level_path.startswith("http"):
@@ -123,13 +86,18 @@ def zarr3_store_spec(path, shape, dtype, use_shard=True):
             {'name': 'bytes', 'configuration': {'endian': 'little'}},
             {'name': 'zstd', 'configuration': {'level': 1}}
         ]
-        #chunk_shape = [64, 64, 64]
-
-        # Handle 4D vs 3D arrays
-        if len(shape) == 4:
-            chunk_shape = [1, 64, 64, 64]
-        else:
-            chunk_shape = [64, 64, 64]
+        # Handle 5D to 1D arrays, assuming order
+        # TODO: Make this depend on axes metadata detection
+        if len(shape) == 5:
+            chunk_shape = [1, 1, 64, 64, 64] # TCZYX
+        elif len(shape) == 4:
+            chunk_shape = [1, 64, 64, 64] # CZYX
+        elif len(shape) == 3:
+            chunk_shape = [64, 64, 64] # ZYX
+        elif len(shape) == 2:
+            chunk_shape = [64, 64] # YX
+        elif len(shape) == 1:
+            chunk_shape = [64] # X
 
     return {
         'driver': 'zarr3',
@@ -263,10 +231,18 @@ def get_total_chunks(dataset):
     chunk_counts = np.ceil(shape / chunk_shape).astype(int)
     return np.prod(chunk_counts)
 
-"""
-def load_tiff_stack(folder):
-    return dask_imread.imread(folder + "/*.tiff")
-"""
+def get_total_chunks_from_store(store, chunk_shape=None):
+    """Retrieve total number of chunks dynamically from a TensorStore store.
+    Optionally, specify a chunk_shape; otherwise, it defaults to the store's read_chunk shape.
+    """
+    shape = np.array(store.shape)
+    if chunk_shape is None:
+        chunk_shape = np.array(store.chunk_layout.read_chunk.shape)
+    else:
+        chunk_shape = np.array(chunk_shape)
+    chunk_counts = np.ceil(shape / chunk_shape).astype(int)
+    return np.prod(chunk_counts)
+
 def load_tiff_stack(folder_or_file):
     """Load TIFF data lazily to avoid memory issues with large files."""
     # Use tifffile's lazy loading instead of dask_image
@@ -300,15 +276,6 @@ def estimate_total_chunks_for_tiff(input_path, chunk_shape=(64, 64, 64)):
         ])
         if not file_list:
             raise ValueError("No TIFF files found.")
-    """        
-    file_list = sorted([
-        os.path.join(input_path, f)
-        for f in os.listdir(input_path)
-        if f.lower().endswith((".tiff", ".tif"))
-    ])
-    if not file_list:
-        raise ValueError("No TIFF files found.")
-    """
     
     # Load the shape of a single slice
     sample = tifffile.imread(file_list[0])
