@@ -26,34 +26,23 @@ def get_chunk_domains(chunk_shape, array):
     return chunk_domains
 """
 
+import itertools
+
 def get_chunk_domains(chunk_shape, array):
     first_chunk_domain = ts.IndexDomain(inclusive_min=array.origin, shape=chunk_shape)
     chunk_number = -(np.array(array.shape) // -np.array(chunk_shape))
     
-    # Handle both 3D and 4D arrays
-    if len(chunk_shape) == 4:
-        cc, cz, cy, cx = chunk_shape
-        cn, zn, yn, xn = chunk_number
-        
-        chunk_domains = []
-        for ci in range(cn):
-            for zi in range(zn):
-                for yi in range(yn):
-                    for xi in range(xn):
-                        chunk_domain = first_chunk_domain.translate_by[cc*ci, cz*zi, cy*yi, cx*xi].intersect(array.domain)
-                        chunk_domains.append(chunk_domain)
-    else:
-        # Original 3D logic
-        cz, cy, cx = chunk_shape
-        zn, yn, xn = chunk_number
-
-        chunk_domains = []
-        for zi in range(zn):
-            for yi in range(yn):
-                for xi in range(xn):
-                    chunk_domain = first_chunk_domain.translate_by[cz*zi, cy*yi, cx*xi].intersect(array.domain)
-                    chunk_domains.append(chunk_domain)
-
+    # Generate all combinations of chunk indices
+    indices = [range(n) for n in chunk_number]
+    
+    # Use a list comprehension for faster creation
+    chunk_domains = [
+        first_chunk_domain.translate_by[
+            tuple(map(lambda i, s: i * s, idx, chunk_shape))
+        ].intersect(array.domain)
+        for idx in itertools.product(*indices)
+    ]
+    
     return chunk_domains
     
 """
