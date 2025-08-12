@@ -124,12 +124,12 @@ def zarr3_store_spec(path, shape, dtype, use_shard=True):
             {'name': 'zstd', 'configuration': {'level': 1}}
         ]
         #chunk_shape = [64, 64, 64]
+
         # Handle 4D vs 3D arrays
-        # In zarr3_store_spec function:
         if len(shape) == 4:
-            chunk_shape = [1, 64, 256, 17635]  # Use full X width to avoid alignment error
+            chunk_shape = [1, 64, 64, 64]
         else:
-            chunk_shape = [64, 256, 17635]
+            chunk_shape = [64, 64, 64]
 
     return {
         'driver': 'zarr3',
@@ -315,11 +315,12 @@ def estimate_total_chunks_for_tiff(input_path, chunk_shape=(64, 64, 64)):
     volume_shape = (len(file_list),) + sample.shape  # (z, y, x)
 
     # Handle 4D vs 3D chunk shapes
+    # Match zarr3_store_spec
     if len(volume_shape) == 4:
-        chunk_shape = (1, 64, 256, 17635)  # Match zarr3_store_spec
+        chunk_shape = (1, 64, 64, 64)
     else:
-        chunk_shape = (64, 256, 17635)     # Match zarr3_store_spec
-
+        chunk_shape = (64, 64, 64)
+        
     chunk_shape = np.array(chunk_shape)
     chunk_counts = np.ceil(np.array(volume_shape) / chunk_shape).astype(int)
     total_chunks = int(np.prod(chunk_counts))
