@@ -12,7 +12,7 @@ tensorswitch/
 ├── src
 │   └── tensorswitch
 │       ├── __init__.py
-│       ├── __main__.py # Main dispatcher script
+│       ├── __main__.py                   # Main dispatcher script
 │       ├── tasks
 │       │   ├── __init__.py
 │       │   ├── downsample_shard_zarr3.py # Downsample using shards
@@ -20,8 +20,10 @@ tensorswitch/
 │       │   ├── n5_to_zarr2.py            # N5 to Zarr V2 conversion logic
 │       │   ├── tiff_to_zarr3_s0.py       # TIFF to Zarr V3 level s0 conversion logic  
 │       ├── utils.py                      # Common utilities (chunk domain calculation)
-│       ├── z_to_chunk_index.py           # Print chunk index ranges for resubmit failed or left over jobs
-├── re_submit_jobs.ipynb                  # Jupyter notebook to re-submit failed chunk jobs
+├── contrib
+│   ├── re_submit_jobs.ipynb              # Jupyter notebook to re-submit failed chunk jobs
+│   ├── start_neuroglancer_server.py      # Start a CORS-enabled web server
+│   └── z_to_chunk_index.py               # Print chunk index ranges for resubmit failed or left over jobs
 └── tests
     ├── test_n5_to_n5.py
     ├── test_n5_to_zarr2.py

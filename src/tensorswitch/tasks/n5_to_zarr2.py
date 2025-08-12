@@ -2,7 +2,7 @@ import tensorstore as ts
 import os
 import time
 import psutil
-from ..utils import get_chunk_domains, n5_store_spec, zarr2_store_spec, create_output_store, commit_tasks, print_processing_info
+from ..utils import get_chunk_domains, n5_store_spec, zarr2_store_spec, create_output_store, commit_tasks, print_processing_info, get_total_chunks_from_store
 
 def convert(base_path, output_path, level, start_idx=0, stop_idx=None, memory_limit=50, **kwargs):
     """Convert N5 to Zarr2 format."""
@@ -18,19 +18,20 @@ def convert(base_path, output_path, level, start_idx=0, stop_idx=None, memory_li
     zarr2_spec = zarr2_store_spec(zarr_level_path, shape, chunks)
     zarr2_store = create_output_store(zarr2_spec)
 
-    chunk_domains = get_chunk_domains(chunks, zarr2_store)
-    print(f" Total chunks to write: {len(chunk_domains)}")
+    total_chunks = get_total_chunks_from_store(zarr2_store, chunk_shape=chunks)
+    print(f" Total chunks to write: {total_chunks}")
     print(f" Writing from chunk {start_idx} to {stop_idx}")
 
 
     if stop_idx is None:
-        stop_idx = len(chunk_domains)
+        stop_idx = total_chunks
 
-    print_processing_info(level, start_idx, stop_idx, len(chunk_domains))
+    print_processing_info(level, start_idx, stop_idx, total_chunks)
 
     tasks = []
     txn = ts.Transaction()
-    for chunk_domain in chunk_domains[start_idx:stop_idx]:
+    linear_indices_to_process = range(start_idx, stop_idx)
+    for chunk_domain in get_chunk_domains(chunks, zarr2_store, linear_indices_to_process=linear_indices_to_process):
         task = zarr2_store[chunk_domain].with_transaction(txn).write(n5_store[chunk_domain])
         tasks.append(task)
         txn = commit_tasks(tasks, txn, memory_limit)

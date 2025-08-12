@@ -14,7 +14,7 @@ if not __package__:
     sys.path.insert(0, package_source_path)
 
 from . import tasks
-from .utils import get_total_chunks, downsample_spec, zarr3_store_spec, get_chunk_domains, estimate_total_chunks_for_tiff, get_input_driver
+from .utils import get_total_chunks, downsample_spec, zarr3_store_spec, get_chunk_domains, estimate_total_chunks_for_tiff, get_input_driver, get_total_chunks_from_store
 from .tasks import downsample_shard_zarr3
 from .tasks import n5_to_n5
 from .tasks import n5_to_zarr2
@@ -73,7 +73,7 @@ def submit_job(args):
             # Count output chunks
             # total_chunks = get_total_chunks(downsampled_saved_spec) 
             chunk_shape = downsample_store.chunk_layout.read_chunk.shape
-            total_chunks = len(get_chunk_domains(chunk_shape, downsample_store))
+            total_chunks = get_total_chunks_from_store(downsample_store, chunk_shape=chunk_shape)
 
         else:
             total_chunks = get_total_chunks(args.base_path)
