@@ -6,7 +6,7 @@ dependencies = [
     "tensorstore",
     "psutil",
     "requests",
-    "numpy",
+    "numpy", "ome-zarr-models @ git+https://github.com/ome-zarr-models/ome-zarr-models-py.git",
 ]
 description = "This package provides a unified entry point and organized task modules for managing N5/Zarr dataset conversions and downsampling. It centralizes your workflow into a single pipeline to reduce manual work and errors."
 readme = "README.md"
@@ -51,6 +51,7 @@ dask-image = ">=2024.5.3,<2025"
 cachey = ">=0.2.1,<0.3"
 matplotlib = ">=3.10.3,<4"
 zarr = ">=3.1.1,<4"
+ome-types = ">=0.6.0,<0.7"
 
 [tool.pixi.feature.ipykernel.dependencies]
 ipykernel = "*"
