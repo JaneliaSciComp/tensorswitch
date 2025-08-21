@@ -435,7 +435,6 @@ def create_zarr3_ome_metadata(ome_xml, array_shape, image_name, pixel_sizes=None
     
     # Build multiscales metadata
     multiscales = [{
-        "version": "0.5",
         "axes": axes,
         "datasets": [{
             "path": "s0",
@@ -451,6 +450,7 @@ def create_zarr3_ome_metadata(ome_xml, array_shape, image_name, pixel_sizes=None
         "node_type": "group",
         "attributes": {
             "ome": {
+                "version": "0.5",
                 "multiscales": multiscales
             }
         }
