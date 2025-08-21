@@ -40,7 +40,9 @@ def process(base_path, output_path, level, start_idx=0, stop_idx=None, downsampl
         downsampled_saved_path,
         downsample_store.shape,
         downsample_store.dtype.name,
-        use_shard
+        use_shard,
+        level_path="",
+        use_ome_structure=True
     )
 
     downsampled_saved = create_output_store(downsampled_saved_spec)

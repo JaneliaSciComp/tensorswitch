@@ -473,4 +473,39 @@ def write_zarr3_group_metadata(output_path, metadata):
     with open(zarr_json_path, 'w') as f:
         json.dump(metadata, f, indent=2)
 
+def update_ome_multiscale_metadata(zarr_path, max_level=4):
+    """Update OME-ZARR metadata to include all multiscale levels s0 through max_level."""
+    zarr_json_path = os.path.join(zarr_path, "zarr.json")
+    
+    # Read existing metadata
+    with open(zarr_json_path, 'r') as f:
+        metadata = json.load(f)
+    
+    # Get existing multiscales and s0 scale factors
+    multiscales = metadata["attributes"]["ome"]["multiscales"][0]
+    s0_scale_factors = multiscales["datasets"][0]["coordinateTransformations"][0]["scale"]
+    
+    # Build datasets for all levels with multiscale paths
+    datasets = []
+    for level in range(max_level + 1):
+        scale_factor = 2 ** level  # 1, 2, 4, 8, 16 for levels 0-4
+        current_scale = [sf * scale_factor for sf in s0_scale_factors]
+        
+        datasets.append({
+            "path": f"multiscale/s{level}",  # Updated to multiscale path
+            "coordinateTransformations": [{
+                "type": "scale",
+                "scale": current_scale
+            }]
+        })
+    
+    # Update multiscales datasets
+    multiscales["datasets"] = datasets
+    
+    # Write back updated metadata
+    with open(zarr_json_path, 'w') as f:
+        json.dump(metadata, f, indent=2)
+    
+    print(f"Updated OME metadata for {zarr_path} with levels multiscale/s0-s{max_level}")
+
 
