@@ -191,6 +191,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/linux-64/mysql-libs-9.2.0-he0572af_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/narwhals-1.47.0-pyhe01879c_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/ncurses-6.5-h2d0b736_3.conda
+      - conda: https://conda.anaconda.org/conda-forge/noarch/nd2-0.10.3-pyhd8ed1ab_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/nlohmann_json-3.12.0-h3f2d84a_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/numcodecs-0.16.1-py313ha87cce1_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/numpy-2.2.5-py313h17eae1a_0.conda
@@ -235,6 +236,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/linux-64/re2-2025.06.26-h9925aae_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/readline-8.2-h8c095d6_2.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/requests-2.32.3-pyhd8ed1ab_1.conda
+      - conda: https://conda.anaconda.org/conda-forge/noarch/resource_backed_dask_array-0.1.0-pyhd8ed1ab_1.tar.bz2
       - conda: https://conda.anaconda.org/conda-forge/linux-64/ruff-0.12.8-hf9daec2_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/s2n-1.5.21-h7ab7c64_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/scipy-1.16.0-py313h86fcf2b_0.conda
@@ -292,8 +294,8 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/linux-64/zlib-ng-2.2.4-h7955e40_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/zstandard-0.23.0-py313h536fd9c_1.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/zstd-1.5.7-hb8e6e7a_2.conda
-      - pypi: git+https://github.com/ome-zarr-models/ome-zarr-models-py.git#e3301ca547dbde9467975057e8dce2772af5de76
-      - pypi: https://files.pythonhosted.org/packages/25/22/de473dc8e00ac85b9b9ef67133f1ecb095e5ce21b235578e2eaed9a80f4c/pydantic_zarr-0.8.1-py3-none-any.whl
+      - pypi: git+https://github.com/ome-zarr-models/ome-zarr-models-py.git#94c6529b2860df5d63a2a3d358cf720cb3923643
+      - pypi: https://files.pythonhosted.org/packages/1b/6d/1cdd70b6ab7bc2879b08521bf688a86b1ea4a29521da2ea2c2e613d5508e/pydantic_zarr-0.8.2-py3-none-any.whl
       - pypi: ./
   jupyter:
     channels:
@@ -496,6 +498,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/munkres-1.1.4-pyhd8ed1ab_1.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/narwhals-1.47.0-pyhe01879c_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/ncurses-6.5-h2d0b736_3.conda
+      - conda: https://conda.anaconda.org/conda-forge/noarch/nd2-0.10.3-pyhd8ed1ab_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/nest-asyncio-1.6.0-pyhd8ed1ab_1.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/nlohmann_json-3.12.0-h3f2d84a_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/numcodecs-0.16.1-py312hf9745cd_0.conda
@@ -549,6 +552,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/linux-64/re2-2025.06.26-h9925aae_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/readline-8.2-h8c095d6_2.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/requests-2.32.4-pyhd8ed1ab_0.conda
+      - conda: https://conda.anaconda.org/conda-forge/noarch/resource_backed_dask_array-0.1.0-pyhd8ed1ab_1.tar.bz2
       - conda: https://conda.anaconda.org/conda-forge/linux-64/ruff-0.12.8-hf9daec2_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/s2n-1.5.22-h96f233e_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/scipy-1.16.0-py312hf734454_0.conda
@@ -611,8 +615,8 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/linux-64/zlib-ng-2.2.4-h7955e40_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/zstandard-0.23.0-py312h66e93f0_2.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/zstd-1.5.7-hb8e6e7a_2.conda
-      - pypi: git+https://github.com/ome-zarr-models/ome-zarr-models-py.git#e3301ca547dbde9467975057e8dce2772af5de76
-      - pypi: https://files.pythonhosted.org/packages/25/22/de473dc8e00ac85b9b9ef67133f1ecb095e5ce21b235578e2eaed9a80f4c/pydantic_zarr-0.8.1-py3-none-any.whl
+      - pypi: git+https://github.com/ome-zarr-models/ome-zarr-models-py.git#94c6529b2860df5d63a2a3d358cf720cb3923643
+      - pypi: https://files.pythonhosted.org/packages/1b/6d/1cdd70b6ab7bc2879b08521bf688a86b1ea4a29521da2ea2c2e613d5508e/pydantic_zarr-0.8.2-py3-none-any.whl
       - pypi: ./
 packages:
 - conda: https://conda.anaconda.org/conda-forge/linux-64/_libgcc_mutex-0.1-conda_forge.tar.bz2
@@ -4352,6 +4356,23 @@ packages:
   purls: []
   size: 891641
   timestamp: 1738195959188
+- conda: https://conda.anaconda.org/conda-forge/noarch/nd2-0.10.3-pyhd8ed1ab_0.conda
+  sha256: dd39215466633b4da50bf3732c66427cce85dcd629d78f0cd96da6a795889a66
+  md5: ab24ff752ac2b0816bc771f26c4e02e5
+  depends:
+  - imagecodecs
+  - numpy
+  - ome-types >=0.5.1
+  - python >=3.9
+  - resource_backed_dask_array
+  - tifffile
+  - typing-extensions
+  license: BSD-3-Clause
+  license_family: BSD
+  purls:
+  - pkg:pypi/nd2?source=hash-mapping
+  size: 71273
+  timestamp: 1744888934934
 - conda: https://conda.anaconda.org/conda-forge/noarch/nest-asyncio-1.6.0-pyhd8ed1ab_1.conda
   sha256: bb7b21d7fd0445ddc0631f64e66d91a179de4ba920b8381f29b9d006a42788c0
   md5: 598fd7d4d0de2455fb74f56063969a97
@@ -4466,11 +4487,11 @@ packages:
   - pkg:pypi/ome-types?source=hash-mapping
   size: 131554
   timestamp: 1740747270805
-- pypi: git+https://github.com/ome-zarr-models/ome-zarr-models-py.git#e3301ca547dbde9467975057e8dce2772af5de76
+- pypi: git+https://github.com/ome-zarr-models/ome-zarr-models-py.git#94c6529b2860df5d63a2a3d358cf720cb3923643
   name: ome-zarr-models
-  version: 0.1.11.dev9+ge3301ca
+  version: 0.1.11.dev15+g94c6529b2
   requires_dist:
-  - pydantic-zarr>=0.8.0
+  - pydantic-zarr>=0.8.2
   - pydantic>=2.11.5
   - zarr>=3.1.1
   - fsspec[http] ; extra == 'docs'
@@ -5130,10 +5151,10 @@ packages:
   - pkg:pypi/pydantic-extra-types?source=hash-mapping
   size: 32582
   timestamp: 1748873562285
-- pypi: https://files.pythonhosted.org/packages/25/22/de473dc8e00ac85b9b9ef67133f1ecb095e5ce21b235578e2eaed9a80f4c/pydantic_zarr-0.8.1-py3-none-any.whl
+- pypi: https://files.pythonhosted.org/packages/1b/6d/1cdd70b6ab7bc2879b08521bf688a86b1ea4a29521da2ea2c2e613d5508e/pydantic_zarr-0.8.2-py3-none-any.whl
   name: pydantic-zarr
-  version: 0.8.1
-  sha256: 3d755b27c382010c8d35163af7174bff83b61591cac3126a9d85ebb9a642ddee
+  version: 0.8.2
+  sha256: 6f20d602b81921ac7bcea1528a80e333e995103d62f5db458c2022d9f12f870c
   requires_dist:
   - pydantic>2.0.0
   - zarr>=3
@@ -5639,6 +5660,20 @@ packages:
   - pkg:pypi/requests?source=compressed-mapping
   size: 59407
   timestamp: 1749498221996
+- conda: https://conda.anaconda.org/conda-forge/noarch/resource_backed_dask_array-0.1.0-pyhd8ed1ab_1.tar.bz2
+  sha256: 0e9e6629115a18084328817036bb8d3aee137f179e55e4b40fc102712ce18c60
+  md5: 9590d5b3afbb0ec03ec88b46c63e2ebc
+  depends:
+  - dask
+  - importlib-metadata >=1.5.0
+  - python >=3.7
+  - typing_extensions
+  license: BSD-3-Clause
+  license_family: BSD
+  purls:
+  - pkg:pypi/resource-backed-dask-array?source=hash-mapping
+  size: 11341
+  timestamp: 1658692420720
 - conda: https://conda.anaconda.org/conda-forge/linux-64/ruff-0.12.8-hf9daec2_0.conda
   noarch: python
   sha256: a1489605292241b0f1d52cca9eab762e92ac8d37ed26ee7472b6637cc591889d
@@ -5866,7 +5901,7 @@ packages:
 - pypi: ./
   name: tensorswitch
   version: 0.1.0
-  sha256: 0920eeed227eac41b542596e15fb5c861103c97dd92e8bfa8fd27de8aedc7a63
+  sha256: e419d763649f708088d19430a3c32bc2859fa8b9510f7620c6cc75aceb7751c6
   requires_dist:
   - tensorstore
   - psutil

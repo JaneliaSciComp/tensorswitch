@@ -19,6 +19,7 @@ tensorswitch/
 │       │   ├── n5_to_n5.py               # N5 to N5 conversion logic
 │       │   ├── n5_to_zarr2.py            # N5 to Zarr V2 conversion logic
 │       │   ├── tiff_to_zarr3_s0.py       # TIFF to Zarr V3 level s0 conversion logic  
+│       │   ├── nd2_to_zarr3_s0.py        # ND2 to Zarr V3 level s0 conversion logic with OME metadata  
 │       ├── utils.py                      # Common utilities (chunk domain calculation)
 ├── contrib
 │   ├── re_submit_jobs.ipynb              # Jupyter notebook to re-submit failed chunk jobs
@@ -84,6 +85,7 @@ python -m tensorswitch --task downsample_shard_zarr3 \
 | `submit_n5_zarr`     | Submit N5 to Zarr jobs to the cluster   |
 | `submit_n5_n5`       | Submit N5 to N5 jobs to the cluster     |
 | `tiff_to_zarr3_s0`   | Convert TIFF stack to Zarr V3 (s0)      |
+| `nd2_to_zarr3_s0`    | Convert ND2 file to Zarr V3 (s0) with OME metadata |
 
 
 ### 4. Example Commands
@@ -108,6 +110,23 @@ python -m tensorswitch --task n5_to_zarr2 --base_path /path/to/n5 --output_path 
 python -m tensorswitch --task tiff_to_zarr3_s0 --base_path /path/to/tiff_folder --output_path /path/to/zarr3 --use_shard 0
 ```
 
+#### Convert ND2 to Zarr v3 s0 with OME metadata (local)
+```bash
+python -m tensorswitch --task nd2_to_zarr3_s0 --base_path /path/to/file.nd2 --output_path /path/to/output.zarr --use_shard 0
+```
+
+#### Submit ND2 to Zarr v3 conversion to cluster
+```bash
+python -m tensorswitch --task nd2_to_zarr3_s0 \
+  --base_path /path/to/file.nd2 \
+  --output_path /path/to/output.zarr \
+  --num_volumes 8 \
+  --cores 4 \
+  --wall_time 2:00 \
+  --project your_project_name \
+  --submit
+```
+
 #### Resubmit Failed Chunks
 Use `re_submit_jobs.ipynb` to debug chunk failures and resubmit specific chunk ranges using `z_to_chunk_index.py`.
 
@@ -122,6 +141,7 @@ Use `re_submit_jobs.ipynb` to debug chunk failures and resubmit specific chunk r
 - psutil
 - requests (for N5 over HTTP)
 - Dask + tifffile (for TIFF conversion)
+- nd2 + ome-zarr (for ND2 conversion with OME metadata)
 
 ---
 

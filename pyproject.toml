@@ -30,6 +30,9 @@ Issues = "https://github.com/JaneliaSciComp/tensorswitch/issues"
 build-backend = "hatchling.build"
 requires = ["hatchling"]
 
+[tool.hatch.metadata]
+allow-direct-references = true
+
 [tool.pixi.project]
 channels = ["conda-forge"]
 platforms = ["linux-64"]
@@ -52,6 +55,7 @@ cachey = ">=0.2.1,<0.3"
 matplotlib = ">=3.10.3,<4"
 zarr = ">=3.1.1,<4"
 ome-types = ">=0.6.0,<0.7"
+nd2 = ">=0.10.3,<0.11"
 
 [tool.pixi.feature.ipykernel.dependencies]
 ipykernel = "*"

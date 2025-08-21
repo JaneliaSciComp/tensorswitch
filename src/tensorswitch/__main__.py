@@ -8,8 +8,6 @@ import sys
 import re
 
 if not __package__:
-    # Make CLI runnable from source tree with
-    #    python src/package
     package_source_path = os.path.dirname(os.path.dirname(__file__))
     sys.path.insert(0, package_source_path)
 
@@ -19,6 +17,8 @@ from .tasks import downsample_shard_zarr3
 from .tasks import n5_to_n5
 from .tasks import n5_to_zarr2
 from .tasks import tiff_to_zarr3_s0
+from .tasks import nd2_to_zarr3_s0
+from .utils import load_nd2_stack, zarr3_store_spec, get_total_chunks_from_store
 
 # Set umask to allow group write access
 os.umask(0o0002)
@@ -33,6 +33,17 @@ def submit_job(args):
     
     if args.task == "tiff_to_zarr3_s0" and input_driver == "tiff":
         total_chunks = estimate_total_chunks_for_tiff(args.base_path)
+    elif args.task == "nd2_to_zarr3_s0":
+        volume = load_nd2_stack(args.base_path)
+        store_spec = zarr3_store_spec(
+            path=args.output_path,
+            shape=volume.shape,
+            dtype=str(volume.dtype),
+            use_shard=bool(args.use_shard),
+            use_ome_structure=bool(args.use_ome_structure)
+        )
+        temp_store = ts.open(store_spec, create=True, delete_existing=True).result()
+        total_chunks = get_total_chunks_from_store(temp_store)
     else:
         if args.downsample and args.level > 0:
             """
@@ -124,6 +135,7 @@ def submit_job(args):
             "level",
             "downsample",
             "use_shard",
+            "use_ome_structure",
             "memory_limit"
         ]
         for arg in forwarded_args:
@@ -141,7 +153,7 @@ def submit_job(args):
 
 def main():
     parser = argparse.ArgumentParser(description="Unified Pipeline Manager")
-    parser.add_argument("--task", required=True, choices=["n5_to_zarr2", "n5_to_n5", "downsample_shard_zarr3", "tiff_to_zarr3_s0"])
+    parser.add_argument("--task", required=True, choices=["n5_to_zarr2", "n5_to_n5", "downsample_shard_zarr3", "tiff_to_zarr3_s0", "nd2_to_zarr3_s0"])
     parser.add_argument("--base_path", required=True, help="Input dataset path")
     parser.add_argument("--output_path", required=True, help="Output dataset path (only needed for conversions)")
     parser.add_argument("--level", type=int, default=0, help="Levels to process")
@@ -150,6 +162,7 @@ def main():
     parser.add_argument("--num_volumes", type=int, default=8, help="Number of volumes per level (for cluster jobs)")
     parser.add_argument("--downsample", type=int, default=0, choices=[0, 1], help="Enable downsampling (default: 1)")
     parser.add_argument("--use_shard", type=int, default=0, choices=[0, 1], help="Use sharded format (for downsample)")
+    parser.add_argument("--use_ome_structure", type=int, default=1, choices=[0, 1], help="Use OME-ZARR multiscale structure (s0 subdirectory)")
     parser.add_argument("--submit", action="store_true", help="Submit to the cluster scheduler")
     parser.add_argument("--memory_limit", type=int, default=50, help="memory limit percentage" )
     parser.add_argument("--project", default="None", help="Project to charge")
@@ -172,6 +185,8 @@ def main():
             downsample_shard_zarr3.process(args.base_path, args.output_path, args.level, args.start_idx, args.stop_idx, bool(args.downsample), bool(args.use_shard), args.memory_limit)
         elif args.task == "tiff_to_zarr3_s0":
             tiff_to_zarr3_s0.process(args.base_path, args.output_path, bool(args.use_shard), args.memory_limit, args.start_idx, args.stop_idx)
+        elif args.task == "nd2_to_zarr3_s0":
+            nd2_to_zarr3_s0.process(args.base_path, args.output_path, bool(args.use_shard), args.memory_limit, args.start_idx, args.stop_idx, bool(args.use_ome_structure))
         else:
             raise ValueError(f"Unsupported task: {args.task}")
 

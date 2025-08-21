@@ -9,6 +9,9 @@ from dask_image import imread as dask_imread
 from urllib.parse import urlparse, unquote
 import dask.array as da
 import itertools
+import nd2
+import json
+from ome_types import from_xml
 
 def get_chunk_domains(chunk_shape, array, linear_indices_to_process=None):
     first_chunk_domain = ts.IndexDomain(inclusive_min=array.origin, shape=chunk_shape)
@@ -61,7 +64,7 @@ def zarr2_store_spec(zarr_level_path, shape, chunks):
     }
 
 
-def zarr3_store_spec(path, shape, dtype, use_shard=True):
+def zarr3_store_spec(path, shape, dtype, use_shard=True, level_path="s0", use_ome_structure=True):
     if use_shard:
         codecs = [
             {
@@ -99,9 +102,17 @@ def zarr3_store_spec(path, shape, dtype, use_shard=True):
         elif len(shape) == 1:
             chunk_shape = [64] # X
 
+    # Create path based on whether OME-ZARR structure is needed
+    if use_ome_structure:
+        # For OME-ZARR: use multiscale structure with level subdirectory
+        array_path = os.path.join(path, level_path)
+    else:
+        # For plain zarr3: write directly to specified path
+        array_path = path
+    
     return {
         'driver': 'zarr3',
-        'kvstore': {'driver': 'file', 'path': path},
+        'kvstore': {'driver': 'file', 'path': array_path},
         'metadata': {
             'shape': shape,
             'chunk_grid': {'name': 'regular', 'configuration': {'chunk_shape': chunk_shape}},
@@ -152,9 +163,9 @@ def build_job_name(task, level, volume_idx):
 
 def get_input_driver(input_path):
     """
-    Detect whether input is TIFF, N5, Zarr2, or Zarr3
+    Detect whether input is TIFF, N5, Zarr2, Zarr3, or ND2
 
-    Checks if there is a attributes.json, .zarray, zarr.json, or .tiff/.tif files
+    Checks if there is a attributes.json, .zarray, zarr.json, .tiff/.tif, or .nd2 files
     """
 
     if not os.path.exists(input_path):
@@ -163,6 +174,15 @@ def get_input_driver(input_path):
         {input_path} does not exist.
         """)
     
+    # Check if input is a single nd2 file
+    if os.path.isfile(input_path) and input_path.lower().endswith(".nd2"):
+        return "nd2"
+    
+    # Check if input is a single tiff file
+    if os.path.isfile(input_path) and input_path.lower().endswith((".tiff", ".tif")):
+        return "tiff"
+    
+    # For directories, check for format indicator files
     n5_path = os.path.join(input_path, "attributes.json")
     zarr2_path = os.path.join(input_path, ".zarray")
     zarr3_path = os.path.join(input_path, "zarr.json")
@@ -174,7 +194,7 @@ def get_input_driver(input_path):
     elif os.path.exists(zarr3_path):
         input_driver = "zarr3"
     else:
-        # Check for .tiff or .tif files
+        # Check for .tiff or .tif files in directory
         tiff_files = [
             f for f in os.listdir(input_path)
             if f.lower().endswith((".tiff", ".tif"))
@@ -182,12 +202,20 @@ def get_input_driver(input_path):
         if tiff_files:
             return "tiff"
             
+        # Check for .nd2 files in directory
+        nd2_files = [
+            f for f in os.listdir(input_path)
+            if f.lower().endswith(".nd2")
+        ]
+        if nd2_files:
+            return "nd2"
+            
         raise ValueError(f"""
         ❌ Could not detect N5/Zarr version or dataset format at: {input_path}.
         {n5_path} does not exist.
         {zarr2_path} does not exist.
         {zarr3_path} does not exist.
-        And no TIFF files found in folder.
+        And no TIFF or ND2 files found in folder.
         """)
     return input_driver
 
@@ -254,6 +282,17 @@ def load_tiff_stack(folder_or_file):
         # Multiple TIFF files
         return dask_imread.imread(folder_or_file + "/*.tiff")
 
+def load_nd2_stack(nd2_file):
+    """Load ND2 data as a dask array."""
+    if not os.path.isfile(nd2_file):
+        raise ValueError(f"ND2 file does not exist: {nd2_file}")
+    
+    # Open file and return dask array (file handle will be managed by dask)
+    nd2_handle = nd2.ND2File(nd2_file)
+    dask_array = nd2_handle.to_dask()
+    # Note: Don't close the handle here as dask needs it for lazy loading
+    return dask_array
+
 
 def estimate_total_chunks_for_tiff(input_path, chunk_shape=(64, 64, 64)):
     """
@@ -293,5 +332,145 @@ def estimate_total_chunks_for_tiff(input_path, chunk_shape=(64, 64, 64)):
     total_chunks = int(np.prod(chunk_counts))
     
     return total_chunks
+
+def extract_nd2_ome_metadata(nd2_file):
+    """Extract OME metadata from ND2 file."""
+    if not os.path.isfile(nd2_file):
+        raise ValueError(f"ND2 file does not exist: {nd2_file}")
+    
+    with nd2.ND2File(nd2_file) as f:
+        ome_xml = f.ome_metadata()
+        if ome_xml:
+            # Return the raw XML string
+            return ome_xml
+        else:
+            return None
+
+def convert_ome_to_zarr3_metadata(ome_metadata, array_shape, image_name=None):
+    """Convert OME metadata to zarr3 OME-ZARR format."""
+    if ome_metadata is None:
+        # Create minimal metadata if no OME available
+        return create_zarr3_ome_metadata(None, array_shape, image_name or "image")
+    
+    try:
+        # Try to parse the XML if it's a string
+        if isinstance(ome_metadata, str):
+            ome_obj = from_xml(ome_metadata)
+        else:
+            ome_obj = ome_metadata
+            
+        # Extract image information
+        image = ome_obj.images[0] if ome_obj.images else None
+        if image is None:
+            return create_zarr3_ome_metadata(ome_metadata, array_shape, image_name or "image")
+        
+        # Get image name
+        final_image_name = image_name or (image.name if image.name else "image")
+        
+        # Extract pixel sizes
+        pixel_sizes = {}
+        pixels = image.pixels if image and image.pixels else None
+        if pixels:
+            if pixels.physical_size_x:
+                pixel_sizes['x'] = float(pixels.physical_size_x)
+            if pixels.physical_size_y:
+                pixel_sizes['y'] = float(pixels.physical_size_y)
+            if pixels.physical_size_z:
+                pixel_sizes['z'] = float(pixels.physical_size_z)
+        pixel_sizes = pixel_sizes if pixel_sizes else None
+        
+        return create_zarr3_ome_metadata(ome_metadata, array_shape, final_image_name, pixel_sizes)
+        
+    except Exception as e:
+        print(f"Warning: Could not parse OME metadata: {e}")
+        return create_zarr3_ome_metadata(ome_metadata, array_shape, image_name or "image")
+
+
+def create_zarr3_ome_metadata(ome_xml, array_shape, image_name, pixel_sizes=None):
+    """Create OME-ZARR metadata structure for zarr3 format."""
+    
+    # Build axes information based on array shape
+    axes = []
+    if len(array_shape) == 3:
+        axes = [
+            {"name": "z", "type": "space", "unit": "micrometer"},
+            {"name": "y", "type": "space", "unit": "micrometer"},
+            {"name": "x", "type": "space", "unit": "micrometer"}
+        ]
+    elif len(array_shape) == 4:
+        axes = [
+            {"name": "c", "type": "channel"},
+            {"name": "z", "type": "space", "unit": "micrometer"},
+            {"name": "y", "type": "space", "unit": "micrometer"},
+            {"name": "x", "type": "space", "unit": "micrometer"}
+        ]
+    elif len(array_shape) == 5:
+        axes = [
+            {"name": "t", "type": "time", "unit": "millisecond"},
+            {"name": "c", "type": "channel"},
+            {"name": "z", "type": "space", "unit": "micrometer"},
+            {"name": "y", "type": "space", "unit": "micrometer"},
+            {"name": "x", "type": "space", "unit": "micrometer"}
+        ]
+    else:
+        # Fallback for other dimensions
+        axes = [{"name": f"axis_{i}", "type": "space"} for i in range(len(array_shape))]
+    
+    # Extract pixel sizes from OME XML if available
+    scale_factors = [1.0] * len(array_shape)
+    if pixel_sizes is not None:
+        # Map pixel sizes to the correct axes
+        if len(array_shape) == 3:  # ZYX
+            scale_factors = [pixel_sizes.get('z', 1.0), pixel_sizes.get('y', 1.0), pixel_sizes.get('x', 1.0)]
+        elif len(array_shape) == 4:  # CZYX
+            scale_factors = [1.0, pixel_sizes.get('z', 1.0), pixel_sizes.get('y', 1.0), pixel_sizes.get('x', 1.0)]
+        elif len(array_shape) == 5:  # TCZYX
+            scale_factors = [1.0, 1.0, pixel_sizes.get('z', 1.0), pixel_sizes.get('y', 1.0), pixel_sizes.get('x', 1.0)]
+    
+    # Create coordinate transformations for s0 level
+    coordinate_transformations = [{
+        "type": "scale",
+        "scale": scale_factors
+    }]
+    
+    # Build multiscales metadata
+    multiscales = [{
+        "version": "0.5",
+        "axes": axes,
+        "datasets": [{
+            "path": "s0",
+            "coordinateTransformations": coordinate_transformations
+        }],
+        "name": image_name,
+        "type": "image"
+    }]
+    
+    # Create full metadata structure
+    metadata = {
+        "zarr_format": 3,
+        "node_type": "group",
+        "attributes": {
+            "ome": {
+                "multiscales": multiscales
+            }
+        }
+    }
+    
+    # Add OME XML if available - ensure it's a string
+    if ome_xml:
+        if isinstance(ome_xml, str):
+            metadata["attributes"]["ome"]["ome_xml"] = ome_xml
+        else:
+            # Convert OME object to string if needed
+            metadata["attributes"]["ome"]["ome_xml"] = str(ome_xml)
+    
+    return metadata
+
+
+def write_zarr3_group_metadata(output_path, metadata):
+    """Write zarr3 group-level zarr.json file with OME-ZARR metadata."""
+    zarr_json_path = os.path.join(output_path, "zarr.json")
+    with open(zarr_json_path, 'w') as f:
+        json.dump(metadata, f, indent=2)
 
 
