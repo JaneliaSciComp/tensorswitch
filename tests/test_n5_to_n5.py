@@ -33,7 +33,7 @@ def create_n5(temp_dir=None):
     if temp_dir is None:
         temp_dir = tempfile.TemporaryDirectory().name
 
-    # ✅ Corrected chunk layout specification
+    # Corrected chunk layout specification
     n5_spec = {
         'driver': 'n5',
         'kvstore': {'driver': 'file', 'path': temp_dir},
@@ -49,14 +49,14 @@ def create_n5(temp_dir=None):
         }
     }
 
-    # ✅ Open and create the N5 dataset
+    # Open and create the N5 dataset
     array = ts.open(n5_spec, create=True, open=True).result()
    
     # Populate the dataset with random data
     data = np.random.randint(0, 65535, size=(256, 256, 256), dtype=np.uint16)
     array[...] = data
 
-    print(f"✅ N5 dataset created at: {temp_dir}")
+    print(f"N5 dataset created at: {temp_dir}")
     return temp_dir  # Return path to N5 dataset
 
 if __name__ == "__main__":

@@ -18,19 +18,23 @@ tensorswitch/
 │       │   ├── downsample_shard_zarr3.py # Downsample using shards
 │       │   ├── n5_to_n5.py               # N5 to N5 conversion logic
 │       │   ├── n5_to_zarr2.py            # N5 to Zarr V2 conversion logic
-│       │   ├── tiff_to_zarr3_s0.py       # TIFF to Zarr V3 level s0 conversion logic  
-│       │   ├── nd2_to_zarr3_s0.py        # ND2 to Zarr V3 level s0 conversion logic with OME metadata  
-│       ├── utils.py                      # Common utilities (chunk domain calculation)
+│       │   ├── tiff_to_zarr3_s0.py       # TIFF to Zarr V3 level s0 with OME-Zarr metadata
+│       │   ├── nd2_to_zarr3_s0.py        # ND2 to Zarr V3 level s0 with OME-Zarr metadata
+│       │   ├── ims_to_zarr3_s0.py        # IMS to Zarr V3 level s0 with OME-Zarr metadata
+│       ├── utils.py                      # Common utilities and OME-Zarr metadata functions
 ├── contrib
 │   ├── re_submit_jobs.ipynb              # Jupyter notebook to re-submit failed chunk jobs
 │   ├── start_neuroglancer_server.py      # Start a CORS-enabled web server
+│   ├── update_metadata.py                # Update OME-Zarr multiscale metadata and add ome_xml
 │   └── z_to_chunk_index.py               # Print chunk index ranges for resubmit failed or left over jobs
 └── tests
-    ├── test_n5_to_n5.py
-    ├── test_n5_to_zarr2.py
-    ├── test_n5_to_zarr3_downsample_shard.py
-    ├── test_zarr3_to_downsample_noshard_zarr3.py
-    └── test_zarr3_to_downsample_shard_zarr3.py
+    ├── test_n5_to_n5.py                       # Test N5 to N5 conversion
+    ├── test_n5_to_zarr2.py                    # Test N5 to Zarr2 conversion
+    ├── test_n5_to_zarr3_downsample_shard.py   # Test N5 to Zarr3 downsampling with shards
+    ├── test_zarr3_to_downsample_noshard_zarr3.py # Test Zarr3 downsampling without shards
+    ├── test_zarr3_to_downsample_shard_zarr3.py   # Test Zarr3 downsampling with shards
+    ├── test_nd2_to_zarr3_middle_chunks.py     # Test ND2 to Zarr3 middle chunk verification
+    └── test_ims_to_zarr3_middle_chunks.py     # Test IMS to Zarr3 middle chunk verification
 
 ```
 
@@ -76,16 +80,16 @@ python -m tensorswitch --task downsample_shard_zarr3 \
 
 ### 3. Supported Tasks
 
-| Task Name            | Description |
-|----------------------|-----------------------------------------|
-| `n5_to_zarr2`        | Convert N5 to Zarr V2                   |
-| `n5_to_n5`           | Convert N5 to N5 (new chunking)         |
-| `downsample_zarr`    | Downsample existing Zarr dataset        |
-| `submit_downsample`  | Submit downsampling jobs to the cluster |
-| `submit_n5_zarr`     | Submit N5 to Zarr jobs to the cluster   |
-| `submit_n5_n5`       | Submit N5 to N5 jobs to the cluster     |
-| `tiff_to_zarr3_s0`   | Convert TIFF stack to Zarr V3 (s0)      |
-| `nd2_to_zarr3_s0`    | Convert ND2 file to Zarr V3 (s0) with OME metadata |
+| Task Name                 | Description |
+|---------------------------|-----------------------------------------|
+| `n5_to_zarr2`            | Convert N5 to Zarr V2                   |
+| `n5_to_n5`               | Convert N5 to N5 (new chunking)         |
+| `downsample_shard_zarr3` | Downsample existing Zarr dataset with sharding |
+| `tiff_to_zarr3_s0`       | Convert TIFF stack to Zarr V3 (s0) with OME-Zarr metadata |
+| `nd2_to_zarr3_s0`        | Convert ND2 file to Zarr V3 (s0) with OME-Zarr metadata |
+| `ims_to_zarr3_s0`        | Convert IMS file to Zarr V3 (s0) with OME-Zarr metadata |
+
+All s0 conversion tasks create multiscale-compatible Zarr structures with proper OME-Zarr metadata.
 
 
 ### 4. Example Commands
@@ -127,9 +131,110 @@ python -m tensorswitch --task nd2_to_zarr3_s0 \
   --submit
 ```
 
+#### Convert IMS to Zarr v3 s0 with OME-Zarr metadata (local)
+```bash
+python -m tensorswitch --task ims_to_zarr3_s0 --base_path /path/to/file.ims --output_path /path/to/output.zarr --use_shard 0
+```
+
+#### Submit IMS to Zarr v3 conversion to cluster
+```bash
+python -m tensorswitch --task ims_to_zarr3_s0 \
+  --base_path /path/to/file.ims \
+  --output_path /path/to/output.zarr \
+  --num_volumes 8 \
+  --cores 4 \
+  --wall_time 2:00 \
+  --project your_project_name \
+  --submit
+```
+
+#### Create Complete Multiscale OME-Zarr Dataset
+
+1. **Convert to s0**: Use any s0 conversion task (tiff, nd2, or ims)
+2. **Generate levels s1-s4**: Use downsampling for each level
+3. **Update metadata**: Use the metadata update script
+
+```bash
+# Step 1: Convert source to s0 (example with IMS)
+python -m tensorswitch --task ims_to_zarr3_s0 \
+  --base_path /path/to/file.ims \
+  --output_path /path/to/output.zarr \
+  --submit --project your_project
+
+# Step 2: Generate downsampled levels s1-s4
+for level in {1..4}; do
+  python -m tensorswitch --task downsample_shard_zarr3 \
+    --base_path /path/to/output.zarr/multiscale/s$((level-1)) \
+    --output_path /path/to/output.zarr \
+    --level $level \
+    --submit --project your_project
+done
+
+# Step 3: Update multiscale metadata
+python contrib/update_metadata.py /path/to/output.zarr --check-ome-xml
+```
+
 #### Resubmit Failed Chunks
 Use `re_submit_jobs.ipynb` to debug chunk failures and resubmit specific chunk ranges using `z_to_chunk_index.py`.
 
+
+---
+
+## Contrib Scripts
+
+### update_metadata.py
+Update OME-Zarr multiscale metadata and optionally add ome_xml information:
+
+```bash
+# Update metadata for levels s0-s4
+python contrib/update_metadata.py /path/to/output.zarr
+
+# Auto-detect max level and add ome_xml from corresponding ND2 files
+python contrib/update_metadata.py /path/to/output.zarr --check-ome-xml
+
+# Dry run to see what would be done
+python contrib/update_metadata.py /path/to/output.zarr --check-ome-xml --dry-run
+```
+
+### Other Contrib Scripts
+- **start_neuroglancer_server.py**: Start a CORS-enabled web server for neuroglancer viewing
+- **z_to_chunk_index.py**: Calculate chunk index ranges for resubmitting specific z-slices
+- **re_submit_jobs.ipynb**: Interactive notebook for debugging and resubmitting failed chunks
+
+---
+
+## Testing
+
+The `tests/` directory contains validation scripts for different conversion workflows:
+
+- **test_ims_to_zarr3_middle_chunks.py**: Validates IMS to Zarr3 conversion with OME-Zarr metadata structure
+- **test_nd2_to_zarr3_middle_chunks.py**: Validates ND2 to Zarr3 conversion with OME-Zarr metadata structure
+- **test_n5_to_*.py**: Various N5 conversion and downsampling tests
+- **test_zarr3_to_downsample_*.py**: Zarr3 downsampling tests with and without sharding
+
+Run tests individually:
+```bash
+python tests/test_ims_to_zarr3_middle_chunks.py
+```
+
+---
+
+## OME-Zarr Structure
+
+All s0 conversion tasks create a consistent multiscale structure:
+
+```
+output.zarr/
+└── multiscale/
+    ├── zarr.json              # OME-Zarr metadata with relative paths ("s0", "s1", etc.)
+    ├── s0/                    # Full resolution data
+    ├── s1/                    # 2x downsampled
+    ├── s2/                    # 4x downsampled  
+    ├── s3/                    # 8x downsampled
+    └── s4/                    # 16x downsampled
+```
+
+This structure is compatible with neuroglancer and other OME-Zarr viewers.
 
 ---
 
@@ -142,6 +247,9 @@ Use `re_submit_jobs.ipynb` to debug chunk failures and resubmit specific chunk r
 - requests (for N5 over HTTP)
 - Dask + tifffile (for TIFF conversion)
 - nd2 + ome-zarr (for ND2 conversion with OME metadata)
+- h5py (for IMS conversion)
+- json (for metadata handling)
+- glob (for file pattern matching)
 
 ---
 

@@ -1,20 +1,17 @@
 from dask.cache import Cache
-from ..utils import (load_nd2_stack, zarr3_store_spec, get_chunk_domains, commit_tasks, 
-                    get_total_chunks_from_store, extract_nd2_ome_metadata, 
-                    convert_ome_to_zarr3_metadata, write_zarr3_group_metadata)
+from ..utils import (load_ims_stack, zarr3_store_spec, get_chunk_domains, commit_tasks, 
+                    get_total_chunks_from_store, extract_ims_metadata, 
+                    convert_ims_to_zarr3_metadata, write_zarr3_group_metadata)
 import tensorstore as ts
 import numpy as np
 import psutil
 import time
-# lazy loading
-import nd2
-import dask.array as da
 import os
 
 def process(base_path, output_path, use_shard=False, memory_limit=50, start_idx=0, stop_idx=None, use_ome_structure=True):
-    print(f"Loading ND2 file from: {base_path}", flush=True)
+    print(f"Loading IMS file from: {base_path}", flush=True)
 
-    volume = load_nd2_stack(base_path)
+    volume, h5_file = load_ims_stack(base_path)
     print(f"Original volume shape: {volume.shape}, dtype: {volume.dtype}", flush=True)
     print(f"Original chunk structure from dask: {volume.chunksize}", flush=True)
 
@@ -45,6 +42,7 @@ def process(base_path, output_path, use_shard=False, memory_limit=50, start_idx=
         shape=volume.shape,
         dtype=str(volume.dtype),
         use_shard=use_shard,
+        level_path="s0",
         use_ome_structure=use_ome_structure
     )
 
@@ -63,37 +61,42 @@ def process(base_path, output_path, use_shard=False, memory_limit=50, start_idx=
     ntasks = 0
     txn = ts.Transaction()
 
-    for domain in chunk_domains:
-        # Handle both 3D and 4D arrays dynamically
-        slices = tuple(slice(min, max) for (min,max) in zip(domain.inclusive_min, domain.exclusive_max))
-        slice_data = volume[slices]
-        task = store[domain].with_transaction(txn).write(slice_data.compute())
+    try:
+        for domain in chunk_domains:
+            # Handle both 3D and 4D arrays dynamically
+            slices = tuple(slice(min, max) for (min,max) in zip(domain.inclusive_min, domain.exclusive_max))
+            slice_data = volume[slices]
+            task = store[domain].with_transaction(txn).write(slice_data.compute())
 
-        tasks.append(task)
-        ntasks += 1
+            tasks.append(task)
+            ntasks += 1
 
-        txn = commit_tasks(tasks, txn, memory_limit=memory_limit)
-    
-        if ntasks % 512 == 0:
-            #chunk_idx = range(start_idx, stop_idx)[ntasks]
-            chunk_idx = range(start_idx, stop_idx)[ntasks] if stop_idx else start_idx + ntasks
-            print(f"Queued {ntasks} chunk writes up to {chunk_idx}...", flush=True)
-    
-    for task in tasks:
-        task.result()
-    
-    txn.commit_sync()
+            txn = commit_tasks(tasks, txn, memory_limit=memory_limit)
+        
+            if ntasks % 512 == 0:
+                chunk_idx = range(start_idx, stop_idx or total_chunks)[ntasks-1] if ntasks > 0 else start_idx
+                print(f"Queued {ntasks} chunk writes up to {chunk_idx}...", flush=True)
+        
+        for task in tasks:
+            task.result()
+        
+        txn.commit_sync()
+        
+    finally:
+        # Ensure h5py file is properly closed
+        if h5_file:
+            h5_file.close()
+            print("Closed IMS file handle")
     
     # Write OME-Zarr metadata only if using OME structure
     if use_ome_structure:
         print("Writing OME-Zarr metadata...", flush=True)
         try:
-            ome_metadata = extract_nd2_ome_metadata(base_path)
+            metadata, voxel_sizes = extract_ims_metadata(base_path)
             # Extract image name from file path
-            import os
             image_name = os.path.splitext(os.path.basename(base_path))[0]
             
-            zarr3_metadata = convert_ome_to_zarr3_metadata(ome_metadata, volume.shape, image_name)
+            zarr3_metadata = convert_ims_to_zarr3_metadata(base_path, volume.shape, voxel_sizes)
             # Write zarr.json to multiscale folder (parent of s0 folder)
             multiscale_path = os.path.dirname(output_path)
             write_zarr3_group_metadata(multiscale_path, zarr3_metadata)

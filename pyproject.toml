@@ -56,6 +56,7 @@ matplotlib = ">=3.10.3,<4"
 zarr = ">=3.1.1,<4"
 ome-types = ">=0.6.0,<0.7"
 nd2 = ">=0.10.3,<0.11"
+h5py = ">=3.14.0,<4"
 
 [tool.pixi.feature.ipykernel.dependencies]
 ipykernel = "*"

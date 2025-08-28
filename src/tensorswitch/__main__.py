@@ -12,13 +12,14 @@ if not __package__:
     sys.path.insert(0, package_source_path)
 
 from . import tasks
-from .utils import get_total_chunks, downsample_spec, zarr3_store_spec, get_chunk_domains, estimate_total_chunks_for_tiff, get_input_driver, get_total_chunks_from_store
+from .utils import get_total_chunks, downsample_spec, zarr3_store_spec, get_chunk_domains, estimate_total_chunks_for_tiff, get_input_driver, get_total_chunks_from_store, load_tiff_stack
 from .tasks import downsample_shard_zarr3
 from .tasks import n5_to_n5
 from .tasks import n5_to_zarr2
 from .tasks import tiff_to_zarr3_s0
 from .tasks import nd2_to_zarr3_s0
-from .utils import load_nd2_stack, zarr3_store_spec, get_total_chunks_from_store
+from .tasks import ims_to_zarr3_s0
+from .utils import load_nd2_stack, load_ims_stack, zarr3_store_spec, get_total_chunks_from_store
 
 # Set umask to allow group write access
 os.umask(0o0002)
@@ -32,7 +33,16 @@ def submit_job(args):
     input_driver = "n5" if args.base_path.startswith("http") else get_input_driver(args.base_path)
     
     if args.task == "tiff_to_zarr3_s0" and input_driver == "tiff":
-        total_chunks = estimate_total_chunks_for_tiff(args.base_path)
+        volume = load_tiff_stack(args.base_path)
+        store_spec = zarr3_store_spec(
+            path=args.output_path,
+            shape=volume.shape,
+            dtype=str(volume.dtype),
+            use_shard=bool(args.use_shard),
+            use_ome_structure=bool(args.use_ome_structure)
+        )
+        temp_store = ts.open(store_spec, create=True, delete_existing=True).result()
+        total_chunks = get_total_chunks_from_store(temp_store)
     elif args.task == "nd2_to_zarr3_s0":
         volume = load_nd2_stack(args.base_path)
         store_spec = zarr3_store_spec(
@@ -40,6 +50,19 @@ def submit_job(args):
             shape=volume.shape,
             dtype=str(volume.dtype),
             use_shard=bool(args.use_shard),
+            use_ome_structure=bool(args.use_ome_structure)
+        )
+        temp_store = ts.open(store_spec, create=True, delete_existing=True).result()
+        total_chunks = get_total_chunks_from_store(temp_store)
+    elif args.task == "ims_to_zarr3_s0":
+        volume, h5_file = load_ims_stack(args.base_path)
+        h5_file.close()  # Close file handle after getting shape info
+        store_spec = zarr3_store_spec(
+            path=args.output_path,
+            shape=volume.shape,
+            dtype=str(volume.dtype),
+            use_shard=bool(args.use_shard),
+            level_path="s0",
             use_ome_structure=bool(args.use_ome_structure)
         )
         temp_store = ts.open(store_spec, create=True, delete_existing=True).result()
@@ -153,7 +176,7 @@ def submit_job(args):
 
 def main():
     parser = argparse.ArgumentParser(description="Unified Pipeline Manager")
-    parser.add_argument("--task", required=True, choices=["n5_to_zarr2", "n5_to_n5", "downsample_shard_zarr3", "tiff_to_zarr3_s0", "nd2_to_zarr3_s0"])
+    parser.add_argument("--task", required=True, choices=["n5_to_zarr2", "n5_to_n5", "downsample_shard_zarr3", "tiff_to_zarr3_s0", "nd2_to_zarr3_s0", "ims_to_zarr3_s0"])
     parser.add_argument("--base_path", required=True, help="Input dataset path")
     parser.add_argument("--output_path", required=True, help="Output dataset path (only needed for conversions)")
     parser.add_argument("--level", type=int, default=0, help="Levels to process")
@@ -184,9 +207,11 @@ def main():
         elif args.task == "downsample_shard_zarr3":
             downsample_shard_zarr3.process(args.base_path, args.output_path, args.level, args.start_idx, args.stop_idx, bool(args.downsample), bool(args.use_shard), args.memory_limit)
         elif args.task == "tiff_to_zarr3_s0":
-            tiff_to_zarr3_s0.process(args.base_path, args.output_path, bool(args.use_shard), args.memory_limit, args.start_idx, args.stop_idx)
+            tiff_to_zarr3_s0.process(args.base_path, args.output_path, bool(args.use_shard), args.memory_limit, args.start_idx, args.stop_idx, bool(args.use_ome_structure))
         elif args.task == "nd2_to_zarr3_s0":
             nd2_to_zarr3_s0.process(args.base_path, args.output_path, bool(args.use_shard), args.memory_limit, args.start_idx, args.stop_idx, bool(args.use_ome_structure))
+        elif args.task == "ims_to_zarr3_s0":
+            ims_to_zarr3_s0.process(args.base_path, args.output_path, bool(args.use_shard), args.memory_limit, args.start_idx, args.stop_idx, bool(args.use_ome_structure))
         else:
             raise ValueError(f"Unsupported task: {args.task}")
 

@@ -46,7 +46,7 @@ def create_zarr3(temp_dir=None):
     data = np.random.randint(0, 255, size=(64, 64, 64), dtype=np.uint8)
     array[...] = data
 
-    print(f"✅ Zarr3 dataset created at: {temp_dir}")
+    print(f"Zarr3 dataset created at: {temp_dir}")
     return temp_dir
 
 if __name__ == "__main__":

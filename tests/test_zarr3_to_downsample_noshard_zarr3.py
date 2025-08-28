@@ -44,7 +44,7 @@ def create_zarr3_dataset(temp_dir=None):
 
     arr = ts.open(spec, create=True, open=True).result()
     arr[...] = np.random.randint(0, 255, size=(64, 64, 64), dtype=np.uint8)
-    print(f"✅ Zarr3 dataset (no shard) created at: {temp_dir}")
+    print(f"Zarr3 dataset (no shard) created at: {temp_dir}")
     return temp_dir
 
 if __name__ == "__main__":

@@ -41,7 +41,7 @@ def create_n5_dataset():
     }
     arr = ts.open(spec, create=True, open=True).result()
     arr[...] = np.random.randint(0, 255, size=(64, 64, 64), dtype=np.uint8)
-    print(f"✅ N5 dataset created at: {temp_dir}")
+    print(f"N5 dataset created at: {temp_dir}")
     return temp_dir
 
 def convert_n5_to_zarr3(n5_path, zarr3_path):

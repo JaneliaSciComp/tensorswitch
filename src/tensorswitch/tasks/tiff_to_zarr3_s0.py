@@ -1,5 +1,7 @@
 from dask.cache import Cache
-from ..utils import load_tiff_stack, zarr3_store_spec, get_chunk_domains, commit_tasks, get_total_chunks_from_store
+from ..utils import (load_tiff_stack, zarr3_store_spec, get_chunk_domains, commit_tasks, 
+                    get_total_chunks_from_store, extract_tiff_ome_metadata,
+                    convert_ome_to_zarr3_metadata, write_zarr3_group_metadata)
 import tensorstore as ts
 import numpy as np
 import psutil
@@ -9,7 +11,7 @@ import tifffile
 import dask.array as da
 import os
 
-def process(base_path, output_path, use_shard=False, memory_limit=50, start_idx=0, stop_idx=None):
+def process(base_path, output_path, use_shard=False, memory_limit=50, start_idx=0, stop_idx=None, use_ome_structure=True):
     print(f"Loading TIFF stack from: {base_path}", flush=True)
 
     volume = load_tiff_stack(base_path)
@@ -37,7 +39,8 @@ def process(base_path, output_path, use_shard=False, memory_limit=50, start_idx=
         path=output_path,
         shape=volume.shape,
         dtype=str(volume.dtype),
-        use_shard=use_shard
+        use_shard=use_shard,
+        use_ome_structure=use_ome_structure
     )
 
     store = ts.open(store_spec, create=True, open=True, delete_existing=False).result()
@@ -75,4 +78,24 @@ def process(base_path, output_path, use_shard=False, memory_limit=50, start_idx=
         task.result()
     
     txn.commit_sync()
+    
+    # Write OME-Zarr metadata only if using OME structure
+    if use_ome_structure:
+        print("Writing OME-Zarr metadata...", flush=True)
+        try:
+            # Extract basic metadata from TIFF file
+            ome_metadata = extract_tiff_ome_metadata(base_path)
+            # Extract image name from file path
+            image_name = os.path.splitext(os.path.basename(base_path))[0]
+            
+            zarr3_metadata = convert_ome_to_zarr3_metadata(ome_metadata, volume.shape, image_name)
+            # Write zarr.json to multiscale folder (parent of s0 folder)
+            multiscale_path = os.path.dirname(output_path)
+            write_zarr3_group_metadata(multiscale_path, zarr3_metadata)
+            print("OME-Zarr metadata written successfully", flush=True)
+        except Exception as e:
+            print(f"Warning: Could not write OME-Zarr metadata: {e}", flush=True)
+    else:
+        print("Skipping OME-ZARR metadata (plain zarr3 format)", flush=True)
+    
     print(f"Completed writing Zarr3 s0 at: {output_path} [{start_idx}:{stop_idx}]", flush=True)

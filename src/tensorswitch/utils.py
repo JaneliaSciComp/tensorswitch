@@ -10,6 +10,7 @@ from urllib.parse import urlparse, unquote
 import dask.array as da
 import itertools
 import nd2
+import h5py
 import json
 from ome_types import from_xml
 
@@ -105,7 +106,7 @@ def zarr3_store_spec(path, shape, dtype, use_shard=True, level_path="s0", use_om
     # Create path based on whether OME-ZARR structure is needed
     if use_ome_structure:
         # For OME-ZARR: use multiscale structure with level subdirectory
-        array_path = os.path.join(path, level_path)
+        array_path = os.path.join(path, "multiscale", level_path)
     else:
         # For plain zarr3: write directly to specified path
         array_path = path
@@ -170,13 +171,17 @@ def get_input_driver(input_path):
 
     if not os.path.exists(input_path):
         raise ValueError(f"""
-        ❌ Could not detect N5/Zarr version or dataset format at: {input_path}.
+        Could not detect N5/Zarr version or dataset format at: {input_path}.
         {input_path} does not exist.
         """)
     
     # Check if input is a single nd2 file
     if os.path.isfile(input_path) and input_path.lower().endswith(".nd2"):
         return "nd2"
+    
+    # Check if input is a single ims file
+    if os.path.isfile(input_path) and input_path.lower().endswith(".ims"):
+        return "ims"
     
     # Check if input is a single tiff file
     if os.path.isfile(input_path) and input_path.lower().endswith((".tiff", ".tif")):
@@ -211,7 +216,7 @@ def get_input_driver(input_path):
             return "nd2"
             
         raise ValueError(f"""
-        ❌ Could not detect N5/Zarr version or dataset format at: {input_path}.
+        Could not detect N5/Zarr version or dataset format at: {input_path}.
         {n5_path} does not exist.
         {zarr2_path} does not exist.
         {zarr3_path} does not exist.
@@ -233,7 +238,7 @@ def get_zarr_store_spec(path):
     input_driver = get_input_driver(path)
 
     if input_driver == "tiff":
-        raise ValueError(f"❌ Cannot build TensorStore spec for TIFF folder: {path}")
+        raise ValueError(f"Cannot build TensorStore spec for TIFF folder: {path}")
         
     zarr_store_spec = {
         'driver': input_driver,
@@ -345,6 +350,23 @@ def extract_nd2_ome_metadata(nd2_file):
             return ome_xml
         else:
             return None
+
+def extract_tiff_ome_metadata(tiff_file):
+    """Extract OME metadata from TIFF file."""
+    if not os.path.isfile(tiff_file):
+        raise ValueError(f"TIFF file does not exist: {tiff_file}")
+    
+    try:
+        with tifffile.TiffFile(tiff_file) as tif:
+            # Try to get OME-XML from TIFF tags
+            if tif.ome_metadata:
+                return tif.ome_metadata
+            else:
+                # If no OME metadata, return None (will create minimal metadata)
+                return None
+    except Exception as e:
+        print(f"Warning: Could not extract OME metadata from TIFF: {e}")
+        return None
 
 def convert_ome_to_zarr3_metadata(ome_metadata, array_shape, image_name=None):
     """Convert OME metadata to zarr3 OME-ZARR format."""
@@ -492,7 +514,7 @@ def update_ome_multiscale_metadata(zarr_path, max_level=4):
         current_scale = [sf * scale_factor for sf in s0_scale_factors]
         
         datasets.append({
-            "path": f"multiscale/s{level}",  # Updated to multiscale path
+            "path": f"s{level}",  # Relative path within multiscale folder
             "coordinateTransformations": [{
                 "type": "scale",
                 "scale": current_scale
@@ -507,5 +529,150 @@ def update_ome_multiscale_metadata(zarr_path, max_level=4):
         json.dump(metadata, f, indent=2)
     
     print(f"Updated OME metadata for {zarr_path} with levels multiscale/s0-s{max_level}")
+
+def load_ims_stack(ims_file):
+    """Load IMS data as a dask array using h5py."""
+    if not os.path.isfile(ims_file):
+        raise ValueError(f"IMS file does not exist: {ims_file}")
+    
+    # Open IMS file with h5py and navigate to the image data
+    h5_file = h5py.File(ims_file, 'r')
+    
+    # Navigate the IMS structure to find image data
+    # Standard structure: DataSet/ResolutionLevel 0/TimePoint 0/Channel X/Data
+    dataset_group = h5_file['DataSet']
+    resolution_group = dataset_group['ResolutionLevel 0']
+    timepoint_group = resolution_group['TimePoint 0']
+    
+    # Find all channels and combine them
+    channel_keys = [key for key in timepoint_group.keys() if key.startswith('Channel')]
+    channel_keys.sort()  # Ensure consistent order
+    
+    if not channel_keys:
+        raise ValueError(f"No channels found in IMS file: {ims_file}")
+    
+    print(f"Found {len(channel_keys)} channels: {channel_keys}")
+    
+    # Load each channel's data and stack them
+    channel_arrays = []
+    for channel_key in channel_keys:
+        channel_group = timepoint_group[channel_key]
+        data_dataset = channel_group['Data']
+        
+        # Create dask array from h5py dataset
+        channel_array = da.from_array(data_dataset, chunks='auto')
+        channel_arrays.append(channel_array)
+        
+        print(f"{channel_key} shape: {data_dataset.shape}, dtype: {data_dataset.dtype}")
+    
+    # Stack channels along first axis if multiple channels exist
+    if len(channel_arrays) > 1:
+        # Stack channels to create CZYX format
+        stacked_array = da.stack(channel_arrays, axis=0)
+        print(f"Stacked array shape (CZYX): {stacked_array.shape}")
+    else:
+        # Single channel - keep original ZYX format
+        stacked_array = channel_arrays[0]
+        print(f"Single channel array shape (ZYX): {stacked_array.shape}")
+    
+    # Return both the dask array and h5py file handle
+    # Note: h5py file must remain open for dask lazy loading
+    return stacked_array, h5_file
+
+def extract_ims_metadata(ims_file):
+    """Extract basic metadata from IMS file."""
+    try:
+        with h5py.File(ims_file, 'r') as h5_file:
+            metadata = {}
+            voxel_sizes = None
+            
+            # Extract metadata from DataSetInfo/Image
+            if 'DataSetInfo' in h5_file and 'Image' in h5_file['DataSetInfo']:
+                info_group = h5_file['DataSetInfo']['Image']
+                # Extract basic attributes and decode byte arrays
+                for attr_name in info_group.attrs:
+                    attr_value = info_group.attrs[attr_name]
+                    # Decode byte arrays to strings if needed
+                    if isinstance(attr_value, np.ndarray) and attr_value.dtype.char == 'S':
+                        metadata[attr_name] = b''.join(attr_value).decode('utf-8', errors='ignore')
+                    else:
+                        metadata[attr_name] = attr_value
+            
+            # Try to extract voxel size from ExtMin/ExtMax and X/Y/Z dimensions
+            if all(key in metadata for key in ['ExtMin0', 'ExtMin1', 'ExtMin2', 'ExtMax0', 'ExtMax1', 'ExtMax2', 'X', 'Y', 'Z']):
+                try:
+                    # Calculate voxel sizes from extent and dimensions
+                    x_size = (float(metadata['ExtMax0']) - float(metadata['ExtMin0'])) / float(metadata['X'])
+                    y_size = (float(metadata['ExtMax1']) - float(metadata['ExtMin1'])) / float(metadata['Y'])
+                    z_size = (float(metadata['ExtMax2']) - float(metadata['ExtMin2'])) / float(metadata['Z'])
+                    voxel_sizes = [x_size, y_size, z_size]  # XYZ order
+                    print(f"Calculated voxel sizes (XYZ): {voxel_sizes}")
+                except (ValueError, ZeroDivisionError) as e:
+                    print(f"Could not calculate voxel sizes: {e}")
+                    voxel_sizes = None
+            
+            return metadata, voxel_sizes
+    except Exception as e:
+        print(f"Warning: Could not extract metadata from {ims_file}: {e}")
+        return {}, None
+
+def convert_ims_to_zarr3_metadata(ims_file, array_shape, voxel_sizes=None):
+    """Convert IMS metadata to zarr3 OME-ZARR format."""
+    image_name = os.path.splitext(os.path.basename(ims_file))[0]
+    
+    # Build axes information based on array shape
+    axes = []
+    scale_factors = [1.0] * len(array_shape)
+    
+    if len(array_shape) == 3:  # ZYX
+        axes = [
+            {"name": "z", "type": "space", "unit": "micrometer"},
+            {"name": "y", "type": "space", "unit": "micrometer"},
+            {"name": "x", "type": "space", "unit": "micrometer"}
+        ]
+        if voxel_sizes is not None and len(voxel_sizes) >= 3:
+            # IMS provides XYZ, we need ZYX for zarr
+            scale_factors = [voxel_sizes[2], voxel_sizes[1], voxel_sizes[0]]
+    elif len(array_shape) == 4:  # CZYX
+        axes = [
+            {"name": "c", "type": "channel"},
+            {"name": "z", "type": "space", "unit": "micrometer"},
+            {"name": "y", "type": "space", "unit": "micrometer"},
+            {"name": "x", "type": "space", "unit": "micrometer"}
+        ]
+        if voxel_sizes is not None and len(voxel_sizes) >= 3:
+            # IMS provides XYZ, we need CZYX for zarr
+            scale_factors = [1.0, voxel_sizes[2], voxel_sizes[1], voxel_sizes[0]]
+    
+    # Create coordinate transformations
+    coordinate_transformations = [{
+        "type": "scale",
+        "scale": scale_factors
+    }]
+    
+    # Build multiscales metadata
+    multiscales = [{
+        "axes": axes,
+        "datasets": [{
+            "path": "s0",
+            "coordinateTransformations": coordinate_transformations
+        }],
+        "name": image_name,
+        "type": "image"
+    }]
+    
+    # Create full metadata structure
+    metadata = {
+        "zarr_format": 3,
+        "node_type": "group",
+        "attributes": {
+            "ome": {
+                "version": "0.5",
+                "multiscales": multiscales
+            }
+        }
+    }
+    
+    return metadata
 
 
