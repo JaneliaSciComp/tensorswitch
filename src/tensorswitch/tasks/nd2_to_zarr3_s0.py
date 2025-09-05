@@ -45,6 +45,7 @@ def process(base_path, output_path, use_shard=False, memory_limit=50, start_idx=
         shape=volume.shape,
         dtype=str(volume.dtype),
         use_shard=use_shard,
+        level_path="s0",
         use_ome_structure=use_ome_structure
     )
 

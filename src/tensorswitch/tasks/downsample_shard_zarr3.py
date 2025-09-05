@@ -20,9 +20,9 @@ def process(base_path, output_path, level, start_idx=0, stop_idx=None, downsampl
         'kvstore': {'driver': 'file', 'path': zarr_input_path}
     }
 
-    downsampled_saved_path = f"{output_path}/multiscale/s{level}"
+    downsampled_saved_path = output_path
 
-    os.makedirs(os.path.dirname(downsampled_saved_path), exist_ok=True)
+    os.makedirs(f"{output_path}/multiscale", exist_ok=True)
 
     print(f" Downsample: {downsample}, Shard: {use_shard}, Level: {level}")
     print(f"Reading from: {zarr_input_path}")
@@ -41,7 +41,7 @@ def process(base_path, output_path, level, start_idx=0, stop_idx=None, downsampl
         downsample_store.shape,
         downsample_store.dtype.name,
         use_shard,
-        level_path="",
+        level_path=f"s{level}",
         use_ome_structure=True
     )
 
@@ -72,4 +72,3 @@ def process(base_path, output_path, level, start_idx=0, stop_idx=None, downsampl
     if txn.open:
         txn.commit_sync()
     print(f"Downsampling complete for level {level}, chunks {start_idx} to {stop_idx}")
-   
