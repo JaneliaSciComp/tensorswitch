@@ -23,8 +23,10 @@ tensorswitch/
 │       │   ├── ims_to_zarr3_s0.py        # IMS to Zarr V3 level s0 with OME-Zarr metadata
 │       ├── utils.py                      # Common utilities and OME-Zarr metadata functions
 ├── contrib
+│   ├── bleaching_correction_task.py      # Z-direction bleaching correction for microscopy datasets
 │   ├── re_submit_jobs.ipynb              # Jupyter notebook to re-submit failed chunk jobs
 │   ├── start_neuroglancer_server.py      # Start a CORS-enabled web server
+│   ├── submit_bleaching_correction_s0.py # Submit bleaching correction jobs to LSF cluster
 │   ├── update_metadata.py                # Update OME-Zarr multiscale metadata and add ome_xml
 │   └── z_to_chunk_index.py               # Print chunk index ranges for resubmit failed or left over jobs
 └── tests
@@ -194,6 +196,22 @@ python contrib/update_metadata.py /path/to/output.zarr --check-ome-xml
 
 # Dry run to see what would be done
 python contrib/update_metadata.py /path/to/output.zarr --check-ome-xml --dry-run
+```
+
+### bleaching_correction_task.py
+Z-direction bleaching correction for microscopy datasets:
+
+```bash
+# Apply bleaching correction to Zarr dataset
+python contrib/bleaching_correction_task.py --input_path /path/to/input.zarr --output_path /path/to/corrected.zarr
+```
+
+### submit_bleaching_correction_s0.py
+Submit bleaching correction jobs to LSF cluster:
+
+```bash
+# Submit bleaching correction to cluster
+python contrib/submit_bleaching_correction_s0.py --input_path /path/to/input.zarr --output_path /path/to/corrected.zarr --project your_project
 ```
 
 ### Other Contrib Scripts
