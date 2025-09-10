@@ -1,0 +1,3725 @@
+{
+  "data_retrieved": "2025-09-09",
+  "total_labs": 131,
+  "lab_data": {
+    "Abbott": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/abbottlab",
+            "windows": "\\\\prfs.hhmi.org\\abbottlab",
+            "cluster": "/groups/abbott/abbottlab"
+          },
+          "ad_group": "abbott"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/abbott$",
+            "windows": "\\\\prfs.hhmi.org\\abbott$",
+            "cluster": "/groups/abbott/home"
+          },
+          "ad_group": "abbott"
+        }
+      },
+      "ad_group": "abbott",
+      "description": "Abbott Lab"
+    },
+    "Aguilera Castrejon": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/aguileracastrejonlab",
+            "windows": "\\\\prfs.hhmi.org\\aguileracastrejonlab",
+            "cluster": "/groups/aguileracastrejon/aguileracastrejonlab"
+          },
+          "ad_group": "aguileracastrejon"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/aguileracastrejon$",
+            "windows": "\\\\prfs.hhmi.org\\aguileracastrejon$",
+            "cluster": "/groups/aguileracastrejon/home"
+          },
+          "ad_group": "aguileracastrejon"
+        }
+      },
+      "ad_group": "aguileracastrejon",
+      "description": "Aguilera Castrejon Lab"
+    },
+    "Ahrens": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/ahrenslab",
+            "windows": "\\\\prfs.hhmi.org\\ahrenslab",
+            "cluster": "/groups/ahrens/ahrenslab"
+          },
+          "ad_group": "ahrens"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/ahrens$",
+            "windows": "\\\\prfs.hhmi.org\\ahrens$",
+            "cluster": "/groups/ahrens/home"
+          },
+          "ad_group": "ahrens"
+        },
+        "scratch": {
+          "platforms": {
+            "mac": "smb://nrs.hhmi.org/ahrensraverfish",
+            "windows": "\\\\nrs.hhmi.org\\ahrensraverfish",
+            "cluster": "/nrs/ahrensraverfish"
+          },
+          "ad_group": "ahrensraverfish"
+        },
+        "archive": {
+          "platforms": {
+            "mac": "smb://nearline4.hhmi.org/ahrens",
+            "windows": "\\\\nearline4.hhmi.org\\ahrens",
+            "cluster": "/nearline/ahrens"
+          },
+          "ad_group": "ahrens"
+        }
+      },
+      "ad_group": "ahrens",
+      "description": "Ahrens Lab"
+    },
+    "AIC": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/aic",
+            "windows": "\\\\prfs.hhmi.org\\aic",
+            "cluster": "/groups/aic/aic"
+          },
+          "ad_group": "advimgc"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/aicguest$",
+            "windows": "\\\\prfs.hhmi.org\\aicguest$",
+            "cluster": "/groups/aic/guesthome"
+          },
+          "ad_group": "aicguest-g"
+        },
+        "scratch": {
+          "platforms": {
+            "mac": "smb://nrs.hhmi.org/aic",
+            "windows": "\\\\nrs.hhmi.org\\aic",
+            "cluster": "/nrs/aic"
+          },
+          "ad_group": "advimgc"
+        },
+        "archive": {
+          "platforms": {
+            "mac": "smb://nearline4.hhmi.org/aic",
+            "windows": "\\\\nearline4.hhmi.org\\aic",
+            "cluster": "/nearline/aic"
+          },
+          "ad_group": "advimgc"
+        }
+      },
+      "ad_group": "advimgc",
+      "description": "AIC Lab"
+    },
+    "AI Support": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/aisupport",
+            "windows": "\\\\prfs.hhmi.org\\aisupport",
+            "cluster": "/groups/aisupport/aisupport"
+          },
+          "ad_group": ""
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/aisupport$",
+            "windows": "\\\\prfs.hhmi.org\\aisupport$",
+            "cluster": "/groups/aisupport/home"
+          },
+          "ad_group": ""
+        }
+      },
+      "ad_group": "",
+      "description": "AI Support Lab"
+    },
+    "AniBody": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/anibody",
+            "windows": "\\\\prfs.hhmi.org\\anibody",
+            "cluster": "/groups/anibody/anibody"
+          },
+          "ad_group": "anibody"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/anibody$",
+            "windows": "\\\\prfs.hhmi.org\\anibody$",
+            "cluster": "/groups/anibody/home"
+          },
+          "ad_group": "anibody"
+        }
+      },
+      "ad_group": "anibody",
+      "description": "AniBody Lab"
+    },
+    "APIG": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/tritrode",
+            "windows": "\\\\prfs.hhmi.org\\tritrode",
+            "cluster": "/groups/apig/tritrode"
+          },
+          "ad_group": "tritrode"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/apig$",
+            "windows": "\\\\prfs.hhmi.org\\apig$",
+            "cluster": "/groups/apig/home"
+          },
+          "ad_group": "apig"
+        },
+        "archive": {
+          "platforms": {
+            "mac": "smb://nearline4.hhmi.org/apig",
+            "windows": "\\\\nearline4.hhmi.org\\apig",
+            "cluster": "/nearline/apig"
+          },
+          "ad_group": "apig"
+        }
+      },
+      "ad_group": "apig",
+      "description": "APIG Lab"
+    },
+    "Aso": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/asolab",
+            "windows": "\\\\prfs.hhmi.org\\asolab",
+            "cluster": "/groups/aso/asolab"
+          },
+          "ad_group": "asolab"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/aso$",
+            "windows": "\\\\prfs.hhmi.org\\aso$",
+            "cluster": "/groups/aso/home"
+          },
+          "ad_group": "asolab"
+        },
+        "scratch": {
+          "platforms": {
+            "mac": "smb://nrs.hhmi.org/aso",
+            "windows": "\\\\nrs.hhmi.org\\aso",
+            "cluster": "/nrs/aso"
+          },
+          "ad_group": "asolab"
+        },
+        "archive": {
+          "platforms": {
+            "mac": "smb://nearline4.hhmi.org/aso",
+            "windows": "\\\\nearline4.hhmi.org\\aso",
+            "cluster": "/nearline/aso"
+          },
+          "ad_group": "asolab"
+        }
+      },
+      "ad_group": "asolab",
+      "description": "Aso Lab"
+    },
+    "Betzig": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/betzigcollab",
+            "windows": "\\\\prfs.hhmi.org\\betzigcollab",
+            "cluster": "/groups/betzig/betzigcollab"
+          },
+          "ad_group": "betzigcollab"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/betzig$",
+            "windows": "\\\\prfs.hhmi.org\\betzig$",
+            "cluster": "/groups/betzig/home"
+          },
+          "ad_group": "betzig"
+        },
+        "archive": {
+          "platforms": {
+            "mac": "smb://nearline4.hhmi.org/betzig",
+            "windows": "\\\\nearline4.hhmi.org\\betzig",
+            "cluster": "/nearline/betzig"
+          },
+          "ad_group": "betzig"
+        }
+      },
+      "ad_group": "betzig",
+      "description": "Betzig Lab"
+    },
+    "Beyene": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/beyenelab",
+            "windows": "\\\\prfs.hhmi.org\\beyenelab",
+            "cluster": "/groups/beyene/beyenelab"
+          },
+          "ad_group": "beyene"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/beyene$",
+            "windows": "\\\\prfs.hhmi.org\\beyene",
+            "cluster": "/groups/beyene/home"
+          },
+          "ad_group": "beyene"
+        },
+        "scratch": {
+          "platforms": {
+            "mac": "smb://nrs.int.janelia.org/beyene",
+            "windows": "\\\\nrs.hhmi.org\\beyene",
+            "cluster": "/nrs/beyene"
+          },
+          "ad_group": "beyene"
+        }
+      },
+      "ad_group": "beyene",
+      "description": "Beyene Lab"
+    },
+    "Bishop": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/bishoplab",
+            "windows": "\\\\prfs.hhmi.org\\bishoplab",
+            "cluster": "/groups/bishop/bishoplab"
+          },
+          "ad_group": "bishop"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/bock$",
+            "windows": "\\\\prfs.hhmi.org\\bock$",
+            "cluster": "/groups/bock/home"
+          },
+          "ad_group": "bock"
+        }
+      },
+      "ad_group": "bishop",
+      "description": "Bishop Lab"
+    },
+    "Branson": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/bransonlab",
+            "windows": "\\\\prfs.hhmi.org\\bransonlab",
+            "cluster": "/groups/branson/bransonlab"
+          },
+          "ad_group": "branson"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/branson$",
+            "windows": "\\\\prfs.hhmi.org\\branson$",
+            "cluster": "/groups/branson/home"
+          },
+          "ad_group": "branson"
+        },
+        "scratch": {
+          "platforms": {
+            "mac": "smb://nrs.hhmi.org/branson",
+            "windows": "\\\\nrs.hhmi.org\\branson",
+            "cluster": "/nrs/branson"
+          },
+          "ad_group": "branson"
+        },
+        "archive": {
+          "platforms": {
+            "mac": "smb://nearline4.hhmi.org/branson",
+            "windows": "\\\\nearline4.hhmi.org\\branson",
+            "cluster": "/nearline/branson"
+          },
+          "ad_group": "branson"
+        }
+      },
+      "ad_group": "branson",
+      "description": "Branson Lab"
+    },
+    "Card": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/cardlab",
+            "windows": "\\\\prfs.hhmi.org\\cardlab",
+            "cluster": "/groups/card/cardlab"
+          },
+          "ad_group": "card"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/card$",
+            "windows": "\\\\prfs.hhmi.org\\card$",
+            "cluster": "/groups/card/home"
+          },
+          "ad_group": "card"
+        },
+        "archive": {
+          "platforms": {
+            "mac": "smb://nearline4.hhmi.org/card",
+            "windows": "\\\\nearline4.hhmi.org\\card",
+            "cluster": "/nearline/card"
+          },
+          "ad_group": "card"
+        }
+      },
+      "ad_group": "card",
+      "description": "Card Lab"
+    },
+    "Cell and Mol Bio": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/cellandmolbio",
+            "windows": "\\\\prfs.hhmi.org\\cellandmolbio",
+            "cluster": "/groups/cellandmolbio"
+          },
+          "ad_group": ""
+        }
+      },
+      "ad_group": "",
+      "description": "Cell and Mol Bio Lab"
+    },
+    "Cell Culture": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/cellculture",
+            "windows": "\\\\prfs.hhmi.org\\cellculture",
+            "cluster": "/groups/cellculture/cellculture"
+          },
+          "ad_group": "cellculture"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/cellculture$",
+            "windows": "\\\\prfs.hhmi.org\\cellculture$",
+            "cluster": "/groups/cellculture/home"
+          },
+          "ad_group": "cellculture"
+        },
+        "archive": {
+          "platforms": {
+            "mac": "smb://nearline4.hhmi.org/cellculture",
+            "windows": "\\\\nearline4.hhmi.org\\cellculture",
+            "cluster": "/nearline/cellculture"
+          },
+          "ad_group": "cellculture"
+        }
+      },
+      "ad_group": "cellculture",
+      "description": "Cell Culture Lab"
+    },
+    "CellMap": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/cellmap",
+            "windows": "\\\\prfs.hhmi.org\\cellmap",
+            "cluster": "/groups/cellmap/cellmap"
+          },
+          "ad_group": "cellmap"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/cellmap$",
+            "windows": "\\\\prfs.hhmi.org\\cellmap$",
+            "cluster": "/groups/cellmap/home"
+          },
+          "ad_group": "cellmap"
+        },
+        "scratch": {
+          "platforms": {
+            "mac": "smb://nrs.hhmi.org/cellmap",
+            "windows": "\\\\nrs.hhmi.org\\cellmap",
+            "cluster": "/nrs/cellmap"
+          },
+          "ad_group": "cellmap"
+        },
+        "archive": {
+          "platforms": {
+            "mac": "smb://nearline4.hhmi.org/cellmap",
+            "windows": "\\\\nearline4.hhmi.org\\cellmap",
+            "cluster": "/nearline/cellmap"
+          },
+          "ad_group": "cellmap"
+        }
+      },
+      "ad_group": "cellmap",
+      "description": "CellMap Lab"
+    },
+    "Clapham": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/claphamlab",
+            "windows": "\\\\prfs.hhmi.org\\claphamlab",
+            "cluster": "/groups/clapham/claphamlab"
+          },
+          "ad_group": "clapham"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/clapham$",
+            "windows": "\\\\prfs.hhmi.org\\clapham$",
+            "cluster": "/groups/clapham/home"
+          },
+          "ad_group": "clapham"
+        },
+        "archive": {
+          "platforms": {
+            "mac": "smb://nearline4.hhmi.org/clapham",
+            "windows": "\\\\nearline4.hhmi.org\\clapham",
+            "cluster": "/nearline/clapham"
+          },
+          "ad_group": "clapham"
+        }
+      },
+      "ad_group": "clapham",
+      "description": "Clapham Lab"
+    },
+    "CryoEM": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/cryoemresource",
+            "windows": "\\\\prfs.hhmi.org\\cryoemresource",
+            "cluster": "/groups/cryoem/CryoEMResource"
+          },
+          "ad_group": "cryoem"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/cryoem$",
+            "windows": "\\\\prfs.hhmi.org\\cryoem$",
+            "cluster": "/groups/cryoem/home"
+          },
+          "ad_group": "cryoem"
+        },
+        "scratch": {
+          "platforms": {
+            "mac": "smb://nrs.hhmi.org/cryoem",
+            "windows": "\\\\nrs.hhmi.org\\cryoem",
+            "cluster": "/nrs/cryoem"
+          },
+          "ad_group": "cryoem"
+        },
+        "nearline": {
+          "platforms": {
+            "mac": "smb://nearline4.hhmi.org/cryoem",
+            "windows": "\\\\nearline4.hhmi.org\\cryoem",
+            "cluster": "/nearline/cryoem"
+          },
+          "ad_group": "cryoem"
+        }
+      },
+      "ad_group": "cryoempriv",
+      "description": "CryoEM Lab"
+    },
+    "Darshan": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/darshanlab",
+            "windows": "\\\\prfs.hhmi.org\\darshanlab",
+            "cluster": "/groups/darshan/darshanlab"
+          },
+          "ad_group": ""
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/darshan$",
+            "windows": "\\\\prfs.hhmi.org\\darshan$",
+            "cluster": "/groups/darshan/home"
+          },
+          "ad_group": ""
+        }
+      },
+      "ad_group": "",
+      "description": "Darshan Lab"
+    },
+    "Das": {
+      "storage_types": {
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/das$",
+            "windows": "\\\\prfs.hhmi.org\\das$",
+            "cluster": "/groups/das/home"
+          },
+          "ad_group": "das"
+        }
+      },
+      "ad_group": "das",
+      "description": "Das Lab"
+    },
+    "Das - RNA Structure": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/dasrnastruct",
+            "windows": "\\\\prfs.hhmi.org\\dasrnastruct",
+            "cluster": "/groups/das/rnastruct"
+          },
+          "ad_group": "das"
+        },
+        "scratch": {
+          "platforms": {
+            "mac": "smb://nrs.hhmi.org/dasrnastruct",
+            "windows": "\\\\nrs.hhmi.org\\dasrnastruct",
+            "cluster": "/nrs/das/rnastruct"
+          },
+          "ad_group": "das"
+        }
+      },
+      "ad_group": "das",
+      "description": "Das - RNA Structure Lab"
+    },
+    "Denk": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/denklab",
+            "windows": "\\\\prfs.hhmi.org\\denklab",
+            "cluster": "/groups/denk/denklab"
+          },
+          "ad_group": "denk"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/denk$",
+            "windows": "\\\\prfs.hhmi.org\\denk$",
+            "cluster": "/groups/denk/home"
+          },
+          "ad_group": "denk"
+        }
+      },
+      "ad_group": "denk",
+      "description": "Denk Lab"
+    },
+    "Dennis": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/dennislab",
+            "windows": "\\\\prfs.hhmi.org\\dennislab",
+            "cluster": "/groups/dennis/dennislab"
+          },
+          "ad_group": "dennis"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/dennis$",
+            "windows": "\\\\prfs.hhmi.org\\dennis$",
+            "cluster": "/groups/dennis/home"
+          },
+          "ad_group": "dennis"
+        },
+        "scratch": {
+          "platforms": {
+            "mac": "smb://nrs.hhmi.org/dennis",
+            "windows": "\\\\nrs.hhmi.org\\dennis",
+            "cluster": "/nrs/dennis"
+          },
+          "ad_group": "dennis"
+        }
+      },
+      "ad_group": "dennis",
+      "description": "Dennis Lab"
+    },
+    "DITP": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/ditp",
+            "windows": "\\\\prfs.hhmi.org\\ditp",
+            "cluster": "/groups/ditp/ditp"
+          },
+          "ad_group": "ditp"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/ditp$",
+            "windows": "\\\\prfs.hhmi.org\\ditp$",
+            "cluster": "/groups/ditp/home"
+          },
+          "ad_group": "ditp"
+        },
+        "archive": {
+          "platforms": {
+            "mac": "smb://nearline4.hhmi.org/ditp",
+            "windows": "\\\\nearline4.hhmi.org\\ditp",
+            "cluster": "/nearline/ditp"
+          },
+          "ad_group": "ditp"
+        }
+      },
+      "ad_group": "ditp",
+      "description": "DITP Lab"
+    },
+    "Dudman": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/dudmanlab",
+            "windows": "\\\\prfs.hhmi.org\\dudmanlab",
+            "cluster": "/groups/dudman/dudmanlab"
+          },
+          "ad_group": "dudman"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/dudman$",
+            "windows": "\\\\prfs.hhmi.org\\dudman$",
+            "cluster": "/groups/dudman/home"
+          },
+          "ad_group": "dudman"
+        }
+      },
+      "ad_group": "dudman",
+      "description": "Dudman Lab"
+    },
+    "EM": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/leginon",
+            "windows": "\\\\prfs.hhmi.org\\leginon",
+            "cluster": "/groups/em/leginon"
+          },
+          "ad_group": "elmicro"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/em$",
+            "windows": "\\\\prfs.hhmi.org\\em$",
+            "cluster": "/groups/em/home"
+          },
+          "ad_group": "elmicro"
+        },
+        "archive": {
+          "platforms": {
+            "mac": "smb://nearline4.hhmi.org/em",
+            "windows": "\\\\nearline4.hhmi.org\\em",
+            "cluster": "/nearline/em"
+          },
+          "ad_group": "elmicro"
+        }
+      },
+      "ad_group": "elmicro",
+      "description": "EM Lab"
+    },
+    "EMCA": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/emca",
+            "windows": "\\\\prfs.hhmi.org\\emca",
+            "cluster": "/groups/emca/emca"
+          },
+          "ad_group": "connectomeannotation"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/emca$",
+            "windows": "\\\\prfs.hhmi.org\\emca$",
+            "cluster": "/groups/emca/home"
+          },
+          "ad_group": "connectomeannotation"
+        }
+      },
+      "ad_group": "connectomeannotation",
+      "description": "EMCA Lab"
+    },
+    "Espinosa-Medina": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/I2_project_EspinosaMedina",
+            "windows": "\\\\prfs.hhmi.org\\I2_project_EspinosaMedina",
+            "cluster": "/groups/espinosamedina/I2_project_EspinosaMedina"
+          },
+          "ad_group": "emi2collab"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/espinosamedina$",
+            "windows": "\\\\prfs.hhmi.org\\espinosamedina$",
+            "cluster": "/groups/espinosamedina/home"
+          },
+          "ad_group": "espinosamedina"
+        },
+        "archive": {
+          "platforms": {
+            "mac": "smb://nearline4.hhmi.org/I2_project_EspinosaMedina",
+            "windows": "\\\\nearline4.hhmi.org\\I2_project_EspinosaMedina",
+            "cluster": "/nearline/espinosamedina/I2_project_EspinosaMedina"
+          },
+          "ad_group": "emi2collab"
+        }
+      },
+      "ad_group": "espinosamedina",
+      "description": "Espinosa-Medina Lab"
+    },
+    "Facilities": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/facilities",
+            "windows": "\\\\prfs.hhmi.org\\facilities",
+            "cluster": "/groups/facilities/facilities"
+          },
+          "ad_group": "facilities-model"
+        }
+      },
+      "ad_group": "facilities-model",
+      "description": "Facilities Lab"
+    },
+    "Feliciano": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/felicianocollab",
+            "windows": "\\\\prfs.hhmi.org\\felicianocollab",
+            "cluster": "/groups/feliciano/collab"
+          },
+          "ad_group": "felicianocollab"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/feliciano$",
+            "windows": "\\\\prfs.hhmi.org\\feliciano$",
+            "cluster": "/groups/feliciano/home"
+          },
+          "ad_group": "feliciano"
+        }
+      },
+      "ad_group": "feliciano",
+      "description": "Feliciano Lab"
+    },
+    "FIB SEM": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/fibsem",
+            "windows": "\\\\prfs.hhmi.org\\fibsem",
+            "cluster": "/groups/fibsem/fibsem"
+          },
+          "ad_group": "fibsem"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/fibsem$",
+            "windows": "\\\\prfs.hhmi.org\\fibsem$",
+            "cluster": "/groups/fibsem/home"
+          },
+          "ad_group": "fibsem"
+        },
+        "scratch": {
+          "platforms": {
+            "mac": "smb://nrs.hhmi.org/fibsem",
+            "windows": "\\\\nrs.hhmi.org\\fibsem",
+            "cluster": "/nrs/fibsem"
+          },
+          "ad_group": "fibsem"
+        },
+        "archive": {
+          "platforms": {
+            "mac": "smb://nearline4.hhmi.org/fibsem",
+            "windows": "\\\\nearline4.hhmi.org\\fibsem",
+            "cluster": "/nearline/fibsem"
+          },
+          "ad_group": "fibsem"
+        }
+      },
+      "ad_group": "fibsem",
+      "description": "FIB SEM Lab"
+    },
+    "Fitzgerald": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/fitzgeraldlab",
+            "windows": "\\\\prfs.hhmi.org\\fitzgeraldlab",
+            "cluster": "/groups/fitzgerald/fitzgeraldlab"
+          },
+          "ad_group": "fitzgerald"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/fitzgerald$",
+            "windows": "\\\\prfs.hhmi.org\\fitzgerald$",
+            "cluster": "/groups/fitzgerald/home"
+          },
+          "ad_group": "fitzgerald"
+        }
+      },
+      "ad_group": "fitzgerald",
+      "description": "Fitzgerald Lab"
+    },
+    "Flow Cytometry": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/flowcytometry",
+            "windows": "\\\\prfs.hhmi.org\\flowcytometry",
+            "cluster": "/groups/flowcytometry/flowcytometry"
+          },
+          "ad_group": "flowcytometry"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/flowcytometry$",
+            "windows": "\\\\prfs.hhmi.org\\flowcytometry$",
+            "cluster": "/groups/flowcytometry/home"
+          },
+          "ad_group": "flowcytometry"
+        }
+      },
+      "ad_group": "flowcytometry",
+      "description": "Flow Cytometry Lab"
+    },
+    "FlyTEM": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/flyTEM",
+            "windows": "\\\\prfs.hhmi.org\\flyTEM",
+            "cluster": "/groups/flyTEM/flyTEM"
+          },
+          "ad_group": "flytem"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/flyTEM$",
+            "windows": "\\\\prfs.hhmi.org\\flyTEM$",
+            "cluster": "/groups/flyTEM/home"
+          },
+          "ad_group": "flytem"
+        },
+        "scratch": {
+          "platforms": {
+            "mac": "smb://nrs.hhmi.org/flyTEM",
+            "windows": "\\\\nrs.hhmi.org\\flyTEM",
+            "cluster": "/nrs/flyTEM"
+          },
+          "ad_group": "flytem"
+        },
+        "archive": {
+          "platforms": {
+            "mac": "smb://nearline4.hhmi.org/flyTEM",
+            "windows": "\\\\nearline4.hhmi.org\\flyTEM",
+            "cluster": "/nearline/flyTEM"
+          },
+          "ad_group": "flytem"
+        }
+      },
+      "ad_group": "flytem",
+      "description": "FlyTEM Lab"
+    },
+    "FlyEM": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/flyemdata",
+            "windows": "\\\\prfs.hhmi.org\\flyemdata",
+            "cluster": "/groups/flyem/data"
+          },
+          "ad_group": "flyemdev"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/flyem$",
+            "windows": "\\\\prfs.hhmi.org\\flyem$",
+            "cluster": "/groups/flyem/home"
+          },
+          "ad_group": "flyem-g"
+        },
+        "scratch": {
+          "platforms": {
+            "mac": "smb://nrs.hhmi.org/flyem",
+            "windows": "\\\\nrs.hhmi.org\\flyem",
+            "cluster": "/nrs/flyem"
+          },
+          "ad_group": "flyem-g"
+        },
+        "archive": {
+          "platforms": {
+            "mac": "smb://nearline4.hhmi.org/flyem2",
+            "windows": "\\\\nearline4.hhmi.org\\flyem2",
+            "cluster": "/nearline/flyem2"
+          },
+          "ad_group": "flyem-g"
+        }
+      },
+      "ad_group": "flyem-g",
+      "description": "FlyEM Lab"
+    },
+    "FlyLabel": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/flylabel",
+            "windows": "\\\\prfs.hhmi.org\\flylabel",
+            "cluster": "/groups/sciserv/flylabel"
+          },
+          "ad_group": "flyfacility"
+        }
+      },
+      "ad_group": "flyfacility",
+      "description": "FlyLabel Lab"
+    },
+    "FlyLight": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/flylight",
+            "windows": "\\\\prfs.hhmi.org\\flylight",
+            "cluster": "/groups/flylight/flylight"
+          },
+          "ad_group": "flylightconf"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/flylight$",
+            "windows": "\\\\prfs.hhmi.org\\flylight$",
+            "cluster": "/groups/flylight/home"
+          },
+          "ad_group": "flylight"
+        },
+        "archive": {
+          "platforms": {
+            "mac": "smb://nearline4.hhmi.org/flylight",
+            "windows": "\\\\nearline4.hhmi.org\\flylight",
+            "cluster": "/nearline/flylight"
+          },
+          "ad_group": "flylight"
+        }
+      },
+      "ad_group": "flylightconf",
+      "description": "FlyLight Lab"
+    },
+    "FlyNP": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/flynp",
+            "windows": "\\\\prfs.hhmi.org\\flynp",
+            "cluster": "/groups/flynp/flynp"
+          },
+          "ad_group": "flynp"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/flynp$",
+            "windows": "\\\\prfs.hhmi.org\\flynp$",
+            "cluster": "/groups/flynp/home"
+          },
+          "ad_group": "flynp"
+        },
+        "scratch": {
+          "platforms": {
+            "mac": "smb://nrs.hhmi.org/flynp",
+            "windows": "\\\\nrs.hhmi.org\\flynp",
+            "cluster": "/nrs/flynp"
+          },
+          "ad_group": "flynp"
+        },
+        "archive": {
+          "platforms": {
+            "mac": "smb://nearline4.hhmi.org/flynp",
+            "windows": "\\\\nearline4.hhmi.org\\flynp",
+            "cluster": "/nearline/flynp"
+          },
+          "ad_group": "flynp"
+        }
+      },
+      "ad_group": "flynp",
+      "description": "FlyNP Lab"
+    },
+    "FlyOlympiad": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/flyolympiad",
+            "windows": "\\\\prfs.hhmi.org\\flyolympiad",
+            "cluster": "/groups/sciserv/flyolympiad"
+          },
+          "ad_group": "flyolympiad"
+        },
+        "archive": {
+          "platforms": {
+            "mac": "smb://nearline4.hhmi.org/flyolympiad",
+            "windows": "\\\\nearline4.hhmi.org\\flyolympiad",
+            "cluster": "/nearline/flyolympiad"
+          },
+          "ad_group": "flyolympiad"
+        }
+      },
+      "ad_group": "flyolympiad",
+      "description": "FlyOlympiad Lab"
+    },
+    "Func-E-Worm": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/funcewormpublic",
+            "windows": "\\\\prfs.hhmi.org\\funcewormpublic",
+            "cluster": "/groups/funceworm/public"
+          },
+          "ad_group": "\n"
+        },
+        "scratch": {
+          "platforms": {
+            "mac": "smb://nrs.hhmi.org/funceworm",
+            "windows": "\\\\prfs.hhmi.org\\funceworm",
+            "cluster": "/nrs/funceworm"
+          },
+          "ad_group": "funceworm"
+        }
+      },
+      "ad_group": "funceworm",
+      "description": "Func-E-Worm Lab"
+    },
+    "Funke": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/cremi",
+            "windows": "\\\\prfs.hhmi.org\\cremi",
+            "cluster": "/groups/funke/cremi"
+          },
+          "ad_group": "cremig"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/funke$",
+            "windows": "\\\\prfs.hhmi.org\\funke$",
+            "cluster": "/groups/funke/home"
+          },
+          "ad_group": "funke"
+        },
+        "scratch": {
+          "platforms": {
+            "mac": "smb://nrs.hhmi.org/funke",
+            "windows": "\\\\nrs.hhmi.org\\funke",
+            "cluster": "/nrs/funke"
+          },
+          "ad_group": "funke"
+        },
+        "archive": {
+          "platforms": {
+            "mac": "smb://nearline4.hhmi.org/funke",
+            "windows": "\\\\nearline4.hhmi.org\\funke",
+            "cluster": "/nearline/funke"
+          },
+          "ad_group": "funke"
+        }
+      },
+      "ad_group": "funke",
+      "description": "Funke Lab"
+    },
+    "Futusa": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/futusa",
+            "windows": "\\\\prfs.hhmi.org\\futusa",
+            "cluster": "/groups/futusa/futusa"
+          },
+          "ad_group": "futusa"
+        },
+        "scratch": {
+          "platforms": {
+            "mac": "smb://nrs.hhmi.org/futusa",
+            "windows": "\\\\nrs.hhmi.org\\futusa",
+            "cluster": "/nrs/futusa"
+          },
+          "ad_group": "futusa"
+        }
+      },
+      "ad_group": "futusa",
+      "description": "Futusa Lab"
+    },
+    "GENIE": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/genie_public",
+            "windows": "\\\\prfs.hhmi.org\\genie_public",
+            "cluster": "/groups/genie/genie_public"
+          },
+          "ad_group": "geniepub"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/genie$",
+            "windows": "\\\\prfs.hhmi.org\\genie$",
+            "cluster": "/groups/genie/home"
+          },
+          "ad_group": "genie"
+        },
+        "scratch": {
+          "platforms": {
+            "mac": "smb://nrs.hhmi.org/genie",
+            "windows": "\\\\nrs.hhmi.org\\genie",
+            "cluster": "/nrs/genie"
+          },
+          "ad_group": "genie"
+        },
+        "archive": {
+          "platforms": {
+            "mac": "smb://nearline4.hhmi.org/genie",
+            "windows": "\\\\nearline4.hhmi.org\\genie",
+            "cluster": "/nearline/genie"
+          },
+          "ad_group": "genie"
+        }
+      },
+      "ad_group": "genie",
+      "description": "GENIE Lab"
+    },
+    "Hermundstad": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/hermundstadlab",
+            "windows": "\\\\prfs.hhmi.org\\hermundstadlab",
+            "cluster": "/groups/hermundstad/hermundstadlab"
+          },
+          "ad_group": "hermundstad"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/hermundstad$",
+            "windows": "\\\\prfs.hhmi.org\\hermundstad$",
+            "cluster": "/groups/hermundstad/home"
+          },
+          "ad_group": "hermundstad"
+        }
+      },
+      "ad_group": "hermundstad",
+      "description": "Hermundstad Lab"
+    },
+    "Hess": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/hess_collaborators",
+            "windows": "\\\\prfs.hhmi.org\\hess_collaborators",
+            "cluster": "/groups/hess/hess_collaborators"
+          },
+          "ad_group": "hesscollab"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/hess$",
+            "windows": "\\\\prfs.hhmi.org\\hess$",
+            "cluster": "/groups/hess/home"
+          },
+          "ad_group": "hess"
+        },
+        "scratch": {
+          "platforms": {
+            "mac": "smb://nrs.hhmi.org/hess",
+            "windows": "\\\\nrs.hhmi.org\\hess",
+            "cluster": "/nrs/hess"
+          },
+          "ad_group": "hess"
+        },
+        "archive": {
+          "platforms": {
+            "mac": "smb://nearline4.hhmi.org/hess",
+            "windows": "\\\\nearline4.hhmi.org\\hess",
+            "cluster": "/nearline/hess"
+          },
+          "ad_group": "hess"
+        }
+      },
+      "ad_group": "hess",
+      "description": "Hess Lab"
+    },
+    "Huston": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/hustonlab",
+            "windows": "\\\\prfs.hhmi.org\\hustonlab",
+            "cluster": "/groups/huston/hustonlab"
+          },
+          "ad_group": "huston"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/huston$",
+            "windows": "\\\\prfs.hhmi.org\\huston$",
+            "cluster": "/groups/huston/home"
+          },
+          "ad_group": "huston"
+        },
+        "archive": {
+          "platforms": {
+            "mac": "smb://nearline4.hhmi.org/huston",
+            "windows": "\\\\nearline4.hhmi.org\\huston",
+            "cluster": "/nearline/huston"
+          },
+          "ad_group": "huston"
+        }
+      },
+      "ad_group": "huston",
+      "description": "Huston Lab"
+    },
+    "Ilanges": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/ilangeslab",
+            "windows": "\\\\prfs.hhmi.org\\ilangeslab",
+            "cluster": "/groups/ilanges/ilangeslab"
+          },
+          "ad_group": "ilanges"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/ilanges$",
+            "windows": "\\\\prfs.hhmi.org\\ilanges$",
+            "cluster": "/groups/ilanges/home"
+          },
+          "ad_group": "ilanges"
+        },
+        "archive": {
+          "platforms": {
+            "mac": "smb://nearline4.hhmi.org/ilanges",
+            "windows": "\\\\nearline4.hhmi.org\\ilanges",
+            "cluster": "/nearline/ilanges"
+          },
+          "ad_group": "ilanges"
+        }
+      },
+      "ad_group": "ilanges",
+      "description": "Ilanges Lab"
+    },
+    "Imaging": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/lm",
+            "windows": "\\\\prfs.hhmi.org\\lm",
+            "cluster": "/groups/imaging/lm"
+          },
+          "ad_group": "lm"
+        },
+        "archive": {
+          "platforms": {
+            "mac": "smb://nearline4.hhmi.org/imaging",
+            "windows": "\\\\nearline4.hhmi.org\\imaging",
+            "cluster": "/nearline/imaging"
+          },
+          "ad_group": "imaging-g"
+        }
+      },
+      "ad_group": "imaging-g",
+      "description": "Imaging Lab"
+    },
+    "Jayaraman": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/jayaramanlab",
+            "windows": "\\\\prfs.hhmi.org\\jayaramanlab",
+            "cluster": "/groups/jayaraman/jayaramanlab"
+          },
+          "ad_group": "jayaraman"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/jayaraman$",
+            "windows": "\\\\prfs.hhmi.org\\jayaraman$",
+            "cluster": "/groups/jayaraman/home"
+          },
+          "ad_group": "jayaraman"
+        },
+        "archive": {
+          "platforms": {
+            "mac": "smb://nearline4.hhmi.org/jayaraman",
+            "windows": "\\\\nearline4.hhmi.org\\jayaraman",
+            "cluster": "/nearline/jayaraman"
+          },
+          "ad_group": "jayaraman"
+        }
+      },
+      "ad_group": "jayaraman",
+      "description": "Jayaraman Lab"
+    },
+    "JeT": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/idf",
+            "windows": "\\\\prfs.hhmi.org\\idf",
+            "cluster": "/groups/sciserv/idf"
+          },
+          "ad_group": "jet"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/jet$",
+            "windows": "\\\\prfs.hhmi.org\\jet$",
+            "cluster": "/groups/jet/home"
+          },
+          "ad_group": "jet"
+        },
+        "archive": {
+          "platforms": {
+            "mac": "smb://nearline4.hhmi.org/jet",
+            "windows": "\\\\nearline4.hhmi.org\\jet",
+            "cluster": "/nearline/jet"
+          },
+          "ad_group": "jet"
+        }
+      },
+      "ad_group": "jet",
+      "description": "JeT Lab"
+    },
+    "Johnson": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/johnsonlab",
+            "windows": "\\\\prfs.hhmi.org\\johnsonlab",
+            "cluster": "/groups/johnson/johnsonlab"
+          },
+          "ad_group": "johnson"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/johnson$",
+            "windows": "\\\\prfs.hhmi.org\\johnson$",
+            "cluster": "/groups/johnson/home"
+          },
+          "ad_group": "johnson"
+        }
+      },
+      "ad_group": "johnson",
+      "description": "Johnson Lab"
+    },
+    "Kainmueller": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/kainmuellerlab",
+            "windows": "\\\\prfs.hhmi.org\\kainmuellerlab",
+            "cluster": "/groups/kainmueller/kainmuellerlab"
+          },
+          "ad_group": "kainmueller"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/kainmueller$",
+            "windows": "\\\\prfs.hhmi.org\\kainmueller$",
+            "cluster": "/groups/kainmueller/home"
+          },
+          "ad_group": "kainmueller"
+        },
+        "scratch": {
+          "platforms": {
+            "mac": "smb://nrs.hhmi.org/kainmueller",
+            "windows": "\\\\nrs.hhmi.org\\kainmueller",
+            "cluster": "/nrs/kainmueller"
+          },
+          "ad_group": "kainmueller"
+        }
+      },
+      "ad_group": "kainmueller",
+      "description": "Kainmueller Lab"
+    },
+    "Karpova": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/karpovalab",
+            "windows": "\\\\prfs.hhmi.org\\karpovalab",
+            "cluster": "/groups/karpova/karpovalab"
+          },
+          "ad_group": "karpova"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/karpova$",
+            "windows": "\\\\prfs.hhmi.org\\karpova$",
+            "cluster": "/groups/karpova/home"
+          },
+          "ad_group": "karpova"
+        },
+        "scratch": {
+          "platforms": {
+            "mac": "smb://nrs.hhmi.org/karpova",
+            "windows": "\\\\nrs.hhmi.org\\karpova",
+            "cluster": "/nrs/karpova"
+          },
+          "ad_group": "karpova"
+        },
+        "archive": {
+          "platforms": {
+            "mac": "smb://nearline4.hhmi.org/karpova",
+            "windows": "\\\\nearline4.hhmi.org\\karpova",
+            "cluster": "/nearline/karpova"
+          },
+          "ad_group": "karpova"
+        }
+      },
+      "ad_group": "karpova",
+      "description": "Karpova Lab"
+    },
+    "Keleman": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/kelemanlab",
+            "windows": "\\\\prfs.hhmi.org\\kelemanlab",
+            "cluster": "/groups/keleman/kelemanlab"
+          },
+          "ad_group": "keleman"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/keleman$",
+            "windows": "\\\\prfs.hhmi.org\\keleman$",
+            "cluster": "/groups/keleman/home"
+          },
+          "ad_group": "keleman"
+        }
+      },
+      "ad_group": "keleman",
+      "description": "Keleman Lab"
+    },
+    "Keller": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/kellerlab",
+            "windows": "\\\\prfs.hhmi.org\\kellerlab",
+            "cluster": "/groups/keller/kellerlab"
+          },
+          "ad_group": "keller"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/keller$",
+            "windows": "\\\\prfs.hhmi.org\\keller$",
+            "cluster": "/groups/keller/home"
+          },
+          "ad_group": "keller"
+        },
+        "scratch": {
+          "platforms": {
+            "mac": "smb://nrs.hhmi.org/keller",
+            "windows": "\\\\nrs.hhmi.org\\keller",
+            "cluster": "/nrs/keller"
+          },
+          "ad_group": "keller"
+        }
+      },
+      "ad_group": "keller",
+      "description": "Keller Lab"
+    },
+    "Koay": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/koaycollab",
+            "windows": "\\\\prfs.hhmi.org\\koaycollab",
+            "cluster": "/groups/koay/koaycollab"
+          },
+          "ad_group": "koaycollab"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/koay$",
+            "windows": "\\\\prfs.hhmi.org\\koay$",
+            "cluster": "/groups/koay/home"
+          },
+          "ad_group": "koay"
+        },
+        "scratch": {
+          "platforms": {
+            "mac": "smb://nrs.hhmi.org/koay",
+            "windows": "\\\\nrs.hhmi.org\\koay",
+            "cluster": "/nrs/koay"
+          },
+          "ad_group": "koay"
+        }
+      },
+      "ad_group": "koay",
+      "description": "Koay Lab"
+    },
+    "LarvalOlympiad": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/larvalolympiad",
+            "windows": "\\\\prfs.hhmi.org\\larvalolympiad",
+            "cluster": "/groups/larvalolympiad/larvalolympiad"
+          },
+          "ad_group": "larvalolympiad"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/larvalolympiad$",
+            "windows": "\\\\prfs.hhmi.org\\larvalolympiad$",
+            "cluster": "/groups/larvalolympiad/home"
+          },
+          "ad_group": "larvalolympiad"
+        }
+      },
+      "ad_group": "larvalolympiad",
+      "description": "LarvalOlympiad Lab"
+    },
+    "Lavis": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/nmrdata",
+            "windows": "\\\\prfs.hhmi.org\\nmrdata",
+            "cluster": "/groups/lavis/nmrdata"
+          },
+          "ad_group": "lavis"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/lavis$",
+            "windows": "\\\\prfs.hhmi.org\\lavis$",
+            "cluster": "/groups/lavis/home"
+          },
+          "ad_group": "lavis"
+        }
+      },
+      "ad_group": "lavis",
+      "description": "Lavis Lab"
+    },
+    "Albert Lee": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/leelab",
+            "windows": "\\\\prfs.hhmi.org\\leelab",
+            "cluster": "/groups/lee/leelab"
+          },
+          "ad_group": "lee"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/lee$",
+            "windows": "\\\\prfs.hhmi.org\\lee$",
+            "cluster": "/groups/lee/home"
+          },
+          "ad_group": "lee"
+        },
+        "archive": {
+          "platforms": {
+            "mac": "smb://nearline4.hhmi.org/lee",
+            "windows": "\\\\nearline4.hhmi.org\\lee",
+            "cluster": "/nearline/lee"
+          },
+          "ad_group": "lee"
+        }
+      },
+      "ad_group": "lee",
+      "description": "Albert Lee Lab"
+    },
+    "Tzumin Lee": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/leetimg",
+            "windows": "\\\\prfs.hhmi.org\\leetimg",
+            "cluster": "/groups/leet/leetimg"
+          },
+          "ad_group": "leetimg"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/leet$",
+            "windows": "\\\\prfs.hhmi.org\\leet$",
+            "cluster": "/groups/leet/home"
+          },
+          "ad_group": "leetlab"
+        }
+      },
+      "ad_group": "leetlab",
+      "description": "Tzumin Lee Lab"
+    },
+    "Li": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/lilab",
+            "windows": "\\\\prfs.hhmi.org\\lilab",
+            "cluster": "/groups/li/lilab"
+          },
+          "ad_group": "li"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/li$",
+            "windows": "\\\\prfs.hhmi.org\\li$",
+            "cluster": "/groups/li/home"
+          },
+          "ad_group": "li"
+        },
+        "archive": {
+          "platforms": {
+            "mac": "smb://nearline4.hhmi.org/li",
+            "windows": "\\\\nearline4.hhmi.org\\li",
+            "cluster": "/nearline/li"
+          },
+          "ad_group": "li"
+        }
+      },
+      "ad_group": "li",
+      "description": "Li Lab"
+    },
+    "LICONN (AI@HHMI)": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/liconn",
+            "windows": "\\\\prfs.hhmi.org\\liconn",
+            "cluster": "/groups/liconn/liconn"
+          },
+          "ad_group": "liconn"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/liconn$",
+            "windows": "\\\\prfs.hhmi.org\\liconn$",
+            "cluster": "/groups/liconn/home"
+          },
+          "ad_group": "liconn"
+        },
+        "scratch": {
+          "platforms": {
+            "mac": "smb://nrs.hhmi.org/liconn",
+            "windows": "\\\\nrs.hhmi.org\\liconn",
+            "cluster": "/nrs/liconn"
+          },
+          "ad_group": "liconn"
+        },
+        "archive": {
+          "platforms": {
+            "mac": "smb://nearline4.hhmi.org/liconn",
+            "windows": "\\\\nearline4.hhmi.org\\liconn",
+            "cluster": "/nearline/liconn"
+          },
+          "ad_group": "liconn"
+        }
+      },
+      "ad_group": "liconn",
+      "description": "LICONN (AI@HHMI) Lab"
+    },
+    "Lightsheet": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/lightsheet",
+            "windows": "\\\\prfs.hhmi.org\\lightsheet",
+            "cluster": "/groups/lightsheet/lightsheet"
+          },
+          "ad_group": "lightsheet"
+        }
+      },
+      "ad_group": "lightsheet",
+      "description": "Lightsheet Lab"
+    },
+    "Lillvis": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/lillvislab",
+            "windows": "\\\\prfs.hhmi.org\\lillvislab",
+            "cluster": "/groups/lillvis/lillvislab"
+          },
+          "ad_group": "lillvis"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/lillvis$",
+            "windows": "\\\\prfs.hhmi.org\\lillvis$",
+            "cluster": "/groups/lillvis/home"
+          },
+          "ad_group": "lillvis"
+        },
+        "scratch": {
+          "platforms": {
+            "mac": "smb://nrs.hhmi.org/lillvis",
+            "windows": "\\\\nrs.hhmi.org\\lillvis",
+            "cluster": "/nrs/lillvis"
+          },
+          "ad_group": "lillvis"
+        }
+      },
+      "ad_group": "lillvis",
+      "description": "Lillvis Lab"
+    },
+    "Lippincott-Schwartz": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/jlslab",
+            "windows": "\\\\prfs.hhmi.org\\jlslab",
+            "cluster": "/groups/jls/jlslab"
+          },
+          "ad_group": "lippincott-schwartz"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/jls$",
+            "windows": "\\\\prfs.hhmi.org\\jls$",
+            "cluster": "/groups/jls/home"
+          },
+          "ad_group": "lippincott-schwartz"
+        },
+        "scratch": {
+          "platforms": {
+            "mac": "smb://nrs.hhmi.org/jls",
+            "windows": "\\\\nrs.hhmi.org\\jls",
+            "cluster": "/nrs/jls"
+          },
+          "ad_group": "lippincott-schwartz"
+        },
+        "archive": {
+          "platforms": {
+            "mac": "smb://nearline4.hhmi.org/jls",
+            "windows": "\\\\nearline4.hhmi.org\\jls",
+            "cluster": "/nearline/jls"
+          },
+          "ad_group": "lippincott-schwartz"
+        }
+      },
+      "ad_group": "lippincott-schwartz",
+      "description": "Lippincott-Schwartz Lab"
+    },
+    "James Liu": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/liulab",
+            "windows": "\\\\prfs.hhmi.org\\liulab",
+            "cluster": "/groups/liu/liulab"
+          },
+          "ad_group": "liu"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/liu$",
+            "windows": "\\\\prfs.hhmi.org\\liu$",
+            "cluster": "/groups/liu/home"
+          },
+          "ad_group": "liu"
+        },
+        "archive": {
+          "platforms": {
+            "mac": "smb://nearline4.hhmi.org/liu",
+            "windows": "\\\\nearline4.hhmi.org\\liu",
+            "cluster": "/nearline/liu"
+          },
+          "ad_group": "liu"
+        }
+      },
+      "ad_group": "liu",
+      "description": "James Liu Lab"
+    },
+    "Yin Liu": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/yinliulab",
+            "windows": "\\\\prfs.hhmi.org\\yinliulab",
+            "cluster": "/groups/yinliu/yinliulab"
+          },
+          "ad_group": "yinliu"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/yinliu$",
+            "windows": "\\\\prfs.hhmi.org\\yinliu$",
+            "cluster": "/groups/yinliu/home"
+          },
+          "ad_group": "yinliu"
+        },
+        "archive": {
+          "platforms": {
+            "mac": "smb://nearline4.hhmi.org/yinliu",
+            "windows": "\\\\nearline4.hhmi.org\\yinliu",
+            "cluster": "/nearline/yinliu"
+          },
+          "ad_group": "yinliu"
+        }
+      },
+      "ad_group": "yinliu",
+      "description": "Yin Liu Lab"
+    },
+    "Looger": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/loogerlab",
+            "windows": "\\\\prfs.hhmi.org\\loogerlab",
+            "cluster": "/groups/looger/loogerlab"
+          },
+          "ad_group": "looger"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/looger$",
+            "windows": "\\\\prfs.hhmi.org\\looger$",
+            "cluster": "/groups/looger/home"
+          },
+          "ad_group": "looger"
+        },
+        "archive": {
+          "platforms": {
+            "mac": "smb://nearline4.hhmi.org/looger",
+            "windows": "\\\\nearline4.hhmi.org\\looger",
+            "cluster": "/nearline/looger"
+          },
+          "ad_group": "looger"
+        }
+      },
+      "ad_group": "looger",
+      "description": "Looger Lab"
+    },
+    "Loomba": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/loombalab",
+            "windows": "\\\\prfs.hhmi.org\\loombalab",
+            "cluster": "/groups/loomba/loombalab"
+          },
+          "ad_group": "loomba"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/loomba$",
+            "windows": "\\\\prfs.hhmi.org\\loomba$",
+            "cluster": "/groups/loomba/home"
+          },
+          "ad_group": "loomba"
+        }
+      },
+      "ad_group": "loomba",
+      "description": "Loomba Lab"
+    },
+    "Magee": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/mageelab",
+            "windows": "\\\\prfs.hhmi.org\\mageelab",
+            "cluster": "/groups/magee/mageelab"
+          },
+          "ad_group": "magee"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/magee$",
+            "windows": "\\\\prfs.hhmi.org\\magee$",
+            "cluster": "/groups/magee/home"
+          },
+          "ad_group": "magee"
+        },
+        "archive": {
+          "platforms": {
+            "mac": "smb://nearline4.hhmi.org/magee",
+            "windows": "\\\\nearline4.hhmi.org\\magee",
+            "cluster": "/nearline/magee"
+          },
+          "ad_group": "magee"
+        }
+      },
+      "ad_group": "magee",
+      "description": "Magee Lab"
+    },
+    "Matsen": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/matsenlab",
+            "windows": "\\\\prfs.hhmi.org\\matsenlab",
+            "cluster": "/groups/matsen/matsenlab"
+          },
+          "ad_group": "matsen"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/matsen$",
+            "windows": "\\\\prfs.hhmi.org\\matsen$",
+            "cluster": "/groups/matsen/home"
+          },
+          "ad_group": "matsen"
+        }
+      },
+      "ad_group": "matsen",
+      "description": "Matsen Lab"
+    },
+    "Mass Spectrometry": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/massspec",
+            "windows": "\\\\prfs.hhmi.org\\massspec",
+            "cluster": "/groups/massspec/massspec"
+          },
+          "ad_group": "massspec"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/massspec$",
+            "windows": "\\\\prfs.hhmi.org\\massspec$",
+            "cluster": "/groups/massspec/home"
+          },
+          "ad_group": "massspec"
+        },
+        "archive": {
+          "platforms": {
+            "mac": "smb://nearline4.hhmi.org/massspec",
+            "windows": "\\\\nearline4.hhmi.org\\massspec",
+            "cluster": "/nearline/massspec"
+          },
+          "ad_group": "massspec"
+        }
+      },
+      "ad_group": "massspec",
+      "description": "Mass Spectrometry Lab"
+    },
+    "MCN Behavior": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/mcnbehavior",
+            "windows": "\\\\prfs.hhmi.org\\mcnbehavior",
+            "cluster": "/groups/mcnbehavior/mcnbehavior"
+          },
+          "ad_group": "mcnbehavior"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/mcnbehavior$",
+            "windows": "\\\\prfs.hhmi.org\\mcnbehavior$",
+            "cluster": "/groups/mcnbehavior/home"
+          },
+          "ad_group": "mcnbehavior"
+        }
+      },
+      "ad_group": "mcnbehavior",
+      "description": "MCN Behavior Lab"
+    },
+    "MCN NeuroEngineering Team": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/mcnnet",
+            "windows": "\\\\prfs.hhmi.org\\mcnnet",
+            "cluster": "/groups/mcnnet/mcnnet"
+          },
+          "ad_group": "mcnnet"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/mcnnet$",
+            "windows": "\\\\prfs.hhmi.org\\mcnnet$",
+            "cluster": "/groups/mcnnet/home"
+          },
+          "ad_group": "mcnnet"
+        }
+      },
+      "ad_group": "mcnnet",
+      "description": "MCN NeuroEngineering Team Lab"
+    },
+    "Miller": {
+      "storage_types": {
+        "scratch": {
+          "platforms": {
+            "mac": "smb://nrs.hhmi.org/miller",
+            "windows": "\\\\nrs.hhmi.org\\miller",
+            "cluster": "/nrs/miller"
+          },
+          "ad_group": "miller"
+        }
+      },
+      "ad_group": "miller",
+      "description": "Miller Lab"
+    },
+    "Molecular Biology": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/molbio",
+            "windows": "\\\\prfs.hhmi.org\\molbio",
+            "cluster": "/groups/sciserv/molbio"
+          },
+          "ad_group": "molbio"
+        }
+      },
+      "ad_group": "molbio",
+      "description": "Molecular Biology Lab"
+    },
+    "Molecular Genomics": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/molgenomics",
+            "windows": "\\\\prfs.hhmi.org\\molgenomics",
+            "cluster": "/groups/molgenomics/molgenomics"
+          },
+          "ad_group": "molbio"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/molgenomics$",
+            "windows": "\\\\prfs.hhmi.org\\molgenomics$",
+            "cluster": "/groups/molgenomics/home"
+          },
+          "ad_group": ""
+        }
+      },
+      "ad_group": "molbio",
+      "description": "Molecular Genomics Lab"
+    },
+    "Mouse Light": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/mousebrainmicro",
+            "windows": "\\\\prfs.hhmi.org\\mousebrainmicro",
+            "cluster": "/groups/mousebrainmicro/mousebrainmicro"
+          },
+          "ad_group": "mousebrainmicro"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/mousebrainmicro$",
+            "windows": "\\\\prfs.hhmi.org\\mousebrainmicro$",
+            "cluster": "/groups/mousebrainmicro/home"
+          },
+          "ad_group": "mousebrainmicro"
+        },
+        "scratch": {
+          "platforms": {
+            "mac": "smb://nrs.hhmi.org/mouselight",
+            "windows": "\\\\nrs.hhmi.org\\mouselight",
+            "cluster": "/nrs/mouselight"
+          },
+          "ad_group": "mousebrainmicro"
+        },
+        "archive": {
+          "platforms": {
+            "mac": "smb://nearline4.hhmi.org/mouselight",
+            "windows": "\\\\nearline4.hhmi.org\\mouselight",
+            "cluster": "/nearline/mouselight"
+          },
+          "ad_group": "mousebrainmicro"
+        }
+      },
+      "ad_group": "mousebrainmicro",
+      "description": "Mouse Light Lab"
+    },
+    "MultiFISH": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/multifish",
+            "windows": "\\\\prfs.hhmi.org\\multifish",
+            "cluster": "/groups/multifish/multifish"
+          },
+          "ad_group": "multifish"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/multifish$",
+            "windows": "\\\\prfs.hhmi.org\\multifish$",
+            "cluster": "/groups/multifish/home"
+          },
+          "ad_group": "multifish"
+        },
+        "scratch": {
+          "platforms": {
+            "mac": "smb://nrs.hhmi.org/multifish",
+            "windows": "\\\\nrs.hhmi.org\\multifish",
+            "cluster": "/nrs/multifish"
+          },
+          "ad_group": "multifish"
+        },
+        "archive": {
+          "platforms": {
+            "mac": "smb://nearline4.hhmi.org/multifish",
+            "windows": "\\\\nearline4.hhmi.org\\multifish",
+            "cluster": "/nearline/multifish"
+          },
+          "ad_group": "multifish"
+        }
+      },
+      "ad_group": "multifish",
+      "description": "MultiFISH Lab"
+    },
+    "Neuroseq": {
+      "storage_types": {
+        "scratch": {
+          "platforms": {
+            "mac": "smb://nrs.hhmi.org/neuroseq",
+            "windows": "\\\\nrs.hhmi.org\\neuroseq",
+            "cluster": "/nrs/neuroseq"
+          },
+          "ad_group": "neuroseq"
+        }
+      },
+      "ad_group": "neuroseq",
+      "description": "Neuroseq Lab"
+    },
+    "Open Chemistry": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/openchem",
+            "windows": "\\\\prfs.hhmi.org\\openchem",
+            "cluster": "/groups/openchem/openchem"
+          },
+          "ad_group": "openchem"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/openchem$",
+            "windows": "\\\\prfs.hhmi.org\\openchem$",
+            "cluster": "/groups/openchem/home"
+          },
+          "ad_group": "openchem"
+        }
+      },
+      "ad_group": "openchem",
+      "description": "Open Chemistry Lab"
+    },
+    "Open Data": {
+      "storage_types": {
+        "scratch": {
+          "platforms": {
+            "mac": "smb://nrs.hhmi.org/opendata",
+            "windows": "\\\\nrs.hhmi.org\\opendata",
+            "cluster": "/nrs/opendata"
+          },
+          "ad_group": "opendata"
+        }
+      },
+      "ad_group": "opendata",
+      "description": "Open Data Lab"
+    },
+    "O'Shea": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/oshealab",
+            "windows": "\\\\prfs.hhmi.org\\oshealab",
+            "cluster": "/groups/oshea/oshealab"
+          },
+          "ad_group": "oshea"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/oshea$",
+            "windows": "\\\\prfs.hhmi.org\\oshea$",
+            "cluster": "/groups/oshea/home"
+          },
+          "ad_group": "oshea"
+        },
+        "archive": {
+          "platforms": {
+            "mac": "smb://nearline4.hhmi.org/oshea",
+            "windows": "\\\\nearline4.hhmi.org\\oshea",
+            "cluster": "/nearline/oshea"
+          },
+          "ad_group": "oshea"
+        }
+      },
+      "ad_group": "oshea",
+      "description": "O'Shea Lab"
+    },
+    "Otopalik": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/otopaliklab",
+            "windows": "\\\\prfs.hhmi.org\\otopaliklab",
+            "cluster": "/groups/otopalik/otopaliklab"
+          },
+          "ad_group": "otopalik"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/otopalik$",
+            "windows": "\\\\prfs.hhmi.org\\otopalik$",
+            "cluster": "/groups/otopalik/home"
+          },
+          "ad_group": "otopalik"
+        },
+        "archive": {
+          "platforms": {
+            "mac": "smb://nearline4.hhmi.org/otopalik",
+            "windows": "\\\\nearline4.hhmi.org\\otopalik",
+            "cluster": "/nearline/otopalik"
+          },
+          "ad_group": "otopalik"
+        }
+      },
+      "ad_group": "otopalik",
+      "description": "Otopalik Lab"
+    },
+    "Pachitariu": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/pachitariulab",
+            "windows": "\\\\prfs.hhmi.org\\pachitariulab",
+            "cluster": "/groups/pachitariu/pachitariulab"
+          },
+          "ad_group": "pachitariu"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/pachitariu$",
+            "windows": "\\\\prfs.hhmi.org\\pachitariu$",
+            "cluster": "/groups/pachitariu/home"
+          },
+          "ad_group": "pachitariu"
+        },
+        "archive": {
+          "platforms": {
+            "mac": "smb://nearline4.hhmi.org/pachitariu",
+            "windows": "\\\\nearline4.hhmi.org\\pachitariu",
+            "cluster": "/nearline/pachitariu"
+          },
+          "ad_group": "pachitariu"
+        }
+      },
+      "ad_group": "pachitariu",
+      "description": "Pachitariu Lab"
+    },
+    "Pedram": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/pedramlab",
+            "windows": "\\\\prfs.hhmi.org\\pedramlab",
+            "cluster": "/groups/pedram/pedramlab"
+          },
+          "ad_group": "pedram"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/pedram$",
+            "windows": "\\\\prfs.hhmi.org\\pedram$",
+            "cluster": "/groups/pedram/home"
+          },
+          "ad_group": "pedram"
+        }
+      },
+      "ad_group": "pedram",
+      "description": "Pedram Lab"
+    },
+    "Podgorski": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/podgorskilab",
+            "windows": "\\\\prfs.hhmi.org\\podgorskilab",
+            "cluster": "/groups/podgorski/podgorskilab"
+          },
+          "ad_group": "podgorski"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/podgorski$",
+            "windows": "\\\\prfs.hhmi.org\\podgorski$",
+            "cluster": "/groups/podgorski/home"
+          },
+          "ad_group": "podgorski"
+        },
+        "scratch": {
+          "platforms": {
+            "mac": "smb://nrs.hhmi.org/podgorski",
+            "windows": "\\\\nrs.hhmi.org\\podgorski",
+            "cluster": "/nrs/podgorski"
+          },
+          "ad_group": "podgorski"
+        },
+        "archive": {
+          "platforms": {
+            "mac": "smb://nearline4.hhmi.org/podgorski",
+            "windows": "\\\\nearline4.hhmi.org\\podgorski",
+            "cluster": "/nearline/podgorski"
+          },
+          "ad_group": "podgorski"
+        }
+      },
+      "ad_group": "podgorski",
+      "description": "Podgorski Lab"
+    },
+    "Project Pipeline Support": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/pps",
+            "windows": "\\\\prfs.hhmi.org\\pps",
+            "cluster": "/groups/pps/pps"
+          },
+          "ad_group": "pps"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/pps$",
+            "windows": "\\\\prfs.hhmi.org\\pps$",
+            "cluster": "/groups/pps/home"
+          },
+          "ad_group": "pps"
+        }
+      },
+      "ad_group": "pps",
+      "description": "Project Pipeline Support Lab"
+    },
+    "Project Technical Resources": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/projtechres",
+            "windows": "\\\\prfs.hhmi.org\\projtechres",
+            "cluster": "/groups/projtechres/projtechres"
+          },
+          "ad_group": "projtechres"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/projtechres$",
+            "windows": "\\\\prfs.hhmi.org\\projtechres$",
+            "cluster": "/groups/projtechres/home"
+          },
+          "ad_group": "projtechres"
+        }
+      },
+      "ad_group": "projtechres",
+      "description": "Project Technical Resources Lab"
+    },
+    "Public share": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/public",
+            "windows": "\\\\prfs.hhmi.org\\public",
+            "cluster": "/misc/public"
+          },
+          "ad_group": ""
+        }
+      },
+      "ad_group": "",
+      "description": "Public share Lab"
+    },
+    "Quantitative Genomics": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/seq2",
+            "windows": "\\\\prfs.hhmi.org\\seq2",
+            "cluster": "/groups/quantitativegenomics/sequencers/seq2"
+          },
+          "ad_group": "quantitativegenomics"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/quantitativegenomics$",
+            "windows": "\\\\prfs.hhmi.org\\quantitativegenomics$",
+            "cluster": "/groups/quantitativegenomics/home"
+          },
+          "ad_group": "quantitativegenomics"
+        },
+        "archive": {
+          "platforms": {
+            "mac": "smb://nearline4.hhmi.org/quantitativegenomics",
+            "windows": "\\\\nearline4.hhmi.org\\quantitativegenomics",
+            "cluster": "/nearline/quantitativegenomics"
+          },
+          "ad_group": "quantitativegenomics"
+        }
+      },
+      "ad_group": "quantitativegenomics",
+      "description": "Quantitative Genomics Lab"
+    },
+    "Reiser": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/flyvisionbox",
+            "windows": "\\\\prfs.hhmi.org\\flyvisionbox",
+            "cluster": "/groups/reiser/flyvisionbox"
+          },
+          "ad_group": "flyvisionbox"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/reiser$",
+            "windows": "\\\\prfs.hhmi.org\\reiser$",
+            "cluster": "/groups/reiser/home"
+          },
+          "ad_group": "reiser"
+        },
+        "scratch": {
+          "platforms": {
+            "mac": "smb://nrs.hhmi.org/reiser",
+            "windows": "\\\\nrs.hhmi.org\\reiser",
+            "cluster": "/nrs/reiser"
+          },
+          "ad_group": "reiser"
+        },
+        "archive": {
+          "platforms": {
+            "mac": "smb://nearline4.hhmi.org/reiser",
+            "windows": "\\\\nearline4.hhmi.org\\reiser",
+            "cluster": "/nearline/reiser"
+          },
+          "ad_group": "reiser"
+        }
+      },
+      "ad_group": "reiser",
+      "description": "Reiser Lab"
+    },
+    "Rodriguez": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/rodriguezlab",
+            "windows": "\\\\prfs.hhmi.org\\rodriguezlab",
+            "cluster": "/groups/rodriguez/rodriguezlab"
+          },
+          "ad_group": "rodriguez"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/rodriguez$",
+            "windows": "\\\\prfs.hhmi.org\\rodriguez$",
+            "cluster": "/groups/rodriguez/home"
+          },
+          "ad_group": "rodriguez"
+        }
+      },
+      "ad_group": "rodriguez",
+      "description": "Rodriguez Lab"
+    },
+    "Romani": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/romanilab",
+            "windows": "\\\\prfs.hhmi.org\\romanilab",
+            "cluster": "/groups/romani/romanilab"
+          },
+          "ad_group": "romani"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/romani$",
+            "windows": "\\\\prfs.hhmi.org\\romani$",
+            "cluster": "/groups/romani/home"
+          },
+          "ad_group": "romani"
+        },
+        "archive": {
+          "platforms": {
+            "mac": "smb://nearline4.hhmi.org/romani",
+            "windows": "\\\\nearline4.hhmi.org\\romani",
+            "cluster": "/nearline/romani"
+          },
+          "ad_group": "romani"
+        }
+      },
+      "ad_group": "romani",
+      "description": "Romani Lab"
+    },
+    "Rubin": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/rubinimg",
+            "windows": "\\\\prfs.hhmi.org\\rubinimg",
+            "cluster": "/groups/rubin/rubinimg"
+          },
+          "ad_group": "rubin"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/rubin$",
+            "windows": "\\\\prfs.hhmi.org\\rubin$",
+            "cluster": "/groups/rubin/home"
+          },
+          "ad_group": "rubin"
+        },
+        "archive": {
+          "platforms": {
+            "mac": "smb://nearline4.hhmi.org/rubin",
+            "windows": "\\\\nearline4.hhmi.org\\rubin",
+            "cluster": "/nearline/rubin"
+          },
+          "ad_group": "rubin"
+        }
+      },
+      "ad_group": "rubin",
+      "description": "Rubin Lab"
+    },
+    "Rubinov": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/rubinovlab",
+            "windows": "\\\\prfs.hhmi.org\\rubinovlab",
+            "cluster": "/groups/rubinlab/rubinovlab"
+          },
+          "ad_group": "rubinov"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/rubinov$",
+            "windows": "\\\\prfs.hhmi.org\\rubinov$",
+            "cluster": "/groups/rubinov/home"
+          },
+          "ad_group": "rubinov"
+        }
+      },
+      "ad_group": "rubinov",
+      "description": "Rubinov Lab"
+    },
+    "Saalfeld": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/saalfeldpublic",
+            "windows": "\\\\prfs.hhmi.org\\saalfeldpublic",
+            "cluster": "/groups/saalfeld/public"
+          },
+          "ad_group": "saalfeld"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/saalfeld$",
+            "windows": "\\\\prfs.hhmi.org\\saalfeld$",
+            "cluster": "/groups/saalfeld/home"
+          },
+          "ad_group": "saalfeld"
+        },
+        "scratch": {
+          "platforms": {
+            "mac": "smb://nrs.hhmi.org/saalfeld",
+            "windows": "\\\\nrs.hhmi.org\\saalfeld",
+            "cluster": "/nrs/saalfeld"
+          },
+          "ad_group": "saalfeld"
+        },
+        "archive": {
+          "platforms": {
+            "mac": "smb://nearline4.hhmi.org/saalfeld",
+            "windows": "\\\\nearline4.hhmi.org\\saalfeld",
+            "cluster": "/nearline/saalfeld"
+          },
+          "ad_group": "saalfeld"
+        }
+      },
+      "ad_group": "saalfeld",
+      "description": "Saalfeld Lab"
+    },
+    "Satou": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/satouptr",
+            "windows": "\\\\prfs.hhmi.org\\satouptr",
+            "cluster": "/groups/satou/satouptr"
+          },
+          "ad_group": "satouptr"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/satou$",
+            "windows": "\\\\prfs.hhmi.org\\satou$",
+            "cluster": "/groups/satou/home"
+          },
+          "ad_group": "satou"
+        },
+        "scratch": {
+          "platforms": {
+            "mac": "smb://nrs.hhmi.org/satou",
+            "windows": "\\\\nrs.hhmi.org\\satou",
+            "cluster": "/nrs/satou"
+          },
+          "ad_group": "satou"
+        },
+        "archive": {
+          "platforms": {
+            "mac": "smb://nearline4.hhmi.org/satouptr",
+            "windows": "\\\\nearline4.hhmi.org\\satouptr",
+            "cluster": "/nearline/satou/satouptr"
+          },
+          "ad_group": "satouptr"
+        }
+      },
+      "ad_group": "satou",
+      "description": "Satou Lab"
+    },
+    "Scheffer": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/schefferlab",
+            "windows": "\\\\prfs.hhmi.org\\schefferlab",
+            "cluster": "/groups/scheffer/schefferlab"
+          },
+          "ad_group": "scheffer"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/scheffer$",
+            "windows": "\\\\prfs.hhmi.org\\scheffer$",
+            "cluster": "/groups/scheffer/home"
+          },
+          "ad_group": "scheffer"
+        }
+      },
+      "ad_group": "scheffer",
+      "description": "Scheffer Lab"
+    },
+    "Schreiter": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/schreiterlab",
+            "windows": "\\\\prfs.hhmi.org\\schreiterlab",
+            "cluster": "/groups/schreiter/schreiterlab"
+          },
+          "ad_group": "schreiter"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/schreiter$",
+            "windows": "\\\\prfs.hhmi.org\\schreiter$",
+            "cluster": "/groups/schreiter/home"
+          },
+          "ad_group": "schreiter"
+        }
+      },
+      "ad_group": "schreiter",
+      "description": "Schreiter Lab"
+    },
+    "Schulze": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/schulzelab",
+            "windows": "\\\\prfs.hhmi.org\\schulzelab",
+            "cluster": "/groups/schulze/schulzelab"
+          },
+          "ad_group": "schulze"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/schulze$",
+            "windows": "\\\\prfs.hhmi.org\\schulze$",
+            "cluster": "/groups/schulze/home"
+          },
+          "ad_group": "schulze"
+        },
+        "archive": {
+          "platforms": {
+            "mac": "smb://nearline4.hhmi.org/schulze",
+            "windows": "\\\\nearline4.hhmi.org\\schulze",
+            "cluster": "/nearline/schulze"
+          },
+          "ad_group": "schulze"
+        }
+      },
+      "ad_group": "schulze",
+      "description": "Schulze Lab"
+    },
+    "Scientific Computing Software": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/jacsshare",
+            "windows": "\\\\prfs.hhmi.org\\jacsshare",
+            "cluster": "/groups/jacs/jacsShare"
+          },
+          "ad_group": "jacsdata"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/scicompsoft$",
+            "windows": "\\\\prfs.hhmi.org\\scicompsoft$",
+            "cluster": "/groups/scicompsoft/home"
+          },
+          "ad_group": "scicompsoft"
+        },
+        "scratch": {
+          "platforms": {
+            "mac": "smb://nrs.hhmi.org/neuronbridge",
+            "windows": "\\\\nrs.hhmi.org\\neuronbridge",
+            "cluster": "/nrs/neuronbridge"
+          },
+          "ad_group": "scicompsoft"
+        },
+        "archive": {
+          "platforms": {
+            "mac": "smb://nearline4.hhmi.org/neuronbridge",
+            "windows": "\\\\nearline4.hhmi.org\\neuronbridge",
+            "cluster": "/nearline/neuronbridge"
+          },
+          "ad_group": "scicompsoft"
+        }
+      },
+      "ad_group": "scicompsoft",
+      "description": "Scientific Computing Software Lab"
+    },
+    "SEMA": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/sema",
+            "windows": "\\\\prfs.hhmi.org\\sema",
+            "cluster": "/groups/sema/sema"
+          },
+          "ad_group": "sema"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/sema$",
+            "windows": "\\\\prfs.hhmi.org\\sema$",
+            "cluster": "/groups/sema/home"
+          },
+          "ad_group": "sema"
+        },
+        "scratch": {
+          "platforms": {
+            "mac": "smb://nrs.hhmi.org/sema",
+            "windows": "\\\\nrs.hhmi.org\\sema",
+            "cluster": "/nrs/sema"
+          },
+          "ad_group": "sema"
+        }
+      },
+      "ad_group": "sema",
+      "description": "SEMA Lab"
+    },
+    "Sgro": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/sgrolab",
+            "windows": "\\\\prfs.hhmi.org\\sgrolab",
+            "cluster": "/groups/sgro/sgrolab"
+          },
+          "ad_group": "sgro"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/sgro$",
+            "windows": "\\\\prfs.hhmi.org\\sgro$",
+            "cluster": "/groups/sgro/home"
+          },
+          "ad_group": "sgro"
+        }
+      },
+      "ad_group": "sgro",
+      "description": "Sgro Lab"
+    },
+    "Shroff": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/shrofflab",
+            "windows": "\\\\prfs.hhmi.org\\shrofflab",
+            "cluster": "/groups/shroff/shrofflab"
+          },
+          "ad_group": "shroff"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/shroff$",
+            "windows": "\\\\prfs.hhmi.org\\shroff$",
+            "cluster": "/groups/shroff/home"
+          },
+          "ad_group": "shroff"
+        },
+        "scratch": {
+          "platforms": {
+            "mac": "smb://nrs.hhmi.org/shroff",
+            "windows": "\\\\nrs.hhmi.org\\shroff",
+            "cluster": "/nrs/shroff"
+          },
+          "ad_group": "shroff"
+        },
+        "archive": {
+          "platforms": {
+            "mac": "smb://nearline4.hhmi.org/shroff",
+            "windows": "\\\\nearline4.hhmi.org\\shroff",
+            "cluster": "/nearline/shroff"
+          },
+          "ad_group": "shroff"
+        }
+      },
+      "ad_group": "shroff",
+      "description": "Shroff Lab"
+    },
+    "Singer": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/singerlab",
+            "windows": "\\\\prfs.hhmi.org\\singerlab",
+            "cluster": "/groups/singer/singerlab"
+          },
+          "ad_group": "singer"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/singer$",
+            "windows": "\\\\prfs.hhmi.org\\singer$",
+            "cluster": "/groups/singer/home"
+          },
+          "ad_group": "singer"
+        },
+        "archive": {
+          "platforms": {
+            "mac": "smb://nearline4.hhmi.org/singer",
+            "windows": "\\\\nearline4.hhmi.org\\singer",
+            "cluster": "/nearline/singer"
+          },
+          "ad_group": "singer"
+        }
+      },
+      "ad_group": "singer",
+      "description": "Singer Lab"
+    },
+    "Spatial Transcriptomics": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/spatialtranscriptomics",
+            "windows": "\\\\prfs.hhmi.org\\spatialtranscriptomics",
+            "cluster": "/groups/spatialtranscriptomics/spatialtranscriptomics"
+          },
+          "ad_group": "spatialtranscriptomics"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/spatialtranscriptomics$",
+            "windows": "\\\\prfs.hhmi.org\\spatialtranscriptomics$",
+            "cluster": "/groups/spatialtranscriptomics/home"
+          },
+          "ad_group": "spatialtranscriptomics"
+        },
+        "archive": {
+          "platforms": {
+            "mac": "smb://nearline4.hhmi.org/spatialtranscriptomics",
+            "windows": "\\\\nearline4.hhmi.org\\spatialtranscriptomics",
+            "cluster": "/nearline/spatialtranscriptomics"
+          },
+          "ad_group": "spatialtranscriptomics"
+        }
+      },
+      "ad_group": "spatialtranscriptomics",
+      "description": "Spatial Transcriptomics Lab"
+    },
+    "Spruston": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/sprustonlab",
+            "windows": "\\\\prfs.hhmi.org\\sprustonlab",
+            "cluster": "/groups/spruston/sprustonlab"
+          },
+          "ad_group": "spruston"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/spruston$",
+            "windows": "\\\\prfs.hhmi.org\\spruston$",
+            "cluster": "/groups/spruston/home"
+          },
+          "ad_group": "spruston"
+        },
+        "scratch": {
+          "platforms": {
+            "mac": "smb://nrs.hhmi.org/spruston",
+            "windows": "\\\\nrs.hhmi.org\\spruston",
+            "cluster": "/nrs/spruston"
+          },
+          "ad_group": "spruston"
+        },
+        "archive": {
+          "platforms": {
+            "mac": "smb://nearline4.hhmi.org/spruston",
+            "windows": "\\\\nearline4.hhmi.org\\spruston",
+            "cluster": "/nearline/spruston"
+          },
+          "ad_group": "spruston"
+        }
+      },
+      "ad_group": "spruston",
+      "description": "Spruston Lab"
+    },
+    "Stern": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/sternlab",
+            "windows": "\\\\prfs.hhmi.org\\sternlab",
+            "cluster": "/groups/stern/sternlab"
+          },
+          "ad_group": "stern"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/stern$",
+            "windows": "\\\\prfs.hhmi.org\\stern$",
+            "cluster": "/groups/stern/home"
+          },
+          "ad_group": "stern"
+        },
+        "scratch": {
+          "platforms": {
+            "mac": "smb://nrs.hhmi.org/stern",
+            "windows": "\\\\nrs.hhmi.org\\stern",
+            "cluster": "/nrs/stern"
+          },
+          "ad_group": "stern"
+        },
+        "archive": {
+          "platforms": {
+            "mac": "smb://nearline4.hhmi.org/stern",
+            "windows": "\\\\nearline4.hhmi.org\\stern",
+            "cluster": "/nearline/stern"
+          },
+          "ad_group": "stern"
+        }
+      },
+      "ad_group": "stern",
+      "description": "Stern Lab"
+    },
+    "Sternson": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/sternson_ephys",
+            "windows": "\\\\prfs.hhmi.org\\sternson_ephys",
+            "cluster": "/groups/sternson/ephys"
+          },
+          "ad_group": "ephys"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/sternson$",
+            "windows": "\\\\prfs.hhmi.org\\sternson$",
+            "cluster": "/groups/sternson/home"
+          },
+          "ad_group": "sternson"
+        },
+        "scratch": {
+          "platforms": {
+            "mac": "smb://nrs.hhmi.org/sternson",
+            "windows": "\\\\nrs.hhmi.org\\sternson",
+            "cluster": "/nrs/sternson"
+          },
+          "ad_group": "sternson"
+        },
+        "archive": {
+          "platforms": {
+            "mac": "smb://nearline4.hhmi.org/sternson",
+            "windows": "\\\\nearline4.hhmi.org\\sternson",
+            "cluster": "/nearline/sternson"
+          },
+          "ad_group": "sternson"
+        }
+      },
+      "ad_group": "sternson",
+      "description": "Sternson Lab"
+    },
+    "Stringer": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/stringerlab",
+            "windows": "\\\\prfs.hhmi.org\\stringerlab",
+            "cluster": "/groups/stringer/stringerlab"
+          },
+          "ad_group": "stringer"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/stringer$",
+            "windows": "\\\\prfs.hhmi.org\\stringer$",
+            "cluster": "/groups/stringer/home"
+          },
+          "ad_group": "stringer"
+        },
+        "scratch": {
+          "platforms": {
+            "mac": "smb://nrs.hhmi.org/stringer",
+            "windows": "\\\\nrs.hhmi.org\\stringer",
+            "cluster": "/nrs/stringer"
+          },
+          "ad_group": "stringer"
+        },
+        "archive": {
+          "platforms": {
+            "mac": "smb://nearline4.hhmi.org/stringer",
+            "windows": "\\\\nearline4.hhmi.org\\stringer",
+            "cluster": "/nearline/stringer"
+          },
+          "ad_group": "stringer"
+        }
+      },
+      "ad_group": "stringer",
+      "description": "Stringer Lab"
+    },
+    "Svoboda": {
+      "storage_types": {
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/svoboda$",
+            "windows": "\\\\prfs.hhmi.org\\svoboda$",
+            "cluster": "/groups/svoboda/home"
+          },
+          "ad_group": "svoboda"
+        },
+        "scratch": {
+          "platforms": {
+            "mac": "smb://nrs.hhmi.org/svoboda",
+            "windows": "\\\\nrs.hhmi.org\\svoboda",
+            "cluster": "/nrs/svoboda"
+          },
+          "ad_group": "svoboda"
+        }
+      },
+      "ad_group": "svoboda",
+      "description": "Svoboda Lab"
+    },
+    "Tavakoli": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/tavakolilab",
+            "windows": "\\\\prfs.hhmi.org\\tavakolilab",
+            "cluster": "/groups/tavakoli/tavakolilab"
+          },
+          "ad_group": "tavakoli"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/tavakoli$",
+            "windows": "\\\\prfs.hhmi.org\\tavakoli$",
+            "cluster": "/groups/tavakoli/home"
+          },
+          "ad_group": "tavakoli"
+        }
+      },
+      "ad_group": "tavakoli",
+      "description": "Tavakoli Lab"
+    },
+    "Tavakoli/Schulze collaboration": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/tavakolischulzelabs",
+            "windows": "\\\\prfs.hhmi.org\\tavakolischulzelabs",
+            "cluster": "/groups/tavakolischulze/tavakolischulzelabs"
+          },
+          "ad_group": "tavakolischulze"
+        }
+      },
+      "ad_group": "tavakolischulze",
+      "description": "Tavakoli/Schulze collaboration Lab"
+    },
+    "Tebo": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/tebolab",
+            "windows": "\\\\prfs.hhmi.org\\tebolab",
+            "cluster": "/groups/tebo/tebolab"
+          },
+          "ad_group": "tebo"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/tebo$",
+            "windows": "\\\\prfs.hhmi.org\\tebo$",
+            "cluster": "/groups/tebo/home"
+          },
+          "ad_group": "tebo"
+        }
+      },
+      "ad_group": "tebo",
+      "description": "Tebo Lab"
+    },
+    "Terra Incognita": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/terraincognita",
+            "windows": "\\\\prfs.hhmi.org\\terraincognita",
+            "cluster": "/groups/terraincognita/terraincognita"
+          },
+          "ad_group": "terraincognita"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/terraincognita$",
+            "windows": "\\\\prfs.hhmi.org\\terraincognita$",
+            "cluster": "/groups/terraincognita/home"
+          },
+          "ad_group": "terraincognita"
+        }
+      },
+      "ad_group": "terraincognita",
+      "description": "Terra Incognita Lab"
+    },
+    "Tervo": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/tervolab",
+            "windows": "\\\\prfs.hhmi.org\\tervolab",
+            "cluster": "/groups/tervo/tervolab"
+          },
+          "ad_group": "tervo"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/tervo$",
+            "windows": "\\\\prfs.hhmi.org\\tervo$",
+            "cluster": "/groups/tervo/home"
+          },
+          "ad_group": "tervo"
+        }
+      },
+      "ad_group": "tervo",
+      "description": "Tervo Lab"
+    },
+    "Tillberg": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/tillberglab",
+            "windows": "\\\\prfs.hhmi.org\\tillberglab",
+            "cluster": "/groups/tillberg/tillberglab"
+          },
+          "ad_group": "tillberg"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/tillberg$",
+            "windows": "\\\\prfs.hhmi.org\\tillberg$",
+            "cluster": "/groups/tillberg/home"
+          },
+          "ad_group": "tillberg"
+        }
+      },
+      "ad_group": "tillberg",
+      "description": "Tillberg Lab"
+    },
+    "Tool Translation": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/tool-translation",
+            "windows": "\\\\prfs.hhmi.org\\tool-translation",
+            "cluster": "/groups/tool-translation/tool-translation"
+          },
+          "ad_group": "tool-translation"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/tool-translation$",
+            "windows": "\\\\prfs.hhmi.org\\tool-translation$",
+            "cluster": "/groups/tool-translation/home"
+          },
+          "ad_group": "tool-translation"
+        },
+        "archive": {
+          "platforms": {
+            "mac": "smb://nearline4.hhmi.org/tool-translation",
+            "windows": "\\\\nearline4.hhmi.org\\tool-translation",
+            "cluster": "/nearline/tool-translation"
+          },
+          "ad_group": "tool-translation"
+        }
+      },
+      "ad_group": "tool-translation",
+      "description": "Tool Translation Lab"
+    },
+    "TransImCon": {
+      "storage_types": {
+        "archive": {
+          "platforms": {
+            "mac": "smb://nearline4.hhmi.org/tic",
+            "windows": "\\\\nearline4.hhmi.org\\tic",
+            "cluster": "/nearline/tic"
+          },
+          "ad_group": "transimcon"
+        }
+      },
+      "ad_group": "transimcon",
+      "description": "TransImCon Lab"
+    },
+    "Turaga": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/turagalab",
+            "windows": "\\\\prfs.hhmi.org\\turagalab",
+            "cluster": "/groups/turaga/turagalab"
+          },
+          "ad_group": "turaga"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/turaga$",
+            "windows": "\\\\prfs.hhmi.org\\turaga$",
+            "cluster": "/groups/turaga/turaga$"
+          },
+          "ad_group": "turaga"
+        },
+        "scratch": {
+          "platforms": {
+            "mac": "smb://nrs.hhmi.org/turaga",
+            "windows": "\\\\nrs.hhmi.org\\turaga",
+            "cluster": "/nrs/turaga"
+          },
+          "ad_group": "turaga"
+        },
+        "archive": {
+          "platforms": {
+            "mac": "smb://nearline4.hhmi.org/turaga",
+            "windows": "\\\\nearline4.hhmi.org\\turaga",
+            "cluster": "/nearline/turaga"
+          },
+          "ad_group": "turaga"
+        }
+      },
+      "ad_group": "turaga",
+      "description": "Turaga Lab"
+    },
+    "Turner": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/turnerlab",
+            "windows": "\\\\prfs.hhmi.org\\turnerlab",
+            "cluster": "/groups/turner/turnerlab"
+          },
+          "ad_group": "turner"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/turner$",
+            "windows": "\\\\prfs.hhmi.org\\turner$",
+            "cluster": "/groups/turner/home"
+          },
+          "ad_group": "turner"
+        },
+        "archive": {
+          "platforms": {
+            "mac": "smb://nearline4.hhmi.org/turner",
+            "windows": "\\\\nearline4.hhmi.org\\turner",
+            "cluster": "/nearline/turner"
+          },
+          "ad_group": "turner"
+        }
+      },
+      "ad_group": "turner",
+      "description": "Turner Lab"
+    },
+    "Vale": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/valelab",
+            "windows": "\\\\prfs.hhmi.org\\valelab",
+            "cluster": "/groups/vale/valelab"
+          },
+          "ad_group": "vale"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/vale$",
+            "windows": "\\\\prfs.hhmi.org\\vale$",
+            "cluster": "/groups/vale/valehome"
+          },
+          "ad_group": "vale"
+        },
+        "scratch": {
+          "platforms": {
+            "mac": "smb://nrs.hhmi.org/vale",
+            "windows": "\\\\nrs.hhmi.org\\vale",
+            "cluster": "/nrs/vale"
+          },
+          "ad_group": "vale"
+        }
+      },
+      "ad_group": "vale",
+      "description": "Vale Lab"
+    },
+    "Virus Services": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/virusservices",
+            "windows": "\\\\prfs.hhmi.org\\virusservices",
+            "cluster": "/groups/virusservices/virusservices"
+          },
+          "ad_group": "virusservices"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/virusservices$",
+            "windows": "\\\\prfs.hhmi.org\\virusservices$",
+            "cluster": "/groups/virusservices/home"
+          },
+          "ad_group": "virusservices"
+        }
+      },
+      "ad_group": "virusservices",
+      "description": "Virus Services Lab"
+    },
+    "Voigts": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/voigtslab",
+            "windows": "\\\\prfs.hhmi.org\\voigtslab",
+            "cluster": "/groups/voigts/voigtslab"
+          },
+          "ad_group": "voigts"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/voigts$",
+            "windows": "\\\\prfs.hhmi.org\\voigts$",
+            "cluster": "/groups/voigts/home"
+          },
+          "ad_group": "voigts"
+        },
+        "archive": {
+          "platforms": {
+            "mac": "smb://nearline4.hhmi.org/voigts",
+            "windows": "\\\\nearline4.hhmi.org\\voigts",
+            "cluster": "/nearline/voigts"
+          },
+          "ad_group": "voigts"
+        }
+      },
+      "ad_group": "voigts",
+      "description": "Voigts Lab"
+    },
+    "VR System": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/vrsystem",
+            "windows": "\\\\prfs.hhmi.org\\vrsystem",
+            "cluster": "/groups/vrsystem/vrsystem"
+          },
+          "ad_group": "vrsystem\u00a0"
+        }
+      },
+      "ad_group": "vrsystem\u00a0",
+      "description": "VR System Lab"
+    },
+    "Alice Wang": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/alicewanglab",
+            "windows": "\\\\prfs.hhmi.org\\alicewanglab",
+            "cluster": "/groups/alicewang/alicewanglab"
+          },
+          "ad_group": "alicewang"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/alicewang$",
+            "windows": "\\\\prfs.hhmi.org\\alicewang$",
+            "cluster": "/groups/alicewang/home"
+          },
+          "ad_group": "alicewang"
+        }
+      },
+      "ad_group": "alicewang",
+      "description": "Alice Wang Lab"
+    },
+    "Meng Wang": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/mengwanglab",
+            "windows": "\\\\prfs.hhmi.org\\mengwanglab",
+            "cluster": "/groups/mengwang/mengwanglab"
+          },
+          "ad_group": "mengwang"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/mengwang$",
+            "windows": "\\\\prfs.hhmi.org\\mengwang$",
+            "cluster": "/groups/mengwang/home"
+          },
+          "ad_group": "mengwang"
+        },
+        "scratch": {
+          "platforms": {
+            "mac": "smb://nrs.hhmi.org/mengwang$",
+            "windows": "\\\\nrs.hhmi.org\\mengwang",
+            "cluster": "/nrs/mengwang"
+          },
+          "ad_group": "mengwang"
+        },
+        "archive": {
+          "platforms": {
+            "mac": "smb://nearline4.hhmi.org/mengwang",
+            "windows": "\\\\nearline4.hhmi.org\\mengwang",
+            "cluster": "/nearline/mengwang"
+          },
+          "ad_group": "mengwang"
+        }
+      },
+      "ad_group": "mengwang",
+      "description": "Meng Wang Lab"
+    },
+    "Shaohe Wang": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/wanglab",
+            "windows": "\\\\prfs.hhmi.org\\wanglab",
+            "cluster": "/groups/wang/wanglab"
+          },
+          "ad_group": "wang"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/wang$",
+            "windows": "\\\\prfs.hhmi.org\\wang$",
+            "cluster": "/groups/wang/home"
+          },
+          "ad_group": "wang"
+        },
+        "archive": {
+          "platforms": {
+            "mac": "smb://nearline4.hhmi.org/wang",
+            "windows": "\\\\nearline4.hhmi.org\\wang",
+            "cluster": "/nearline/wang"
+          },
+          "ad_group": "\u00a0wang"
+        }
+      },
+      "ad_group": "wang",
+      "description": "Shaohe Wang Lab"
+    },
+    "Wong-Campos": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/wongcamposlab",
+            "windows": "\\\\prfs.hhmi.org\\wongcamposlab",
+            "cluster": "/groups/wongcampos/wongcamposlab"
+          },
+          "ad_group": "wongcampos"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/wongcampos$",
+            "windows": "\\\\prfs.hhmi.org\\wongcampos$",
+            "cluster": "/groups/wongcampos/home"
+          },
+          "ad_group": "wongcampos"
+        }
+      },
+      "ad_group": "wongcampos",
+      "description": "Wong-Campos Lab"
+    },
+    "Zhang": {
+      "storage_types": {
+        "primary": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/zhanglab",
+            "windows": "\\\\prfs.hhmi.org\\zhanglab",
+            "cluster": "/groups/zhang/zhanglab"
+          },
+          "ad_group": "zhang"
+        },
+        "home": {
+          "platforms": {
+            "mac": "smb://prfs.hhmi.org/zhang$",
+            "windows": "\\\\prfs.hhmi.org\\zhang$",
+            "cluster": "/groups/zhang/home"
+          },
+          "ad_group": "zhang"
+        }
+      },
+      "ad_group": "zhang",
+      "description": "Zhang Lab"
+    }
+  },
+  "all_lab_names": [
+    "AI Support",
+    "AIC",
+    "APIG",
+    "Abbott",
+    "Aguilera Castrejon",
+    "Ahrens",
+    "Albert Lee",
+    "Alice Wang",
+    "AniBody",
+    "Aso",
+    "Betzig",
+    "Beyene",
+    "Bishop",
+    "Branson",
+    "Card",
+    "Cell Culture",
+    "Cell and Mol Bio",
+    "CellMap",
+    "Clapham",
+    "CryoEM",
+    "DITP",
+    "Darshan",
+    "Das",
+    "Das - RNA Structure",
+    "Denk",
+    "Dennis",
+    "Dudman",
+    "EM",
+    "EMCA",
+    "Espinosa-Medina",
+    "FIB SEM",
+    "Facilities",
+    "Feliciano",
+    "Fitzgerald",
+    "Flow Cytometry",
+    "FlyEM",
+    "FlyLabel",
+    "FlyLight",
+    "FlyNP",
+    "FlyOlympiad",
+    "FlyTEM",
+    "Func-E-Worm",
+    "Funke",
+    "Futusa",
+    "GENIE",
+    "Hermundstad",
+    "Hess",
+    "Huston",
+    "Ilanges",
+    "Imaging",
+    "James Liu",
+    "Jayaraman",
+    "JeT",
+    "Johnson",
+    "Kainmueller",
+    "Karpova",
+    "Keleman",
+    "Keller",
+    "Koay",
+    "LICONN (AI@HHMI)",
+    "LarvalOlympiad",
+    "Lavis",
+    "Li",
+    "Lightsheet",
+    "Lillvis",
+    "Lippincott-Schwartz",
+    "Looger",
+    "Loomba",
+    "MCN Behavior",
+    "MCN NeuroEngineering Team",
+    "Magee",
+    "Mass Spectrometry",
+    "Matsen",
+    "Meng Wang",
+    "Miller",
+    "Molecular Biology",
+    "Molecular Genomics",
+    "Mouse Light",
+    "MultiFISH",
+    "Neuroseq",
+    "O'Shea",
+    "Open Chemistry",
+    "Open Data",
+    "Otopalik",
+    "Pachitariu",
+    "Pedram",
+    "Podgorski",
+    "Project Pipeline Support",
+    "Project Technical Resources",
+    "Public share",
+    "Quantitative Genomics",
+    "Reiser",
+    "Rodriguez",
+    "Romani",
+    "Rubin",
+    "Rubinov",
+    "SEMA",
+    "Saalfeld",
+    "Satou",
+    "Scheffer",
+    "Schreiter",
+    "Schulze",
+    "Scientific Computing Software",
+    "Sgro",
+    "Shaohe Wang",
+    "Shroff",
+    "Singer",
+    "Spatial Transcriptomics",
+    "Spruston",
+    "Stern",
+    "Sternson",
+    "Stringer",
+    "Svoboda",
+    "Tavakoli",
+    "Tavakoli/Schulze collaboration",
+    "Tebo",
+    "Terra Incognita",
+    "Tervo",
+    "Tillberg",
+    "Tool Translation",
+    "TransImCon",
+    "Turaga",
+    "Turner",
+    "Tzumin Lee",
+    "VR System",
+    "Vale",
+    "Virus Services",
+    "Voigts",
+    "Wong-Campos",
+    "Yin Liu",
+    "Zhang"
+  ]
+}
