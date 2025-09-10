@@ -7,6 +7,52 @@ import numpy as np
 import psutil
 import time
 import os
+import json
+
+def update_zarr_ome_xml_ims(multiscale_path, source_ims_path):
+    """Update zarr.json with enhanced metadata from source IMS (like update_metadata.py --check-ome-xml)"""
+    zarr_json_path = os.path.join(multiscale_path, 'zarr.json')
+    
+    if not os.path.exists(zarr_json_path):
+        raise ValueError(f"zarr.json not found in {multiscale_path}")
+    
+    # Read current metadata
+    with open(zarr_json_path, 'r') as f:
+        metadata = json.load(f)
+    
+    # Extract enhanced metadata from source IMS
+    try:
+        from ..utils import extract_ims_metadata
+        ims_metadata, voxel_sizes = extract_ims_metadata(source_ims_path)
+        
+        if ims_metadata:
+            # Add IMS metadata to top level attributes
+            metadata['attributes']['ims_metadata'] = ims_metadata
+            
+            # Update voxel size information if available
+            if voxel_sizes and 'ome' in metadata.get('attributes', {}):
+                multiscales = metadata['attributes']['ome'].get('multiscales', [])
+                if multiscales and 'datasets' in multiscales[0]:
+                    datasets = multiscales[0]['datasets']
+                    if datasets and 'coordinateTransformations' in datasets[0]:
+                        # Update scale with actual voxel sizes
+                        transforms = datasets[0]['coordinateTransformations']
+                        for transform in transforms:
+                            if transform.get('type') == 'scale' and len(voxel_sizes) >= 3:
+                                # IMS provides XYZ, convert to ZYX for zarr
+                                if len(transform.get('scale', [])) >= 3:
+                                    transform['scale'] = [voxel_sizes[2], voxel_sizes[1], voxel_sizes[0]]
+            
+            # Write back to zarr.json
+            with open(zarr_json_path, 'w') as f:
+                json.dump(metadata, f, indent=2)
+                
+            print(f"Successfully added IMS metadata to {zarr_json_path}")
+        else:
+            print("No enhanced IMS metadata found")
+            
+    except Exception as e:
+        print(f"Could not extract IMS metadata: {e}")
 
 def process(base_path, output_path, use_shard=False, memory_limit=50, start_idx=0, stop_idx=None, use_ome_structure=True):
     print(f"Loading IMS file from: {base_path}", flush=True)
@@ -101,6 +147,15 @@ def process(base_path, output_path, use_shard=False, memory_limit=50, start_idx=
             multiscale_path = os.path.join(output_path, "multiscale")
             write_zarr3_group_metadata(multiscale_path, zarr3_metadata)
             print("OME-Zarr metadata written successfully", flush=True)
+            
+            # Update metadata with enhanced IMS metadata (like update_metadata.py --check-ome-xml)
+            try:
+                print("Updating zarr.json with enhanced IMS metadata...", flush=True)
+                update_zarr_ome_xml_ims(multiscale_path, base_path)
+                print("Enhanced IMS metadata updated successfully", flush=True)
+            except Exception as e:
+                print(f"Warning: Could not update enhanced IMS metadata: {e}", flush=True)
+                
         except Exception as e:
             print(f"Warning: Could not write OME-Zarr metadata: {e}", flush=True)
     else:
