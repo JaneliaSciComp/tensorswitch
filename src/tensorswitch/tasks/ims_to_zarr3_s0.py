@@ -97,8 +97,8 @@ def process(base_path, output_path, use_shard=False, memory_limit=50, start_idx=
             image_name = os.path.splitext(os.path.basename(base_path))[0]
             
             zarr3_metadata = convert_ims_to_zarr3_metadata(base_path, volume.shape, voxel_sizes)
-            # Write zarr.json to multiscale folder (parent of s0 folder)
-            multiscale_path = os.path.dirname(output_path)
+            # Write zarr.json to multiscale folder
+            multiscale_path = os.path.join(output_path, "multiscale")
             write_zarr3_group_metadata(multiscale_path, zarr3_metadata)
             print("OME-Zarr metadata written successfully", flush=True)
         except Exception as e:

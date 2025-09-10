@@ -50,13 +50,13 @@ def auto_detect_max_level(zarr_path):
     
     return max(levels)
 
-def check_and_add_ome_xml(zarr_path, dry_run=False):
+def check_and_add_ome_xml(multiscale_path, dry_run=False):
     """Check if ome_xml metadata exists and add it from corresponding ND2 file if missing."""
     import json
     
-    zarr_json_path = os.path.join(zarr_path, 'zarr.json')
+    zarr_json_path = os.path.join(multiscale_path, 'zarr.json')
     if not os.path.exists(zarr_json_path):
-        print(f"Warning: zarr.json not found in {zarr_path}")
+        print(f"Warning: zarr.json not found in {multiscale_path}")
         return False
     
     # Read current metadata
@@ -66,11 +66,16 @@ def check_and_add_ome_xml(zarr_path, dry_run=False):
     # Check if ome_xml already exists
     ome_attrs = metadata.get('attributes', {}).get('ome', {})
     if 'ome_xml' in ome_attrs:
-        print(f"ome_xml already exists in {zarr_path}")
-        return False
+        print(f"ome_xml already exists in {multiscale_path}")
+        #return False
     
     # Try to find corresponding ND2 file
-    zarr_name = os.path.basename(zarr_path.rstrip('/'))
+    print("multiscale_path:", multiscale_path)
+    zarr_path = multiscale_path.removesuffix('multiscale')
+    zarr_path = zarr_path.rstrip('/')
+    zarr_name = os.path.basename(zarr_path)
+    print("zarr_name_after:", zarr_name)
+    print(f"{zarr_path=}")
     if zarr_name.endswith('.zarr'):
         nd2_name = zarr_name[:-5] + '.nd2'
     else:
@@ -80,11 +85,13 @@ def check_and_add_ome_xml(zarr_path, dry_run=False):
     nd2_paths = [
         f"/groups/tavakoli/tavakolilab/data_internal/{nd2_name}",
         f"/groups/tavakoli/tavakolilab/data_internal/nd2_files/{nd2_name}",
-        os.path.join(os.path.dirname(zarr_path), nd2_name)
+        os.path.join(os.path.dirname(zarr_path), nd2_name),
+        os.path.join(os.path.dirname(os.path.dirname(zarr_path)), nd2_name)
     ]
     
     nd2_path = None
     for path in nd2_paths:
+        print("nd2_path path:", path)
         if os.path.exists(path):
             nd2_path = path
             break
@@ -103,7 +110,10 @@ def check_and_add_ome_xml(zarr_path, dry_run=False):
         
         if ome_xml:
             # Add ome_xml to metadata
-            metadata['attributes']['ome']['ome_xml'] = ome_xml
+            metadata['attributes']['ome_xml'] = ome_xml
+            # Remove the old ome_xml under ['ome']['ome_xml']
+            if metadata['attributes']['ome'] and metadata['attributes']['ome']['ome_xml']:
+                metadata['attributes']['ome'].pop('ome_xml')
             
             # Write back to zarr.json
             with open(zarr_json_path, 'w') as f:
@@ -143,7 +153,8 @@ def main():
     parser.add_argument(
         '--check-ome-xml',
         action='store_true',
-        help='Check for missing ome_xml metadata and add from corresponding ND2 files'
+        default=True,
+        help='Check for missing ome_xml metadata and add from corresponding ND2 files (default: True)'
     )
     
     args = parser.parse_args()
@@ -167,6 +178,10 @@ def main():
             sys.exit(1)
     else:
         max_level = args.max_level
+
+    # Define multiscale_path before using it
+    multiscale_path = os.path.join(args.zarr_path, 'multiscale')
+    print("multiscale_path:", multiscale_path)
     
     # Verify that the specified levels exist
     missing_levels = []
@@ -179,7 +194,6 @@ def main():
         print(f"Warning: Missing level directories: {', '.join(missing_levels)}")
     
     # Check if zarr.json exists in multiscale folder
-    multiscale_path = os.path.join(args.zarr_path, 'multiscale')
     zarr_json_path = os.path.join(multiscale_path, 'zarr.json')
     if not os.path.exists(zarr_json_path):
         print(f"Error: zarr.json not found in {multiscale_path}", file=sys.stderr)
@@ -194,7 +208,7 @@ def main():
     
     try:
         print(f"Updating OME metadata for {args.zarr_path} with levels s0-s{max_level}")
-        update_ome_multiscale_metadata(multiscale_path, max_level=max_level)
+        update_ome_multiscale_metadata(args.zarr_path, max_level=max_level)
         print("OME metadata updated successfully!")
         
         # Check and add ome_xml if requested

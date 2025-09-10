@@ -5,7 +5,7 @@ import psutil
 from ..utils import get_chunk_domains, create_output_store, commit_tasks, print_processing_info, downsample_spec, zarr3_store_spec, get_input_driver, get_total_chunks_from_store
 import os
 
-def process(base_path, output_path, level, start_idx=0, stop_idx=None, downsample=True, use_shard=True, memory_limit=50, **kwargs):
+def process(base_path, output_path, level, start_idx=0, stop_idx=None, downsample=True, use_shard=True, memory_limit=50, custom_shard_shape=None, custom_chunk_shape=None, **kwargs):
 
     """Downsample and optionally apply sharding to Zarr3 dataset."""
     if base_path.endswith(f"s{level - 1}") or level == 0:
@@ -42,7 +42,9 @@ def process(base_path, output_path, level, start_idx=0, stop_idx=None, downsampl
         downsample_store.dtype.name,
         use_shard,
         level_path=f"s{level}",
-        use_ome_structure=True
+        use_ome_structure=True,
+        custom_shard_shape=custom_shard_shape,
+        custom_chunk_shape=custom_chunk_shape
     )
 
     downsampled_saved = create_output_store(downsampled_saved_spec)

@@ -11,7 +11,7 @@ import nd2
 import dask.array as da
 import os
 
-def process(base_path, output_path, use_shard=False, memory_limit=50, start_idx=0, stop_idx=None, use_ome_structure=True):
+def process(base_path, output_path, use_shard=False, memory_limit=50, start_idx=0, stop_idx=None, use_ome_structure=True, custom_shard_shape=None, custom_chunk_shape=None):
     print(f"Loading ND2 file from: {base_path}", flush=True)
 
     volume = load_nd2_stack(base_path)
@@ -46,7 +46,9 @@ def process(base_path, output_path, use_shard=False, memory_limit=50, start_idx=
         dtype=str(volume.dtype),
         use_shard=use_shard,
         level_path="s0",
-        use_ome_structure=use_ome_structure
+        use_ome_structure=use_ome_structure,
+        custom_shard_shape=custom_shard_shape,
+        custom_chunk_shape=custom_chunk_shape
     )
 
     store = ts.open(store_spec, create=True, open=True, delete_existing=False).result()
@@ -95,8 +97,8 @@ def process(base_path, output_path, use_shard=False, memory_limit=50, start_idx=
             image_name = os.path.splitext(os.path.basename(base_path))[0]
             
             zarr3_metadata = convert_ome_to_zarr3_metadata(ome_metadata, volume.shape, image_name)
-            # Write zarr.json to multiscale folder (parent of s0 folder)
-            multiscale_path = os.path.dirname(output_path)
+            # Write zarr.json to multiscale folder 
+            multiscale_path = os.path.join(output_path, "multiscale")
             write_zarr3_group_metadata(multiscale_path, zarr3_metadata)
             print("OME-Zarr metadata written successfully", flush=True)
         except Exception as e:

@@ -71,6 +71,8 @@ apscheduler = ">=3.10.0,<4"
 openai = ">=1.0.0,<2"
 pydantic = ">=2.0.0,<3"
 watchdog = ">=4.0.0,<5"
+pandas = "*"
+openpyxl = "*"
 
 [tool.pixi.feature.ipykernel.dependencies]
 ipykernel = "*"

@@ -29,6 +29,15 @@ def submit_job(args):
     output_dir = os.path.join(os.getcwd(), "output")
     os.makedirs(output_dir, exist_ok=True)
 
+    # Parse custom shard and chunk shapes for job submission
+    custom_shard_shape = None
+    if args.custom_shard_shape:
+        custom_shard_shape = [int(x) for x in args.custom_shard_shape.split(',')]
+    
+    custom_chunk_shape = None
+    if args.custom_chunk_shape:
+        custom_chunk_shape = [int(x) for x in args.custom_chunk_shape.split(',')]
+
     #input_driver = get_input_driver(args.base_path)
     input_driver = "n5" if args.base_path.startswith("http") else get_input_driver(args.base_path)
     
@@ -50,10 +59,25 @@ def submit_job(args):
             shape=volume.shape,
             dtype=str(volume.dtype),
             use_shard=bool(args.use_shard),
-            use_ome_structure=bool(args.use_ome_structure)
+            use_ome_structure=bool(args.use_ome_structure),
+            custom_shard_shape=custom_shard_shape,
+            custom_chunk_shape=custom_chunk_shape
         )
         temp_store = ts.open(store_spec, create=True, delete_existing=True).result()
-        total_chunks = get_total_chunks_from_store(temp_store)
+        # For sharded stores, use the shard shape (write_chunk) not the inner chunk shape (read_chunk)
+        if bool(args.use_shard) and custom_shard_shape:
+            # Use custom shard shape for chunk counting
+            if len(volume.shape) == 3 and len(custom_shard_shape) == 3:
+                chunk_shape_for_counting = custom_shard_shape
+            elif len(volume.shape) == 4 and len(custom_shard_shape) == 3:
+                chunk_shape_for_counting = [1] + custom_shard_shape
+            elif len(volume.shape) == 5 and len(custom_shard_shape) == 3:
+                chunk_shape_for_counting = [1, 1] + custom_shard_shape
+            else:
+                chunk_shape_for_counting = custom_shard_shape
+            total_chunks = get_total_chunks_from_store(temp_store, chunk_shape_for_counting)
+        else:
+            total_chunks = get_total_chunks_from_store(temp_store)
     elif args.task == "ims_to_zarr3_s0":
         volume, h5_file = load_ims_stack(args.base_path)
         h5_file.close()  # Close file handle after getting shape info
@@ -159,7 +183,9 @@ def submit_job(args):
             "downsample",
             "use_shard",
             "use_ome_structure",
-            "memory_limit"
+            "memory_limit",
+            "custom_shard_shape",
+            "custom_chunk_shape"
         ]
         for arg in forwarded_args:
             command += ["--"+arg, str(getattr(args, arg))]
@@ -191,8 +217,19 @@ def main():
     parser.add_argument("--project", default="None", help="Project to charge")
     parser.add_argument("--cores", type=str, default="2", help="Number of cores for LSF job (-n flag)")
     parser.add_argument("--wall_time", type=str, default="1:00", help="Wall time for LSF job (-W flag)")
+    parser.add_argument("--custom_shard_shape", type=str, help="Custom shard shape as comma-separated values (e.g., '128,576,576')")
+    parser.add_argument("--custom_chunk_shape", type=str, help="Custom chunk shape as comma-separated values (e.g., '32,32,32')")
 
     args = parser.parse_args()
+    
+    # Parse custom shard and chunk shapes
+    custom_shard_shape = None
+    if args.custom_shard_shape:
+        custom_shard_shape = [int(x) for x in args.custom_shard_shape.split(',')]
+    
+    custom_chunk_shape = None
+    if args.custom_chunk_shape:
+        custom_chunk_shape = [int(x) for x in args.custom_chunk_shape.split(',')]
 
     if args.submit:
         if args.project == "None":
@@ -205,11 +242,11 @@ def main():
         elif args.task == "n5_to_zarr2":
             n5_to_zarr2.convert(args.base_path, args.output_path, args.level, args.start_idx, args.stop_idx, args.memory_limit)
         elif args.task == "downsample_shard_zarr3":
-            downsample_shard_zarr3.process(args.base_path, args.output_path, args.level, args.start_idx, args.stop_idx, bool(args.downsample), bool(args.use_shard), args.memory_limit)
+            downsample_shard_zarr3.process(args.base_path, args.output_path, args.level, args.start_idx, args.stop_idx, bool(args.downsample), bool(args.use_shard), args.memory_limit, custom_shard_shape, custom_chunk_shape)
         elif args.task == "tiff_to_zarr3_s0":
             tiff_to_zarr3_s0.process(args.base_path, args.output_path, bool(args.use_shard), args.memory_limit, args.start_idx, args.stop_idx, bool(args.use_ome_structure))
         elif args.task == "nd2_to_zarr3_s0":
-            nd2_to_zarr3_s0.process(args.base_path, args.output_path, bool(args.use_shard), args.memory_limit, args.start_idx, args.stop_idx, bool(args.use_ome_structure))
+            nd2_to_zarr3_s0.process(args.base_path, args.output_path, bool(args.use_shard), args.memory_limit, args.start_idx, args.stop_idx, bool(args.use_ome_structure), custom_shard_shape, custom_chunk_shape)
         elif args.task == "ims_to_zarr3_s0":
             ims_to_zarr3_s0.process(args.base_path, args.output_path, bool(args.use_shard), args.memory_limit, args.start_idx, args.stop_idx, bool(args.use_ome_structure))
         else:

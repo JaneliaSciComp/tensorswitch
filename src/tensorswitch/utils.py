@@ -65,13 +65,26 @@ def zarr2_store_spec(zarr_level_path, shape, chunks):
     }
 
 
-def zarr3_store_spec(path, shape, dtype, use_shard=True, level_path="s0", use_ome_structure=True):
+def zarr3_store_spec(path, shape, dtype, use_shard=True, level_path="s0", use_ome_structure=True, custom_shard_shape=None, custom_chunk_shape=None):
     if use_shard:
+        # Use custom chunk shape if provided, otherwise default
+        inner_chunk_shape = custom_chunk_shape if custom_chunk_shape is not None else [32, 32, 32]
+        
+        # Adjust inner chunk shape for different array dimensions
+        if len(shape) == 3 and len(inner_chunk_shape) == 3:
+            adjusted_inner_chunk = inner_chunk_shape
+        elif len(shape) == 4 and len(inner_chunk_shape) == 3:
+            adjusted_inner_chunk = [1] + inner_chunk_shape  # CZYX
+        elif len(shape) == 5 and len(inner_chunk_shape) == 3:
+            adjusted_inner_chunk = [1, 1] + inner_chunk_shape  # TCZYX
+        else:
+            adjusted_inner_chunk = inner_chunk_shape
+        
         codecs = [
             {
                 'name': 'sharding_indexed',
                 'configuration': {
-                    'chunk_shape': [32, 32, 32],
+                    'chunk_shape': adjusted_inner_chunk,
                     'codecs': [
                         {'name': 'bytes', 'configuration': {'endian': 'little'}},
                         {'name': 'zstd', 'configuration': {'level': 5}}
@@ -84,7 +97,19 @@ def zarr3_store_spec(path, shape, dtype, use_shard=True, level_path="s0", use_om
                 }
             }
         ]
-        chunk_shape = [1024, 1024, 1024]
+        
+        # Use custom shard shape if provided, otherwise default
+        if custom_shard_shape is not None:
+            if len(shape) == 3 and len(custom_shard_shape) == 3:
+                chunk_shape = custom_shard_shape
+            elif len(shape) == 4 and len(custom_shard_shape) == 3:
+                chunk_shape = [1] + custom_shard_shape  # CZYX
+            elif len(shape) == 5 and len(custom_shard_shape) == 3:
+                chunk_shape = [1, 1] + custom_shard_shape  # TCZYX
+            else:
+                chunk_shape = custom_shard_shape
+        else:
+            chunk_shape = [1024, 1024, 1024]
     else:
         codecs = [
             {'name': 'bytes', 'configuration': {'endian': 'little'}},
@@ -344,7 +369,7 @@ def extract_nd2_ome_metadata(nd2_file):
         raise ValueError(f"ND2 file does not exist: {nd2_file}")
     
     with nd2.ND2File(nd2_file) as f:
-        ome_xml = f.ome_metadata()
+        ome_xml = f.ome_metadata().to_xml()
         if ome_xml:
             # Return the raw XML string
             return ome_xml
@@ -497,7 +522,7 @@ def write_zarr3_group_metadata(output_path, metadata):
 
 def update_ome_multiscale_metadata(zarr_path, max_level=4):
     """Update OME-ZARR metadata to include all multiscale levels s0 through max_level."""
-    zarr_json_path = os.path.join(zarr_path, "zarr.json")
+    zarr_json_path = os.path.join(zarr_path, "multiscale", "zarr.json")
     
     # Read existing metadata
     with open(zarr_json_path, 'r') as f:
