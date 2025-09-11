@@ -12,7 +12,7 @@ if not __package__:
     sys.path.insert(0, package_source_path)
 
 from . import tasks
-from .utils import get_total_chunks, downsample_spec, zarr3_store_spec, get_chunk_domains, estimate_total_chunks_for_tiff, get_input_driver, get_total_chunks_from_store, load_tiff_stack
+from .utils import get_total_chunks, downsample_spec, zarr3_store_spec, get_chunk_domains, estimate_total_chunks_for_tiff, get_input_driver, get_total_chunks_from_store, load_tiff_stack, update_ome_metadata_if_needed
 from .tasks import downsample_shard_zarr3
 from .tasks import n5_to_n5
 from .tasks import n5_to_zarr2
@@ -251,6 +251,14 @@ def main():
             ims_to_zarr3_s0.process(args.base_path, args.output_path, bool(args.use_shard), args.memory_limit, args.start_idx, args.stop_idx, bool(args.use_ome_structure))
         else:
             raise ValueError(f"Unsupported task: {args.task}")
+        
+        # Update OME-Zarr metadata after processing is complete
+        # For tasks that support use_ome_structure parameter
+        if args.task in ["tiff_to_zarr3_s0", "nd2_to_zarr3_s0", "ims_to_zarr3_s0"]:
+            update_ome_metadata_if_needed(args.output_path, bool(args.use_ome_structure))
+        # For downsample tasks that work with existing OME structure
+        elif args.task == "downsample_shard_zarr3":
+            update_ome_metadata_if_needed(args.output_path, use_ome_structure=True)
 
 if __name__ == "__main__":
     main()
