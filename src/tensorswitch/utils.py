@@ -12,6 +12,7 @@ import itertools
 import nd2
 import h5py
 import json
+import glob
 from ome_types import from_xml
 
 def get_chunk_domains(chunk_shape, array, linear_indices_to_process=None):
@@ -555,6 +556,49 @@ def update_ome_multiscale_metadata(zarr_path, max_level=4):
     
     print(f"Updated OME metadata for {zarr_path} with levels multiscale/s0-s{max_level}")
 
+def update_ome_multiscale_metadata_zarr2(zarr_path, max_level=4):
+    """Update OME-ZARR metadata for zarr2 format (.zattrs files) to include all multiscale levels."""
+    zattrs_path = os.path.join(zarr_path, "multiscale", ".zattrs")
+    
+    if not os.path.exists(zattrs_path):
+        print(f"Warning: .zattrs file not found at {zattrs_path}")
+        return
+    
+    # Read existing metadata
+    with open(zattrs_path, 'r') as f:
+        metadata = json.load(f)
+    
+    # Get existing multiscales and s0 scale factors
+    if "multiscales" not in metadata:
+        print("Warning: No multiscales metadata found in .zattrs")
+        return
+        
+    multiscales = metadata["multiscales"][0]
+    s0_scale_factors = multiscales["datasets"][0]["coordinateTransformations"][0]["scale"]
+    
+    # Build datasets for all levels with multiscale paths
+    datasets = []
+    for level in range(max_level + 1):
+        scale_factor = 2 ** level  # 1, 2, 4, 8, 16 for levels 0-4
+        current_scale = [sf * scale_factor for sf in s0_scale_factors]
+        
+        datasets.append({
+            "path": f"s{level}",  # Relative path within multiscale folder
+            "coordinateTransformations": [{
+                "type": "scale",
+                "scale": current_scale
+            }]
+        })
+    
+    # Update multiscales datasets
+    multiscales["datasets"] = datasets
+    
+    # Write back updated metadata
+    with open(zattrs_path, 'w') as f:
+        json.dump(metadata, f, indent=2)
+    
+    print(f"Updated zarr2 OME metadata for {zarr_path} with levels multiscale/s0-s{max_level}")
+
 def load_ims_stack(ims_file):
     """Load IMS data as a dask array using h5py."""
     if not os.path.isfile(ims_file):
@@ -699,5 +743,64 @@ def convert_ims_to_zarr3_metadata(ims_file, array_shape, voxel_sizes=None):
     }
     
     return metadata
+
+def auto_detect_max_level(output_path):
+    """Auto-detect the maximum level by scanning for s* directories in multiscale folder."""
+    multiscale_path = os.path.join(output_path, 'multiscale')
+    if not os.path.exists(multiscale_path):
+        return None
+    
+    pattern = os.path.join(multiscale_path, 's*')
+    level_dirs = glob.glob(pattern)
+    
+    if not level_dirs:
+        return None
+    
+    levels = []
+    for level_dir in level_dirs:
+        dirname = os.path.basename(level_dir)
+        if dirname.startswith('s') and dirname[1:].isdigit():
+            levels.append(int(dirname[1:]))
+    
+    if not levels:
+        return None
+    
+    return max(levels)
+
+def update_ome_metadata_if_needed(output_path, use_ome_structure):
+    """Update OME-Zarr metadata if OME structure is used and multiscale levels exist.
+    
+    Supports both zarr2 (.zattrs) and zarr3 (zarr.json) formats.
+    """
+    if not use_ome_structure:
+        return
+    
+    max_level = auto_detect_max_level(output_path)
+    if max_level is None:
+        print("No multiscale levels detected - skipping metadata update")
+        return
+    
+    if max_level == 0:
+        print("Only s0 level detected - no multiscale metadata update needed")
+        return
+    
+    # Detect zarr format by checking for metadata files
+    multiscale_path = os.path.join(output_path, 'multiscale')
+    zarr3_metadata = os.path.join(multiscale_path, 'zarr.json')
+    zarr2_metadata = os.path.join(multiscale_path, '.zattrs')
+    
+    try:
+        if os.path.exists(zarr3_metadata):
+            print(f"Updating zarr3 OME metadata for {output_path} with levels s0-s{max_level}")
+            update_ome_multiscale_metadata(output_path, max_level=max_level)
+            print("OME metadata updated successfully!")
+        elif os.path.exists(zarr2_metadata):
+            print(f"Updating zarr2 OME metadata for {output_path} with levels s0-s{max_level}")
+            update_ome_multiscale_metadata_zarr2(output_path, max_level=max_level)
+            print("OME metadata updated successfully!")
+        else:
+            print("Warning: No zarr metadata file found (.zattrs or zarr.json) - skipping metadata update")
+    except Exception as e:
+        print(f"Warning: Failed to update OME metadata: {e}")
 
 

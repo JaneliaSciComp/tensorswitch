@@ -47,6 +47,10 @@ def process(base_path, output_path, level, start_idx=0, stop_idx=None, downsampl
         custom_chunk_shape=custom_chunk_shape
     )
 
+    # Create basic output directory structure
+    output_array_path = f"{downsampled_saved_path}/multiscale/s{level}"
+    os.makedirs(output_array_path, exist_ok=True)
+
     downsampled_saved = create_output_store(downsampled_saved_spec)
 
     #chunk_shape = downsampled_saved.chunk_layout.write_chunk.shape
