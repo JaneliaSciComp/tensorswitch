@@ -14,6 +14,8 @@ import h5py
 import json
 import glob
 from ome_types import from_xml
+import xml.etree.ElementTree as ET
+import re
 
 def get_chunk_domains(chunk_shape, array, linear_indices_to_process=None):
     first_chunk_domain = ts.IndexDomain(inclusive_min=array.origin, shape=chunk_shape)
@@ -137,9 +139,13 @@ def zarr3_store_spec(path, shape, dtype, use_shard=True, level_path="s0", use_om
         # For plain zarr3: write directly to specified path
         array_path = path
     
-    # Determine dimension names based on shape
+    # Determine dimension names based on shape - will be updated in calling function if OME metadata available
     if len(shape) == 3:
-        dimension_names = ["z", "y", "x"]
+        # For 3D, assume channels if first dimension is small, otherwise Z
+        if shape[0] <= 10:
+            dimension_names = ["c", "y", "x"]
+        else:
+            dimension_names = ["z", "y", "x"]
     elif len(shape) == 4:
         dimension_names = ["c", "z", "y", "x"]
     elif len(shape) == 5:
@@ -607,7 +613,16 @@ def update_ome_multiscale_metadata_zarr2(zarr_path, max_level=4):
     # Write back updated metadata
     with open(zattrs_path, 'w') as f:
         json.dump(metadata, f, indent=2)
-    
+
+    # Ensure .zgroup file exists (create if missing)
+    multiscale_path = os.path.join(zarr_path, "multiscale")
+    zgroup_path = os.path.join(multiscale_path, '.zgroup')
+    if not os.path.exists(zgroup_path):
+        zgroup_metadata = {"zarr_format": 2}
+        with open(zgroup_path, 'w') as f:
+            json.dump(zgroup_metadata, f, indent=4)
+        print(f"Created missing .zgroup file at {zgroup_path}")
+
     print(f"Updated zarr2 OME metadata for {zarr_path} with levels multiscale/s0-s{max_level}")
 
 def load_ims_stack(ims_file):
@@ -780,33 +795,110 @@ def auto_detect_max_level(output_path):
 
 def create_zarr2_ome_metadata(ome_xml, array_shape, image_name, pixel_sizes=None):
     """Create OME-ZARR metadata structure for zarr2 format (.zattrs)."""
-    
-    # Build axes information based on array shape
+
+    # Build axes information based on OME-XML metadata if available
     axes = []
-    if len(array_shape) == 3:
-        axes = [
-            {"name": "z", "type": "space", "unit": "micrometer"},
-            {"name": "y", "type": "space", "unit": "micrometer"},
-            {"name": "x", "type": "space", "unit": "micrometer"}
-        ]
-    elif len(array_shape) == 4:
-        axes = [
-            {"name": "c", "type": "channel"},
-            {"name": "z", "type": "space", "unit": "micrometer"},
-            {"name": "y", "type": "space", "unit": "micrometer"},
-            {"name": "x", "type": "space", "unit": "micrometer"}
-        ]
-    elif len(array_shape) == 5:
-        axes = [
-            {"name": "t", "type": "time", "unit": "millisecond"},
-            {"name": "c", "type": "channel"},
-            {"name": "z", "type": "space", "unit": "micrometer"},
-            {"name": "y", "type": "space", "unit": "micrometer"},
-            {"name": "x", "type": "space", "unit": "micrometer"}
-        ]
-    else:
-        # Fallback for other dimensions
-        axes = [{"name": f"axis_{i}", "type": "space"} for i in range(len(array_shape))]
+
+    if ome_xml:
+        # Extract dimension information from OME-XML
+        try:
+            # Parse XML to find DimensionOrder and sizes
+            if isinstance(ome_xml, str):
+                root = ET.fromstring(ome_xml)
+            else:
+                root = ome_xml
+
+            # Find Pixels element
+            pixels_elem = None
+            for elem in root.iter():
+                if elem.tag.endswith('Pixels'):
+                    pixels_elem = elem
+                    break
+
+            if pixels_elem is not None:
+                dimension_order = pixels_elem.get('DimensionOrder', '')
+                size_x = int(pixels_elem.get('SizeX', 0))
+                size_y = int(pixels_elem.get('SizeY', 0))
+                size_z = int(pixels_elem.get('SizeZ', 1))
+                size_c = int(pixels_elem.get('SizeC', 1))
+                size_t = int(pixels_elem.get('SizeT', 1))
+
+                print(f"OME DimensionOrder: {dimension_order}")
+                print(f"OME Sizes: X={size_x}, Y={size_y}, Z={size_z}, C={size_c}, T={size_t}")
+                print(f"Array shape: {array_shape}")
+
+                # Map dimension order to active dimensions (size > 1)
+                # For Python/numpy arrays, OME DimensionOrder should be read backwards
+                dim_to_size = {'X': size_x, 'Y': size_y, 'Z': size_z, 'C': size_c, 'T': size_t}
+                active_dims = []
+
+                # Read dimension order backwards for Python array layout
+                for dim_char in reversed(dimension_order):
+                    if dim_to_size.get(dim_char, 1) > 1:
+                        active_dims.append(dim_char.lower())
+
+                print(f"Active dimensions (size > 1, in Python array order): {active_dims}")
+
+                # Create axes based on active dimensions
+                if len(active_dims) == len(array_shape):
+                    for dim_name in active_dims:
+                        if dim_name in ['x', 'y', 'z']:
+                            axes.append({"name": dim_name, "type": "space", "unit": "micrometer"})
+                        elif dim_name == 'c':
+                            axes.append({"name": dim_name, "type": "channel"})
+                        elif dim_name == 't':
+                            axes.append({"name": dim_name, "type": "time", "unit": "millisecond"})
+                        else:
+                            axes.append({"name": dim_name, "type": "space"})
+
+                    print(f"Created axes from OME metadata: {[ax['name'] for ax in axes]}")
+                else:
+                    print(f"Warning: Active dimensions {len(active_dims)} don't match array shape {len(array_shape)}, using fallback")
+                    axes = []  # Fall back to default logic
+            else:
+                print("No Pixels element found in OME-XML, using fallback")
+                axes = []
+
+        except Exception as e:
+            print(f"Warning: Could not parse OME-XML for dimension information: {e}")
+            axes = []
+
+    # Fallback to default patterns if OME parsing failed or no OME-XML provided
+    if not axes:
+        if len(array_shape) == 3:
+            # For 3D, check if first dimension is small (likely channels)
+            if array_shape[0] <= 10:
+                axes = [
+                    {"name": "c", "type": "channel"},
+                    {"name": "y", "type": "space", "unit": "micrometer"},
+                    {"name": "x", "type": "space", "unit": "micrometer"}
+                ]
+            else:
+                axes = [
+                    {"name": "z", "type": "space", "unit": "micrometer"},
+                    {"name": "y", "type": "space", "unit": "micrometer"},
+                    {"name": "x", "type": "space", "unit": "micrometer"}
+                ]
+        elif len(array_shape) == 4:
+            axes = [
+                {"name": "c", "type": "channel"},
+                {"name": "z", "type": "space", "unit": "micrometer"},
+                {"name": "y", "type": "space", "unit": "micrometer"},
+                {"name": "x", "type": "space", "unit": "micrometer"}
+            ]
+        elif len(array_shape) == 5:
+            axes = [
+                {"name": "t", "type": "time", "unit": "millisecond"},
+                {"name": "c", "type": "channel"},
+                {"name": "z", "type": "space", "unit": "micrometer"},
+                {"name": "y", "type": "space", "unit": "micrometer"},
+                {"name": "x", "type": "space", "unit": "micrometer"}
+            ]
+        else:
+            # Fallback for other dimensions
+            axes = [{"name": f"axis_{i}", "type": "space"} for i in range(len(array_shape))]
+
+        print(f"Using fallback axes: {[ax['name'] for ax in axes]}")
     
     # Extract pixel sizes from OME XML if available
     scale_factors = [1.0] * len(array_shape)
@@ -853,11 +945,19 @@ def create_zarr2_ome_metadata(ome_xml, array_shape, image_name, pixel_sizes=None
     return metadata
 
 def write_zarr2_group_metadata(multiscale_path, metadata):
-    """Write zarr2 group-level .zattrs file with OME-ZARR metadata."""
+    """Write zarr2 group-level .zattrs and .zgroup files with OME-ZARR metadata."""
     os.makedirs(multiscale_path, exist_ok=True)
+
+    # Write .zattrs file with OME-ZARR metadata
     zattrs_path = os.path.join(multiscale_path, '.zattrs')
     with open(zattrs_path, 'w') as f:
         json.dump(metadata, f, indent=2)
+
+    # Write .zgroup file to define zarr2 group
+    zgroup_path = os.path.join(multiscale_path, '.zgroup')
+    zgroup_metadata = {"zarr_format": 2}
+    with open(zgroup_path, 'w') as f:
+        json.dump(zgroup_metadata, f, indent=4)
 
 def update_ome_metadata_if_needed(output_path, use_ome_structure):
     """Update OME-Zarr metadata if OME structure is used and multiscale levels exist.
