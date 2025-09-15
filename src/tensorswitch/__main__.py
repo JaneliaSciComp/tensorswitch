@@ -19,7 +19,12 @@ from .tasks import n5_to_zarr2
 from .tasks import tiff_to_zarr3_s0
 from .tasks import nd2_to_zarr3_s0
 from .tasks import ims_to_zarr3_s0
+from .tasks import nd2_to_zarr2_s0
+from .tasks import ims_to_zarr2_s0
+from .tasks import tiff_to_zarr2_s0
+from .tasks import downsample_zarr2
 from .utils import load_nd2_stack, load_ims_stack, zarr3_store_spec, get_total_chunks_from_store
+from .dask_utils import submit_dask_job
 
 # Set umask to allow group write access
 os.umask(0o0002)
@@ -138,6 +143,20 @@ def submit_job(args):
 
     print(f"The total number of chunks is {total_chunks} with downsample={args.downsample} and level={args.level}")
     
+    # Check if using Dask JobQueue
+    if hasattr(args, 'use_dask_jobqueue') and args.use_dask_jobqueue:
+        print("Using Dask JobQueue submission")
+        success = submit_dask_job(args, total_chunks)
+        if not success:
+            print("Dask submission failed")
+            return
+        else:
+            print("Dask submission completed successfully")
+            return
+    
+    # Traditional LSF bsub method
+    print("Using traditional LSF bsub submission")
+    
     # The number of volumes can be at most total_chunks
     num_volumes = min(total_chunks, args.num_volumes)
     for i in range(num_volumes):
@@ -202,7 +221,7 @@ def submit_job(args):
 
 def main():
     parser = argparse.ArgumentParser(description="Unified Pipeline Manager")
-    parser.add_argument("--task", required=True, choices=["n5_to_zarr2", "n5_to_n5", "downsample_shard_zarr3", "tiff_to_zarr3_s0", "nd2_to_zarr3_s0", "ims_to_zarr3_s0"])
+    parser.add_argument("--task", required=True, choices=["n5_to_zarr2", "n5_to_n5", "downsample_shard_zarr3", "tiff_to_zarr3_s0", "nd2_to_zarr3_s0", "ims_to_zarr3_s0", "nd2_to_zarr2_s0", "ims_to_zarr2_s0", "tiff_to_zarr2_s0", "downsample_zarr2"])
     parser.add_argument("--base_path", required=True, help="Input dataset path")
     parser.add_argument("--output_path", required=True, help="Output dataset path (only needed for conversions)")
     parser.add_argument("--level", type=int, default=0, help="Levels to process")
@@ -219,21 +238,25 @@ def main():
     parser.add_argument("--wall_time", type=str, default="1:00", help="Wall time for LSF job (-W flag)")
     parser.add_argument("--custom_shard_shape", type=str, help="Custom shard shape as comma-separated values (e.g., '128,576,576')")
     parser.add_argument("--custom_chunk_shape", type=str, help="Custom chunk shape as comma-separated values (e.g., '32,32,32')")
+    parser.add_argument("--use_dask_jobqueue", action="store_true", help="Use Dask JobQueue instead of direct LSF submission")
 
     args = parser.parse_args()
     
     # Parse custom shard and chunk shapes
     custom_shard_shape = None
-    if args.custom_shard_shape:
+    if args.custom_shard_shape and args.custom_shard_shape != "None":
         custom_shard_shape = [int(x) for x in args.custom_shard_shape.split(',')]
     
     custom_chunk_shape = None
-    if args.custom_chunk_shape:
+    if args.custom_chunk_shape and args.custom_chunk_shape != "None":
         custom_chunk_shape = [int(x) for x in args.custom_chunk_shape.split(',')]
 
     if args.submit:
         if args.project == "None":
             raise ValueError(f"Project cannot be None when submitting.")
+        
+        # Both methods use the same submit_job function
+        # The Dask routing happens inside submit_job
         submit_job(args)
 
     else:
@@ -249,16 +272,25 @@ def main():
             nd2_to_zarr3_s0.process(args.base_path, args.output_path, bool(args.use_shard), args.memory_limit, args.start_idx, args.stop_idx, bool(args.use_ome_structure), custom_shard_shape, custom_chunk_shape)
         elif args.task == "ims_to_zarr3_s0":
             ims_to_zarr3_s0.process(args.base_path, args.output_path, bool(args.use_shard), args.memory_limit, args.start_idx, args.stop_idx, bool(args.use_ome_structure))
+        elif args.task == "nd2_to_zarr2_s0":
+            nd2_to_zarr2_s0.process(args.base_path, args.output_path, args.memory_limit, args.start_idx, args.stop_idx, bool(args.use_ome_structure), custom_shard_shape, custom_chunk_shape)
+        elif args.task == "ims_to_zarr2_s0":
+            ims_to_zarr2_s0.process(args.base_path, args.output_path, args.memory_limit, args.start_idx, args.stop_idx, bool(args.use_ome_structure))
+        elif args.task == "tiff_to_zarr2_s0":
+            tiff_to_zarr2_s0.process(args.base_path, args.output_path, args.memory_limit, args.start_idx, args.stop_idx, bool(args.use_ome_structure))
+        elif args.task == "downsample_zarr2":
+            downsample_zarr2.process(args.base_path, args.output_path, args.level, args.start_idx, args.stop_idx, bool(args.downsample), args.memory_limit, custom_chunk_shape)
         else:
             raise ValueError(f"Unsupported task: {args.task}")
         
         # Update OME-Zarr metadata after processing is complete
-        # For tasks that support use_ome_structure parameter
+        # For zarr3 tasks that support use_ome_structure parameter
         if args.task in ["tiff_to_zarr3_s0", "nd2_to_zarr3_s0", "ims_to_zarr3_s0"]:
             update_ome_metadata_if_needed(args.output_path, bool(args.use_ome_structure))
-        # For downsample tasks that work with existing OME structure
+        # For zarr3 downsample tasks that work with existing OME structure
         elif args.task == "downsample_shard_zarr3":
             update_ome_metadata_if_needed(args.output_path, use_ome_structure=True)
+        # Note: zarr2 tasks handle their own OME metadata updates internally
 
 if __name__ == "__main__":
     main()
