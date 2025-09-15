@@ -137,6 +137,16 @@ def zarr3_store_spec(path, shape, dtype, use_shard=True, level_path="s0", use_om
         # For plain zarr3: write directly to specified path
         array_path = path
     
+    # Determine dimension names based on shape
+    if len(shape) == 3:
+        dimension_names = ["z", "y", "x"]
+    elif len(shape) == 4:
+        dimension_names = ["c", "z", "y", "x"]
+    elif len(shape) == 5:
+        dimension_names = ["t", "c", "z", "y", "x"]
+    else:
+        dimension_names = [f"dim_{i}" for i in range(len(shape))]
+    
     return {
         'driver': 'zarr3',
         'kvstore': {'driver': 'file', 'path': array_path},
@@ -146,7 +156,8 @@ def zarr3_store_spec(path, shape, dtype, use_shard=True, level_path="s0", use_om
             'chunk_key_encoding': {'name': 'default'},
             'data_type': dtype,
             'node_type': 'array',
-            'codecs': codecs
+            'codecs': codecs,
+            'dimension_names': dimension_names
         }
     }
 
@@ -766,6 +777,87 @@ def auto_detect_max_level(output_path):
         return None
     
     return max(levels)
+
+def create_zarr2_ome_metadata(ome_xml, array_shape, image_name, pixel_sizes=None):
+    """Create OME-ZARR metadata structure for zarr2 format (.zattrs)."""
+    
+    # Build axes information based on array shape
+    axes = []
+    if len(array_shape) == 3:
+        axes = [
+            {"name": "z", "type": "space", "unit": "micrometer"},
+            {"name": "y", "type": "space", "unit": "micrometer"},
+            {"name": "x", "type": "space", "unit": "micrometer"}
+        ]
+    elif len(array_shape) == 4:
+        axes = [
+            {"name": "c", "type": "channel"},
+            {"name": "z", "type": "space", "unit": "micrometer"},
+            {"name": "y", "type": "space", "unit": "micrometer"},
+            {"name": "x", "type": "space", "unit": "micrometer"}
+        ]
+    elif len(array_shape) == 5:
+        axes = [
+            {"name": "t", "type": "time", "unit": "millisecond"},
+            {"name": "c", "type": "channel"},
+            {"name": "z", "type": "space", "unit": "micrometer"},
+            {"name": "y", "type": "space", "unit": "micrometer"},
+            {"name": "x", "type": "space", "unit": "micrometer"}
+        ]
+    else:
+        # Fallback for other dimensions
+        axes = [{"name": f"axis_{i}", "type": "space"} for i in range(len(array_shape))]
+    
+    # Extract pixel sizes from OME XML if available
+    scale_factors = [1.0] * len(array_shape)
+    if pixel_sizes is not None:
+        # Map pixel sizes to the correct axes
+        if len(array_shape) == 3:  # ZYX
+            scale_factors = [pixel_sizes.get('z', 1.0), pixel_sizes.get('y', 1.0), pixel_sizes.get('x', 1.0)]
+        elif len(array_shape) == 4:  # CZYX
+            scale_factors = [1.0, pixel_sizes.get('z', 1.0), pixel_sizes.get('y', 1.0), pixel_sizes.get('x', 1.0)]
+        elif len(array_shape) == 5:  # TCZYX
+            scale_factors = [1.0, 1.0, pixel_sizes.get('z', 1.0), pixel_sizes.get('y', 1.0), pixel_sizes.get('x', 1.0)]
+    
+    # Create coordinate transformations for s0 level
+    coordinate_transformations = [{
+        "type": "scale",
+        "scale": scale_factors
+    }]
+    
+    # Build multiscales metadata (zarr2 format)
+    multiscales = [{
+        "version": "0.4",
+        "axes": axes,
+        "datasets": [{
+            "path": "s0",
+            "coordinateTransformations": coordinate_transformations
+        }],
+        "name": image_name,
+        "type": "image"
+    }]
+    
+    # Create zarr2 metadata structure
+    metadata = {
+        "multiscales": multiscales
+    }
+    
+    # Add OME XML if available - ensure it's a string
+    if ome_xml:
+        if isinstance(ome_xml, str):
+            metadata["ome_xml"] = ome_xml
+        else:
+            # Convert OME object to string if needed
+            metadata["ome_xml"] = str(ome_xml)
+    
+    return metadata
+
+def write_zarr2_group_metadata(multiscale_path, metadata):
+    """Write zarr2 group-level .zattrs file with OME-ZARR metadata."""
+    os.makedirs(multiscale_path, exist_ok=True)
+    zattrs_path = os.path.join(multiscale_path, '.zattrs')
+    with open(zattrs_path, 'w') as f:
+        json.dump(metadata, f, indent=2)
 
 def update_ome_metadata_if_needed(output_path, use_ome_structure):
     """Update OME-Zarr metadata if OME structure is used and multiscale levels exist.
