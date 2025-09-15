@@ -35,7 +35,14 @@ def update_zarr2_ome_xml_nd2(zarr_path, source_nd2_path):
         # Write back to .zattrs
         with open(zattrs_path, 'w') as f:
             json.dump(metadata, f, indent=2)
-            
+
+        # Ensure .zgroup file exists (create if missing)
+        zgroup_path = os.path.join(zarr_path, '.zgroup')
+        if not os.path.exists(zgroup_path):
+            zgroup_metadata = {"zarr_format": 2}
+            with open(zgroup_path, 'w') as f:
+                json.dump(zgroup_metadata, f, indent=4)
+
         print(f"Successfully updated ome_xml in {zattrs_path} while preserving multiscales metadata")
     else:
         print("No OME XML found in source ND2")
