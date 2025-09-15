@@ -24,10 +24,14 @@ tensorswitch/
 │       ├── tasks
 │       │   ├── __init__.py
 │       │   ├── downsample_shard_zarr3.py # Downsample using shards
+│       │   ├── downsample_zarr2.py       # Downsample existing Zarr V2 datasets
 │       │   ├── n5_to_n5.py               # N5 to N5 conversion logic
 │       │   ├── n5_to_zarr2.py            # N5 to Zarr V2 conversion logic
+│       │   ├── tiff_to_zarr2_s0.py       # TIFF to Zarr V2 level s0 with OME-Zarr metadata
 │       │   ├── tiff_to_zarr3_s0.py       # TIFF to Zarr V3 level s0 with OME-Zarr metadata
+│       │   ├── nd2_to_zarr2_s0.py        # ND2 to Zarr V2 level s0 with OME-Zarr metadata
 │       │   ├── nd2_to_zarr3_s0.py        # ND2 to Zarr V3 level s0 with OME-Zarr metadata
+│       │   ├── ims_to_zarr2_s0.py        # IMS to Zarr V2 level s0 with OME-Zarr metadata
 │       │   ├── ims_to_zarr3_s0.py        # IMS to Zarr V3 level s0 with OME-Zarr metadata
 │       ├── utils.py                      # Common utilities and OME-Zarr metadata functions
 │       └── gui/                          # Web GUI interface
@@ -124,26 +128,33 @@ python -m tensorswitch --task downsample_shard_zarr3 \
 |---------------------------|-----------------------------------------|
 | `n5_to_zarr2`            | Convert N5 to Zarr V2                   |
 | `n5_to_n5`               | Convert N5 to N5 (new chunking)         |
-| `downsample_shard_zarr3` | Downsample existing Zarr dataset with sharding |
+| `downsample_shard_zarr3` | Downsample existing Zarr V3 dataset with sharding |
+| `downsample_zarr2`       | Downsample existing Zarr V2 dataset     |
+| `tiff_to_zarr2_s0`       | Convert TIFF stack to Zarr V2 (s0) with OME-Zarr metadata |
 | `tiff_to_zarr3_s0`       | Convert TIFF stack to Zarr V3 (s0) with OME-Zarr metadata |
+| `nd2_to_zarr2_s0`        | Convert ND2 file to Zarr V2 (s0) with OME-Zarr metadata |
 | `nd2_to_zarr3_s0`        | Convert ND2 file to Zarr V3 (s0) with OME-Zarr metadata |
+| `ims_to_zarr2_s0`        | Convert IMS file to Zarr V2 (s0) with OME-Zarr metadata |
 | `ims_to_zarr3_s0`        | Convert IMS file to Zarr V3 (s0) with OME-Zarr metadata |
 
-All s0 conversion tasks create multiscale-compatible Zarr structures with proper OME-Zarr metadata.
+All s0 conversion tasks create multiscale-compatible Zarr structures with proper OME-Zarr metadata and correct dimension ordering.
 
 ### Enhanced OME-ZARR Metadata
 
-All source format conversions (`tiff_to_zarr3_s0`, `nd2_to_zarr3_s0`, `ims_to_zarr3_s0`) now automatically preserve rich metadata from source files when using `--use_ome_structure 1`:
+All conversion tasks now support both Zarr V2 and Zarr V3 formats with automatic metadata preservation:
 
-- **Automatic OME XML Extraction**: Source OME XML is automatically extracted and added to zarr.json at the top-level attributes
-- **Rich Metadata Preservation**: Voxel sizes, acquisition parameters, and instrument settings are preserved
-- **No Manual Steps Required**: Previously required separate `update_metadata.py --check-ome-xml` calls are now automatic
-- **Consistent Structure**: All conversions follow the same OME-Zarr v0.5 specification
+**Zarr V2 Tasks:** `tiff_to_zarr2_s0`, `nd2_to_zarr2_s0`, `ims_to_zarr2_s0`, `downsample_zarr2`
+**Zarr V3 Tasks:** `tiff_to_zarr3_s0`, `nd2_to_zarr3_s0`, `ims_to_zarr3_s0`, `downsample_shard_zarr3`
 
-**Key Improvements:**
-- OME XML is stored at `zarr.json['attributes']['ome_xml']` (top-level for compatibility)
-- Source-specific metadata enhancement (IMS spatial calibration, ND2 acquisition settings, TIFF microscopy parameters)
-- Eliminates the need for post-conversion metadata updates
+- **Automatic OME XML Extraction**: Source metadata is automatically preserved
+- **Correct Dimension Ordering**: Fixes dimension mapping issues (e.g., XYCTZ → [c,y,x])
+- **Complete Zarr2 Support**: Creates both .zattrs and .zgroup files
+- **No Manual Steps Required**: Metadata is handled automatically during conversion
+
+**Recent Fixes:**
+- Fixed dimension ordering for ND2 files with multi-channel data
+- Added missing .zgroup files for zarr2 format compliance
+- Universal metadata handling across all formats
 
 
 ### 4. Example Commands
@@ -153,9 +164,14 @@ All source format conversions (`tiff_to_zarr3_s0`, `nd2_to_zarr3_s0`, `ims_to_za
 python -m tensorswitch --task n5_to_zarr2     --base_path /path/to/n5     --output_path /path/to/zarr2     --level 0
 ```
 
-#### Downsample Zarr locally
+#### Downsample Zarr v2 locally
 ```bash
-python -m tensorswitch  --task downsample_shard_zarr3     --base_path /path/to/zarr/s0     --output_path /path/to/zarr     --level 1     --use_shard 1
+python -m tensorswitch --task downsample_zarr2 --base_path /path/to/zarr2/s0 --output_path /path/to/zarr2 --level 1
+```
+
+#### Downsample Zarr v3 locally
+```bash
+python -m tensorswitch --task downsample_shard_zarr3 --base_path /path/to/zarr/s0 --output_path /path/to/zarr --level 1 --use_shard 1
 ```
 
 #### Submit N5 to Zarr jobs to cluster
@@ -163,9 +179,19 @@ python -m tensorswitch  --task downsample_shard_zarr3     --base_path /path/to/z
 python -m tensorswitch --task n5_to_zarr2 --base_path /path/to/n5 --output_path /path/to/zarr2 --submit --project your_project_name
 ```
 
+#### Convert TIFF to Zarr v2 s0 with automatic OME metadata
+```bash
+python -m tensorswitch --task tiff_to_zarr2_s0 --base_path /path/to/tiff_folder --output_path /path/to/zarr2 --use_ome_structure 1
+```
+
 #### Convert TIFF to Zarr v3 s0 with automatic OME metadata
 ```bash
 python -m tensorswitch --task tiff_to_zarr3_s0 --base_path /path/to/tiff_folder --output_path /path/to/zarr3 --use_shard 0 --use_ome_structure 1
+```
+
+#### Convert ND2 to Zarr v2 s0 with automatic OME metadata (local)
+```bash
+python -m tensorswitch --task nd2_to_zarr2_s0 --base_path /path/to/file.nd2 --output_path /path/to/output.zarr --use_ome_structure 1
 ```
 
 #### Convert ND2 to Zarr v3 s0 with automatic OME metadata (local)
