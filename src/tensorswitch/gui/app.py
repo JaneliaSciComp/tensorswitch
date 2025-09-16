@@ -16,13 +16,26 @@ import asyncio
 
 # Import lab paths system
 try:
-    from .lab_paths_system import get_all_projects
-    from .lab_paths_system.simple_path_selector import create_simple_path_helper_panel
+    from lab_paths_system import get_all_projects
+    from lab_paths_system.path_selector import create_simple_path_helper_panel
     LAB_PATHS_AVAILABLE = True
     print("Lab paths system loaded successfully")
 except ImportError as e:
     print(f"Lab paths system not available: {e}")
     LAB_PATHS_AVAILABLE = False
+
+# Import format detection system
+FORMAT_DETECTION_AVAILABLE = False
+try:
+    from format_detection import FormatDetector, TaskPlanner
+    FORMAT_DETECTION_AVAILABLE = True
+    print("GUI: Format detection system loaded successfully")
+except ImportError as e:
+    print(f"GUI: Format detection system not available: {e}")
+except Exception as e:
+    print(f"GUI: Format detection system failed: {e}")
+    import traceback
+    traceback.print_exc()
 
 class SimpleTensorSwitchGUI(param.Parameterized):
     """Multi-page GUI for TensorSwitch with welcome page and structured workflow"""
@@ -32,12 +45,16 @@ class SimpleTensorSwitchGUI(param.Parameterized):
     task = param.ObjectSelector(
         default="tiff_to_zarr3_s0",
         objects=[
-            "tiff_to_zarr3_s0", 
-            "nd2_to_zarr3_s0", 
+            "tiff_to_zarr3_s0",
+            "nd2_to_zarr3_s0",
             "ims_to_zarr3_s0",
+            "tiff_to_zarr2_s0",
+            "nd2_to_zarr2_s0",
+            "ims_to_zarr2_s0",
             "n5_to_zarr2",
-            "n5_to_n5", 
-            "downsample_shard_zarr3"
+            "n5_to_n5",
+            "downsample_shard_zarr3",
+            "downsample_zarr2"
         ],
         doc="Conversion task"
     )
@@ -50,12 +67,32 @@ class SimpleTensorSwitchGUI(param.Parameterized):
     # Additional parameters for advanced tasks
     level = param.Integer(default=0, bounds=(0, 10), doc="Level for downsampling (0 = full resolution)")
     use_shard = param.Boolean(default=False, doc="Use sharded format for output")
-    use_ome_structure = param.Boolean(default=True, doc="Use OME-Zarr multiscale structure")
+    use_ome_structure = param.Boolean(default=True, doc="Use OME-Zarr multiscale structure with automatic metadata updates")
     cores = param.String(default="2", doc="Number of CPU cores for cluster jobs")
     wall_time = param.String(default="2:00", doc="Wall time for cluster jobs (HH:MM)")
     memory_limit = param.Integer(default=50, bounds=(10, 90), doc="Memory limit percentage")
     num_volumes = param.Integer(default=8, bounds=(1, 100), doc="Number of parallel volumes for cluster processing")
     run_locally = param.Boolean(default=True, doc="Run locally (unchecked = submit to cluster)")
+    use_dask_jobqueue = param.Boolean(default=False, doc="Use Dask JobQueue for cluster submission (advanced)")
+
+    # Custom shape parameters
+    custom_shard_shape = param.String(default="", doc="Custom shard shape (e.g., '128,576,576') - leave empty for defaults")
+    custom_chunk_shape = param.String(default="", doc="Custom chunk shape (e.g., '32,32,32') - leave empty for defaults")
+
+    # Workflow mode selection
+    workflow_mode = param.ObjectSelector(
+        default="smart",
+        objects=["smart", "manual"],
+        doc="Workflow mode: smart (auto-detect) or manual (task selection)"
+    )
+
+    # Smart format selection parameters
+    output_format = param.ObjectSelector(
+        default="zarr3",
+        objects=["zarr3", "zarr2", "n5"],
+        doc="Output format"
+    )
+    max_downsample_level = param.Integer(default=0, bounds=(0, 5), doc="Maximum downsample level (0=no downsampling)")
     
     def __init__(self):
         super().__init__()
@@ -64,12 +101,32 @@ class SimpleTensorSwitchGUI(param.Parameterized):
         self.job_running = False
         self.progress_data = {'total_chunks': 0, 'processed_chunks': 0, 'stage': 'Ready'}
         self.current_page = "welcome"  # Track current page: welcome, conversion, progress
-        
+
+        # Initialize format detection system
+        self._setup_format_detection()
+
+        # Initialize conversion plan
+        self.conversion_plan = None
+
         # Initialize lab paths system and populate project dropdown
         self._setup_lab_paths_integration()
-        
+
         self.create_layout()
-    
+
+    def _setup_format_detection(self):
+        """Setup format detection system"""
+        print(f"DEBUG: FORMAT_DETECTION_AVAILABLE = {FORMAT_DETECTION_AVAILABLE}")
+        if FORMAT_DETECTION_AVAILABLE:
+            self.format_detector = FormatDetector()
+            self.task_planner = TaskPlanner()
+            self.input_analysis = None
+            print("Format detection system initialized")
+        else:
+            self.format_detector = None
+            self.task_planner = None
+            self.input_analysis = None
+            print("Format detection system NOT available - smart mode disabled")
+
     def _setup_lab_paths_integration(self):
         """Setup lab paths integration and populate project dropdown"""
         if LAB_PATHS_AVAILABLE:
@@ -131,8 +188,9 @@ class SimpleTensorSwitchGUI(param.Parameterized):
         <div style="background: #e8f5e8; padding: 20px; border-radius: 8px; margin-top: 30px;">
         <h3 style="color: #27ae60; margin-bottom: 15px;">✨ Key Features:</h3>
         <p style="color: #2c3e50;">
-        • Support for 6 conversion tasks • Real-time progress tracking<br>
-        • Local and cluster execution • OME-Zarr metadata preservation<br>
+        • Support for 10 conversion tasks • Zarr2 & Zarr3 format support<br>
+        • Local and cluster execution • Dask JobQueue integration<br>
+        • Real-time progress tracking • Automatic OME-Zarr multiscale metadata<br>
         • Chunked processing for large datasets • LSF job submission
         </p>
         </div>
@@ -158,20 +216,30 @@ class SimpleTensorSwitchGUI(param.Parameterized):
         )
         
     def create_conversion_page(self):
-        """Create the main conversion configuration page"""
-        # Page header
+        """Create the main conversion configuration page with clear step-by-step workflow"""
+        # Page header with progress steps
         header = pn.pane.Markdown("""
-        # 🔬 TensorSwitch Conversion
-        ---
-        """, styles={'text-align': 'center', 'margin-bottom': '30px'})
+        # 🔬 TensorSwitch Conversion Workflow
+
+        <div style="background: #e3f2fd; padding: 20px; border-radius: 10px; margin-bottom: 30px;">
+        <h3 style="margin-top: 0; color: #1976d2;">📋 Simple 4-Step Process:</h3>
+        <p style="margin-bottom: 0; font-size: 1.1em;">
+        <strong>Step 1:</strong> Enter file paths → <strong>Step 2:</strong> Choose workflow mode → <strong>Step 3:</strong> Configure conversion → <strong>Step 4:</strong> Execute
+        </p>
+        </div>
+        """, styles={'text-align': 'center', 'margin-bottom': '20px'})
         
-        # File paths section with hints and integrated path helper
+        # STEP 1: File paths section with clear numbering
+        step1_header = pn.pane.Markdown("""
+        ## 📁 Step 1: Specify Input and Output Paths
+        """, styles={'color': '#1976d2', 'margin-bottom': '15px'})
+
         file_hints = pn.pane.Markdown("""
         **💡 Path Hints:**
-        - **PRFS storage**: `/groups/[lab_name]/...` 
+        - **PRFS storage**: `/groups/[lab_name]/...`
         - **NRS storage**: `/nrs/[lab_name]/...`
         - **Wiki Lab Path**: [Lab and Project File Share Paths](https://hhmi.atlassian.net/wiki/spaces/SCS/pages/152469629/Lab+and+Project+File+Share+Paths)
-        """, styles={'background': '#fff3cd', 'padding': '15px', 'border-radius': '8px', 'margin-bottom': '0px'})
+        """, styles={'background': '#fff3cd', 'padding': '15px', 'border-radius': '8px', 'margin-bottom': '15px'})
         
         self.input_widget = pn.widgets.TextInput(
             name="📁 Input File/Directory Path", 
@@ -200,7 +268,7 @@ class SimpleTensorSwitchGUI(param.Parameterized):
             path_selector_widget = pn.pane.Markdown("*Path helper not available*")
         
         file_section = pn.Column(
-            pn.pane.Markdown("### 📂 File Paths"),
+            step1_header,
             file_hints,
             path_selector_widget,
             pn.layout.Divider(),
@@ -209,32 +277,106 @@ class SimpleTensorSwitchGUI(param.Parameterized):
             styles={'background': '#ffffff', 'padding': '20px', 'border-radius': '10px', 'margin-bottom': '20px'}
         )
         
-        # Format selection (future feature placeholder)
-        format_section = pn.pane.Markdown("""
-        ### 🔄 Format Conversion
-        **Current**: Manual task selection (automatic format detection coming soon!)
-        """, styles={'background': '#e3f2fd', 'padding': '15px', 'border-radius': '8px', 'margin-bottom': '20px'})
+        # STEP 2: Workflow mode selection
+        step2_header = pn.pane.Markdown("""
+        ## 🔄 Step 2: Choose Your Workflow Mode
+        """, styles={'color': '#1976d2', 'margin-bottom': '15px'})
+
+        mode_section = pn.Column(
+            step2_header,
+            pn.pane.Markdown("""
+            **Choose your preferred workflow:**
+            - **🤖 Smart Mode**: Auto-detect input format and choose output (recommended for beginners)
+            - **⚙️ Manual Mode**: Traditional task selection for advanced users
+            """, styles={'background': '#f8f9fa', 'padding': '15px', 'border-radius': '8px', 'margin-bottom': '15px'}),
+            pn.Param(
+                self,
+                parameters=['workflow_mode'],
+                widgets={
+                    'workflow_mode': {'type': pn.widgets.RadioButtonGroup, 'name': 'Mode'}
+                }
+            ),
+            styles={'background': '#ffffff', 'padding': '20px', 'border-radius': '10px', 'margin-bottom': '20px'}
+        )
+
+        # STEP 3A: Format detection section (dynamic - only for smart mode)
+        format_header = pn.pane.Markdown("""
+        ## 🔍 Step 3A: Smart Format Detection (Smart Mode Only)
+        """, styles={'color': '#1976d2', 'margin-bottom': '15px'})
+        format_content = pn.pane.Markdown(
+            "**🔄 Format Detection**: Enter input path above to auto-detect format and view file metadata",
+            styles={'background': '#e3f2fd', 'padding': '15px', 'border-radius': '8px', 'margin-bottom': '20px'}
+        )
+        self.format_section = pn.Column(format_header, format_content)
+
+        # STEP 3B: Output format selection section (smart mode only)
+        output_header = pn.pane.Markdown("""
+        ## 📤 Step 3B: Configure Output Format (Smart Mode Only)
+        """, styles={'color': '#1976d2', 'margin-bottom': '15px'})
+
+        self.output_section = pn.Column(
+            output_header,
+            pn.pane.Markdown("""
+            **Choose your desired output format and processing options:**
+            - **Zarr3**: Latest format with sharding support (recommended)
+            - **Zarr2**: Legacy format for broader compatibility
+            - **N5**: Alternative chunked format
+            """, styles={'background': '#f8f9fa', 'padding': '10px', 'border-radius': '5px', 'margin-bottom': '10px'}),
+            pn.Param(
+                self,
+                parameters=['output_format', 'max_downsample_level'],
+                widgets={
+                    'output_format': {'type': pn.widgets.Select, 'name': 'Output format'},
+                    'max_downsample_level': {'type': pn.widgets.IntSlider, 'name': 'Max downsample level (0=no downsampling)'},
+                }
+            ),
+            styles={'background': '#ffffff', 'padding': '20px', 'border-radius': '10px', 'margin-bottom': '20px'}
+        )
+
+        # Conversion plan section (dynamic)
+        plan_header = pn.pane.Markdown("### 🗂️ Conversion Plan")
+        plan_content = pn.pane.Markdown(
+            "**Conversion Plan**: Configure input and output to see execution plan",
+            styles={'background': '#f8f9fa', 'padding': '15px', 'border-radius': '8px', 'margin-bottom': '20px'}
+        )
+        self.plan_section = pn.Column(plan_header, plan_content)
         
         # Task selection with helpful description
         task_description = pn.pane.Markdown("""
         **Select the conversion task based on your input and desired output formats:**
+
+        **Zarr3 Format (latest, with sharding support):**
         - **tiff_to_zarr3_s0**: Convert TIFF files to Zarr3 with OME metadata
         - **nd2_to_zarr3_s0**: Convert Nikon ND2 files to Zarr3 with OME metadata
         - **ims_to_zarr3_s0**: Convert Imaris IMS files to Zarr3 with OME metadata
+        - **downsample_shard_zarr3**: Create downsampled levels from existing Zarr3
+
+        **Zarr2 Format (legacy, broader compatibility):**
+        - **tiff_to_zarr2_s0**: Convert TIFF files to Zarr2 with OME metadata
+        - **nd2_to_zarr2_s0**: Convert Nikon ND2 files to Zarr2 with OME metadata
+        - **ims_to_zarr2_s0**: Convert Imaris IMS files to Zarr2 with OME metadata
+        - **downsample_zarr2**: Create downsampled levels from existing Zarr2
+
+        **Other Formats:**
         - **n5_to_zarr2**: Convert N5 format to Zarr2 format
         - **n5_to_n5**: Re-chunk existing N5 files
-        - **downsample_shard_zarr3**: Create downsampled levels from existing Zarr3
         """, styles={'background': '#f8f9fa', 'padding': '10px', 'border-radius': '5px', 'margin-bottom': '10px'})
         
-        task_section = pn.Column(
-            pn.pane.Markdown("### ⚙️ Conversion Task"),
+        # STEP 3C: Task selection section (manual mode only)
+        manual_task_header = pn.pane.Markdown("""
+        ## ⚙️ Step 3: Manual Task Selection (Manual Mode Only)
+        """, styles={'color': '#1976d2', 'margin-bottom': '15px'})
+
+        self.task_section = pn.Column(
+            manual_task_header,
             task_description,
             pn.Param(
                 self,
                 parameters=['task'],
                 widgets={'task': {'type': pn.widgets.Select, 'name': 'Select conversion task'}}
             ),
-            styles={'background': '#ffffff', 'padding': '20px', 'border-radius': '10px', 'margin-bottom': '20px'}
+            styles={'background': '#ffffff', 'padding': '20px', 'border-radius': '10px', 'margin-bottom': '20px'},
+            visible=False  # Start hidden since we default to smart mode
         )
         
         # Execution location with clear options
@@ -244,8 +386,13 @@ class SimpleTensorSwitchGUI(param.Parameterized):
         - **Submit to cluster**: Use LSF cluster (recommended for large files, requires project billing)
         """, styles={'background': '#f8f9fa', 'padding': '10px', 'border-radius': '5px', 'margin-bottom': '10px'})
         
+        # STEP 4: Execution configuration
+        step4_header = pn.pane.Markdown("""
+        ## 🚀 Step 4: Configure Execution & Run
+        """, styles={'color': '#1976d2', 'margin-bottom': '15px'})
+
         execution_section = pn.Column(
-            pn.pane.Markdown("### 🖥️ Execution Location"),
+            step4_header,
             execution_description,
             pn.Param(
                 self,
@@ -268,21 +415,41 @@ class SimpleTensorSwitchGUI(param.Parameterized):
                     'memory_limit': {'type': pn.widgets.IntSlider, 'name': 'Memory limit (%)'},
                 }
             ),
+            pn.pane.Markdown("**🎛️ Advanced Shape Parameters (Optional):**"),
+            pn.Param(
+                self,
+                parameters=['custom_shard_shape', 'custom_chunk_shape'],
+                widgets={
+                    'custom_shard_shape': {'type': pn.widgets.TextInput, 'name': 'Custom shard shape (e.g., 128,576,576)', 'placeholder': 'Leave empty for defaults'},
+                    'custom_chunk_shape': {'type': pn.widgets.TextInput, 'name': 'Custom chunk shape (e.g., 32,32,32)', 'placeholder': 'Leave empty for defaults'},
+                }
+            ),
             styles={'background': '#e8f5e8', 'padding': '20px', 'border-radius': '10px', 'margin-bottom': '20px'}
         )
         
+        # Dask JobQueue description
+        dask_description = pn.pane.Markdown("""
+        **🚀 Dask JobQueue (Advanced):**
+        - Uses advanced task management and error handling
+        - Creates independent LSF jobs with local Dask clusters
+        - Better CPU/memory utilization than traditional LSF
+        - Recommended for large datasets and complex workflows
+        """, styles={'background': '#e8f5e8', 'padding': '10px', 'border-radius': '5px', 'margin-bottom': '10px'})
+
         self.cluster_params = pn.Column(
             pn.pane.Markdown("### 🏢 Cluster Submission Options"),
             pn.Param(
                 self,
-                parameters=['project', 'cores', 'wall_time', 'num_volumes'],
+                parameters=['project', 'cores', 'wall_time', 'num_volumes', 'use_dask_jobqueue'],
                 widgets={
                     'project': {'type': pn.widgets.Select, 'name': 'Project for billing'},
                     'cores': {'type': pn.widgets.TextInput, 'name': 'CPU cores'},
                     'wall_time': {'type': pn.widgets.TextInput, 'name': 'Wall time (HH:MM)'},
                     'num_volumes': {'type': pn.widgets.IntSlider, 'name': 'Parallel volumes'},
+                    'use_dask_jobqueue': {'type': pn.widgets.Checkbox, 'name': 'Use Dask JobQueue (advanced)'},
                 }
             ),
+            dask_description,
             pn.pane.Markdown("**Plus all local processing options above**"),
             styles={'background': '#fff3cd', 'padding': '20px', 'border-radius': '10px', 'margin-bottom': '20px'},
             visible=False
@@ -314,8 +481,11 @@ class SimpleTensorSwitchGUI(param.Parameterized):
         self.conversion_layout = pn.Column(
             header,
             file_section,
-            format_section,
-            task_section,
+            mode_section,
+            self.format_section,
+            self.output_section,
+            self.plan_section,
+            self.task_section,
             execution_section,
             self.local_params,
             self.cluster_params,
@@ -324,9 +494,21 @@ class SimpleTensorSwitchGUI(param.Parameterized):
             sizing_mode="stretch_width",
             styles={'max-width': '800px', 'margin': '0 auto', 'padding': '20px'}
         )
+
+        # Set initial visibility based on workflow mode
+        self._update_workflow_visibility()
         
         # Watch for run_locally changes to show/hide cluster options
         self.param.watch(self.update_execution_options, 'run_locally')
+        # Watch for task changes to handle Zarr2-specific logic
+        self.param.watch(self.update_task_options, 'task')
+        # Watch for input path changes to trigger format detection
+        self.input_widget.param.watch(self.analyze_input_file, 'value')
+        # Watch for output configuration changes to update conversion plan
+        self.param.watch(self.update_conversion_plan, 'output_format')
+        self.param.watch(self.update_conversion_plan, 'max_downsample_level')
+        # Watch for workflow mode changes
+        self.param.watch(self._update_workflow_visibility, 'workflow_mode')
         
     def create_progress_page(self):
         """Create the progress monitoring page"""
@@ -401,7 +583,149 @@ class SimpleTensorSwitchGUI(param.Parameterized):
             self.cluster_params.visible = False
         else:
             self.cluster_params.visible = True
-    
+
+    def update_task_options(self, *args, **kwargs):
+        """Update parameter options based on selected task"""
+        # Disable sharding for Zarr2 tasks since it's not supported
+        if self.task and 'zarr2' in self.task:
+            self.use_shard = False
+            # Could disable the widget here if needed
+
+        # Note: Zarr2 tasks automatically ignore use_shard parameter in backend
+
+    def analyze_input_file(self, *args, **kwargs):
+        """Analyze input file when path changes"""
+        if not self.format_detector:
+            return
+
+        input_path = self.input_widget.value
+        if not input_path:
+            return
+
+        try:
+            # Perform format detection
+            self.input_analysis = self.format_detector.analyze_input(input_path)
+
+            # Update format section with analysis results
+            if hasattr(self, 'format_section'):
+                self._update_format_section()
+
+        except Exception as e:
+            print(f"Format analysis failed: {e}")
+
+    def _update_format_section(self):
+        """Update the format section with analysis results"""
+        if not self.input_analysis or not hasattr(self, 'format_section'):
+            return
+
+        if self.input_analysis.get('error'):
+            # Show error
+            content = f"**Analysis Result**: ❌ {self.input_analysis['error']}"
+            style = {'background': '#f8d7da', 'padding': '15px', 'border-radius': '8px'}
+        elif self.input_analysis.get('format'):
+            # Show detected format and metadata
+            summary = self.format_detector.format_summary(self.input_analysis)
+            content = f"**Auto-Detected Input**:\n{summary}"
+            style = {'background': '#d4edda', 'padding': '15px', 'border-radius': '8px'}
+        else:
+            content = "**🔄 Format Conversion**: Enter input path to auto-detect format"
+            style = {'background': '#e3f2fd', 'padding': '15px', 'border-radius': '8px'}
+
+        # Update format section content
+        self.format_section[1].object = content
+        self.format_section[1].styles = style
+
+        # Update output format options based on detected input format
+        self._update_output_format_options()
+
+        # Update conversion plan
+        self.update_conversion_plan()
+
+    def _update_output_format_options(self):
+        """Update output format dropdown based on detected input format"""
+        if not self.input_analysis or not self.task_planner:
+            return
+
+        input_format = self.input_analysis.get('format')
+        if input_format:
+            compatible_outputs = self.task_planner.get_compatible_outputs(input_format)
+            if compatible_outputs:
+                # Update parameter choices
+                self.param.output_format.objects = compatible_outputs
+                # Set default to first compatible format if current selection is not compatible
+                if self.output_format not in compatible_outputs:
+                    self.output_format = compatible_outputs[0]
+
+    def update_conversion_plan(self, *args, **kwargs):
+        """Update conversion plan when input/output configuration changes"""
+        if not self.input_analysis or not self.task_planner:
+            return
+
+        input_format = self.input_analysis.get('format')
+        if not input_format:
+            return
+
+        try:
+            # Create downsample levels list
+            downsample_levels = list(range(self.max_downsample_level + 1))
+
+            # Generate conversion plan
+            self.conversion_plan = self.task_planner.create_conversion_plan(
+                input_format,
+                self.output_format,
+                downsample_levels
+            )
+
+            # Update plan section
+            self._update_plan_section()
+
+            # Auto-select the task for the preview
+            if self.conversion_plan and not self.conversion_plan.get('error'):
+                tasks = self.conversion_plan.get('tasks', [])
+                if tasks:
+                    # Use the primary conversion task
+                    primary_task = tasks[0]['task']
+                    if primary_task in self.param.task.objects:
+                        self.task = primary_task
+
+        except Exception as e:
+            print(f"Conversion plan update failed: {e}")
+
+    def _update_plan_section(self):
+        """Update the conversion plan section with generated plan"""
+        if not self.conversion_plan or not hasattr(self, 'plan_section'):
+            return
+
+        if self.conversion_plan.get('error'):
+            # Show error
+            content = f"**Plan Error**: ❌ {self.conversion_plan['error']}"
+            style = {'background': '#f8d7da', 'padding': '15px', 'border-radius': '8px'}
+        elif self.conversion_plan.get('tasks'):
+            # Show conversion plan
+            file_size_mb = self.input_analysis.get('size_mb', 0)
+            plan_summary = self.task_planner.format_plan_summary(self.conversion_plan, file_size_mb)
+            content = f"**Execution Plan**:\n{plan_summary}"
+            style = {'background': '#d4edda', 'padding': '15px', 'border-radius': '8px'}
+        else:
+            content = "**Conversion Plan**: Configure input and output to see execution plan"
+            style = {'background': '#f8f9fa', 'padding': '15px', 'border-radius': '8px'}
+
+        # Update plan section content
+        self.plan_section[1].object = content
+        self.plan_section[1].styles = style
+
+    def _update_workflow_visibility(self, *args, **kwargs):
+        """Update section visibility based on workflow mode"""
+        is_smart_mode = self.workflow_mode == "smart"
+
+        # Smart mode sections
+        self.format_section.visible = is_smart_mode
+        self.output_section.visible = is_smart_mode
+        self.plan_section.visible = is_smart_mode
+
+        # Manual mode sections
+        self.task_section.visible = not is_smart_mode
+
     def sync_path_selector_to_form(self):
         """Sync path helper selections to form fields"""
         # Path helper shows suggestions for users to copy-paste
@@ -446,18 +770,33 @@ class SimpleTensorSwitchGUI(param.Parameterized):
             return
         
         execution_mode = "locally" if self.run_locally else "on LSF cluster"
-        
+
+        # Add notes about format and advanced options
+        format_note = ""
+        if 'zarr2' in self.task:
+            format_note = " (Zarr2 format)"
+        elif 'zarr3' in self.task:
+            format_note = " (Zarr3 format)"
+
+        sharding_note = ""
+        if 'zarr2' in self.task and self.use_shard:
+            sharding_note = " (disabled for Zarr2)"
+
+        dask_note = ""
+        if not self.run_locally and self.use_dask_jobqueue:
+            dask_note = " with Dask JobQueue"
+
         preview_text = f"""
 **Job Preview**: 🔍
 
-- **Task**: `{self.task}`
+- **Task**: `{self.task}`{format_note}
 - **Input**: `{input_path}`
 - **Output**: `{output_path}`
 - **Project**: `{self.project}`
-- **Execution**: Run {execution_mode}
+- **Execution**: Run {execution_mode}{dask_note}
 - **Level**: {self.level}
-- **Use Sharding**: {self.use_shard}
-- **OME Structure**: {self.use_ome_structure}
+- **Use Sharding**: {self.use_shard}{sharding_note}
+- **OME Structure**: {self.use_ome_structure} {'(auto multiscale metadata)' if self.use_ome_structure else ''}
 - **CPU Cores**: {self.cores}
 - **Wall Time**: {self.wall_time}
 - **Parallel Volumes**: {self.num_volumes}
@@ -604,6 +943,14 @@ Click **🚀 Run Job** to execute this configuration.
                     current_stage = "Writing metadata"
                     self.progress_data['stage'] = current_stage
                 
+                elif "Updating OME metadata" in line:
+                    current_stage = "Updating multiscale metadata"
+                    self.progress_data['stage'] = current_stage
+                
+                elif "OME metadata updated successfully" in line:
+                    current_stage = "Metadata update complete"
+                    self.progress_data['stage'] = current_stage
+                
                 # Handle errors
                 elif "Error" in line or "error" in line or "Failed" in line:
                     self.status.object += f"\n\n❌ **Error**: {line}"
@@ -663,6 +1010,10 @@ Click **🚀 Run Job** to execute this configuration.
                 "--project", self.project,
                 "--submit"  # This triggers cluster submission
             ]
+
+            # Add Dask JobQueue flag if enabled
+            if self.use_dask_jobqueue:
+                cmd.append("--use_dask_jobqueue")
             
             # Execute command
             result = subprocess.run(cmd, capture_output=True, text=True, cwd=os.path.dirname(os.path.dirname(os.path.dirname(__file__))))

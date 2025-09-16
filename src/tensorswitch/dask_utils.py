@@ -190,7 +190,13 @@ def submit_dask_job(args, total_chunks):
         return False
         
     finally:
-        if client is not None:
-            client.close()
-        if cluster is not None:
-            cluster.close()
+        # FIXED: Original code below was causing "killed by owner" errors:
+        # if client is not None:
+        #     client.close()
+        # if cluster is not None:
+        #     cluster.close()
+
+        # Let LSF jobs run independently. The cluster will auto-cleanup when jobs complete.
+        print("Jobs submitted - cluster will manage LSF execution independently")
+        print(f"Logs in: {os.path.abspath('./output')}")
+
