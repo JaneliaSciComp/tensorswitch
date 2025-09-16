@@ -407,15 +407,20 @@ class SimpleTensorSwitchGUI(param.Parameterized):
             pn.pane.Markdown("### 🔧 Local Processing Options"),
             pn.Param(
                 self,
-                parameters=['use_ome_structure', 'use_shard', 'level', 'memory_limit'],
+                parameters=['use_ome_structure', 'use_shard', 'memory_limit'],
                 widgets={
                     'use_ome_structure': {'type': pn.widgets.Checkbox, 'name': 'Use OME-Zarr structure'},
                     'use_shard': {'type': pn.widgets.Checkbox, 'name': 'Use sharded format (Zarr3 only)'},
-                    'level': {'type': pn.widgets.IntSlider, 'name': 'Downsampling level'},
                     'memory_limit': {'type': pn.widgets.IntSlider, 'name': 'Memory limit (%)'},
                 }
             ),
+            styles={'background': '#e8f5e8', 'padding': '20px', 'border-radius': '10px', 'margin-bottom': '20px'}
+        )
+
+        # Advanced shape parameters section (conditional)
+        self.shape_params_section = pn.Column(
             pn.pane.Markdown("**🎛️ Advanced Shape Parameters (Optional):**"),
+            pn.pane.Markdown("*Dimension order will be shown here when input file is detected*", name="dimension_order_display"),
             pn.Param(
                 self,
                 parameters=['custom_shard_shape', 'custom_chunk_shape'],
@@ -424,8 +429,12 @@ class SimpleTensorSwitchGUI(param.Parameterized):
                     'custom_chunk_shape': {'type': pn.widgets.TextInput, 'name': 'Custom chunk shape (e.g., 32,32,32)', 'placeholder': 'Leave empty for defaults'},
                 }
             ),
-            styles={'background': '#e8f5e8', 'padding': '20px', 'border-radius': '10px', 'margin-bottom': '20px'}
+            visible=False,  # Start hidden, show when sharding is enabled
+            styles={'background': '#f0f8f0', 'padding': '15px', 'border-radius': '8px', 'margin-top': '10px'}
         )
+
+        # Add to local params
+        self.local_params.append(self.shape_params_section)
         
         # Dask JobQueue description
         dask_description = pn.pane.Markdown("""
@@ -502,6 +511,8 @@ class SimpleTensorSwitchGUI(param.Parameterized):
         self.param.watch(self.update_execution_options, 'run_locally')
         # Watch for task changes to handle Zarr2-specific logic
         self.param.watch(self.update_task_options, 'task')
+        # Watch for use_shard changes to show/hide custom shape options
+        self.param.watch(self.update_shape_options_visibility, 'use_shard')
         # Watch for input path changes to trigger format detection
         self.input_widget.param.watch(self.analyze_input_file, 'value')
         # Watch for output configuration changes to update conversion plan
@@ -593,6 +604,12 @@ class SimpleTensorSwitchGUI(param.Parameterized):
 
         # Note: Zarr2 tasks automatically ignore use_shard parameter in backend
 
+    def update_shape_options_visibility(self, *args, **kwargs):
+        """Update visibility of custom shape options based on sharding setting"""
+        # Show shape parameters only when sharding is enabled
+        if hasattr(self, 'shape_params_section'):
+            self.shape_params_section.visible = self.use_shard
+
     def analyze_input_file(self, *args, **kwargs):
         """Analyze input file when path changes"""
         if not self.format_detector:
@@ -625,8 +642,11 @@ class SimpleTensorSwitchGUI(param.Parameterized):
         elif self.input_analysis.get('format'):
             # Show detected format and metadata
             summary = self.format_detector.format_summary(self.input_analysis)
-            content = f"**Auto-Detected Input**:\n{summary}"
+            content = f"**Auto-Detected Input**:  \n{summary}"  # Added two spaces before newline for proper markdown break
             style = {'background': '#d4edda', 'padding': '15px', 'border-radius': '8px'}
+
+            # Update dimension order display in shape parameters
+            self._update_dimension_order_display()
         else:
             content = "**🔄 Format Conversion**: Enter input path to auto-detect format"
             style = {'background': '#e3f2fd', 'padding': '15px', 'border-radius': '8px'}
@@ -640,6 +660,26 @@ class SimpleTensorSwitchGUI(param.Parameterized):
 
         # Update conversion plan
         self.update_conversion_plan()
+
+    def _update_dimension_order_display(self):
+        """Update the dimension order display in the shape parameters section"""
+        if not self.input_analysis or not hasattr(self, 'shape_params_section'):
+            return
+
+        shape = self.input_analysis.get('shape')
+        if shape:
+            dimension_order = self.format_detector._infer_dimension_order(shape)
+            if dimension_order:
+                dim_text = f"**📐 Detected dimension order**: {' × '.join(dimension_order)}\n"
+                dim_text += f"**Shape**: {shape}\n\n"
+                dim_text += "*Use this order when specifying custom shapes (e.g., for CZYX use: C,Z,Y,X)*"
+
+                # Update the dimension order display markdown
+                self.shape_params_section[1].object = dim_text
+            else:
+                self.shape_params_section[1].object = "*Dimension order will be shown here when input file is detected*"
+        else:
+            self.shape_params_section[1].object = "*Dimension order will be shown here when input file is detected*"
 
     def _update_output_format_options(self):
         """Update output format dropdown based on detected input format"""
@@ -786,6 +826,16 @@ class SimpleTensorSwitchGUI(param.Parameterized):
         if not self.run_locally and self.use_dask_jobqueue:
             dask_note = " with Dask JobQueue"
 
+        # Determine level to use (smart mode uses max_downsample_level, manual mode would use level if it existed)
+        level_to_use = self.max_downsample_level if self.workflow_mode == "smart" else 0
+
+        # Add custom shape info
+        custom_shapes_info = ""
+        if self.custom_shard_shape and self.custom_shard_shape.strip():
+            custom_shapes_info += f"\n- **Custom Shard Shape**: {self.custom_shard_shape.strip()}"
+        if self.custom_chunk_shape and self.custom_chunk_shape.strip():
+            custom_shapes_info += f"\n- **Custom Chunk Shape**: {self.custom_chunk_shape.strip()}"
+
         preview_text = f"""
 **Job Preview**: 🔍
 
@@ -794,13 +844,13 @@ class SimpleTensorSwitchGUI(param.Parameterized):
 - **Output**: `{output_path}`
 - **Project**: `{self.project}`
 - **Execution**: Run {execution_mode}{dask_note}
-- **Level**: {self.level}
+- **Max Downsample Level**: {level_to_use}
 - **Use Sharding**: {self.use_shard}{sharding_note}
 - **OME Structure**: {self.use_ome_structure} {'(auto multiscale metadata)' if self.use_ome_structure else ''}
 - **CPU Cores**: {self.cores}
 - **Wall Time**: {self.wall_time}
 - **Parallel Volumes**: {self.num_volumes}
-- **Memory Limit**: {self.memory_limit}%
+- **Memory Limit**: {self.memory_limit}%{custom_shapes_info}
 
 Click **🚀 Run Job** to execute this configuration.
         """
@@ -855,17 +905,26 @@ Click **🚀 Run Job** to execute this configuration.
         """Execute local job with real-time progress monitoring"""
         try:
             # Build command for local execution
+            # Determine level to use (smart mode uses max_downsample_level, manual mode would use level if it existed)
+            level_to_use = self.max_downsample_level if self.workflow_mode == "smart" else 0
+
             cmd = [
                 "python", "-m", "tensorswitch",
                 "--task", self.task,
                 "--base_path", input_path,
                 "--output_path", output_path,
-                "--level", str(self.level),
+                "--level", str(level_to_use),
                 "--use_shard", "1" if self.use_shard else "0",
                 "--use_ome_structure", "1" if self.use_ome_structure else "0",
                 "--memory_limit", str(self.memory_limit),
                 "--num_volumes", str(self.num_volumes)
             ]
+
+            # Add custom shape parameters if provided
+            if self.custom_shard_shape and self.custom_shard_shape.strip():
+                cmd.extend(["--custom_shard_shape", self.custom_shard_shape.strip()])
+            if self.custom_chunk_shape and self.custom_chunk_shape.strip():
+                cmd.extend(["--custom_chunk_shape", self.custom_chunk_shape.strip()])
             
             # Show command being executed
             cmd_str = " ".join(cmd)
@@ -994,13 +1053,16 @@ Click **🚀 Run Job** to execute this configuration.
         self.preview_box.styles = {'background': '#fff3cd', 'padding': '15px', 'border-radius': '8px', 'border-left': '4px solid #ffc107', 'margin-bottom': '15px'}
         
         try:
+            # Determine level to use (smart mode uses max_downsample_level, manual mode would use level if it existed)
+            level_to_use = self.max_downsample_level if self.workflow_mode == "smart" else 0
+
             # Build command for cluster submission based on CLI implementation
             cmd = [
                 "python", "-m", "tensorswitch",
                 "--task", self.task,
                 "--base_path", input_path,
                 "--output_path", output_path,
-                "--level", str(self.level),
+                "--level", str(level_to_use),
                 "--use_shard", "1" if self.use_shard else "0",
                 "--use_ome_structure", "1" if self.use_ome_structure else "0",
                 "--memory_limit", str(self.memory_limit),
@@ -1010,6 +1072,12 @@ Click **🚀 Run Job** to execute this configuration.
                 "--project", self.project,
                 "--submit"  # This triggers cluster submission
             ]
+
+            # Add custom shape parameters if provided
+            if self.custom_shard_shape and self.custom_shard_shape.strip():
+                cmd.extend(["--custom_shard_shape", self.custom_shard_shape.strip()])
+            if self.custom_chunk_shape and self.custom_chunk_shape.strip():
+                cmd.extend(["--custom_chunk_shape", self.custom_chunk_shape.strip()])
 
             # Add Dask JobQueue flag if enabled
             if self.use_dask_jobqueue:
