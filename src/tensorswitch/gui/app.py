@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Simple test version of TensorSwitch GUI for testing basic functionality
+TensorSwitch GUI - Web interface for scientific data format conversion
 """
 
 import panel as pn
@@ -38,7 +38,7 @@ except Exception as e:
     traceback.print_exc()
 
 class SimpleTensorSwitchGUI(param.Parameterized):
-    """Multi-page GUI for TensorSwitch with welcome page and structured workflow"""
+    """TensorSwitch GUI for data format conversion"""
     
     input_path = param.String(default="", doc="Input file path")
     output_path = param.String(default="", doc="Output file path")
@@ -102,13 +102,13 @@ class SimpleTensorSwitchGUI(param.Parameterized):
         self.progress_data = {'total_chunks': 0, 'processed_chunks': 0, 'stage': 'Ready'}
         self.current_page = "welcome"  # Track current page: welcome, conversion, progress
 
-        # Initialize format detection system
+        # Setup format detection
         self._setup_format_detection()
 
-        # Initialize conversion plan
+        # Setup conversion plan
         self.conversion_plan = None
 
-        # Initialize lab paths system and populate project dropdown
+        # Setup lab paths and projects
         self._setup_lab_paths_integration()
 
         self.create_layout()
@@ -168,7 +168,7 @@ class SimpleTensorSwitchGUI(param.Parameterized):
         Welcome to TensorSwitch! 🔄
         </h1>
         <p style="font-size: 1.3em; color: #7f8c8d; margin-bottom: 40px;">
-        <strong>Convert scientific data formats effortlessly at Janelia Research Campus</strong>
+        <strong>Convert scientific data formats effortlessly</strong>
         </p>
         </div>
         """)
@@ -216,7 +216,7 @@ class SimpleTensorSwitchGUI(param.Parameterized):
         )
         
     def create_conversion_page(self):
-        """Create the main conversion configuration page with clear step-by-step workflow"""
+        """Create the main conversion configuration page"""
         # Page header with progress steps
         header = pn.pane.Markdown("""
         # 🔬 TensorSwitch Conversion Workflow
@@ -262,7 +262,6 @@ class SimpleTensorSwitchGUI(param.Parameterized):
                 self.path_helper_widget, self.path_helper = create_simple_path_helper_panel()
                 path_selector_widget = self.path_helper_widget
             except Exception as e:
-                print(f"Could not create path selector: {e}")
                 path_selector_widget = pn.pane.Markdown("*Path helper not available*")
         else:
             path_selector_widget = pn.pane.Markdown("*Path helper not available*")
@@ -732,7 +731,7 @@ class SimpleTensorSwitchGUI(param.Parameterized):
             print(f"Conversion plan update failed: {e}")
 
     def _update_plan_section(self):
-        """Update the conversion plan section with generated plan"""
+        """Update the conversion plan section"""
         if not self.conversion_plan or not hasattr(self, 'plan_section'):
             return
 
@@ -1100,7 +1099,7 @@ Click **🚀 Run Job** to execute this configuration.
                         job_info += f"- **Job {i+1}**: `{job_name}` (ID: {job_id})\n"
                     job_info += f"\n**🔍 Check Status:** `bjobs {' '.join(job_ids)}`\n"
                     job_info += f"**📊 Monitor:** `bjobs -w` or `bjobs -l {job_ids[0]}`\n"
-                    job_info += f"**📁 Logs:** `/groups/scicompsoft/home/chend/temp/downsample_script/tensorswitch/output/`\n"
+                    job_info += f"**📁 Logs:** `output/` directory\n"
                 
                 self.preview_box.object = f"""**✅ Cluster Jobs Submitted Successfully!**
 
@@ -1145,14 +1144,14 @@ if __name__ == "__main__":
             print("Progress monitoring callback added successfully")
         except Exception as e:
             print(f"Warning: Could not add progress callback: {e}")
-    
+
     # Schedule callback to be added when server starts
     pn.state.onload(add_callback)
     
     # Serve the app for JupyterHub
     pn.serve(
         app,
-        port=5008,  # Use different port
+        port=5000,  # Use port 5000 as requested
         allow_websocket_origin=["*"],  # Allow JupyterHub proxy
         show=False,  # Don't auto-open browser
         title="TensorSwitch GUI v2.0 - Multi-Page Interface"
