@@ -6,9 +6,12 @@ This package provides a unified entry point for managing N5/Zarr dataset convers
 
 - **Web GUI Interface**: Production-ready web interface for scientists (no programming required)
 - **Command-Line Interface**: Full-featured CLI for automated workflows
+- **Dask JobQueue Integration**: Advanced cluster scheduling with hybrid Dask-LSF execution
+- **Smart Workflow System**: Auto-detect input formats and intelligently plan conversions
 - **Enhanced OME-ZARR Metadata**: Automatic preservation of rich metadata from TIFF, ND2, and IMS files
+- **Lab Path Integration**: Built-in HHMI lab storage paths (131 labs, 126 projects)
 - **Cluster Integration**: LSF job submission with resource management
-- **Multiple Format Support**: TIFF, ND2, IMS, N5, and Zarr conversions
+- **Multiple Format Support**: Complete Zarr2, Zarr3, N5, TIFF, ND2, and IMS conversions
 
 ## Folder Structure
 
@@ -34,11 +37,22 @@ tensorswitch/
 │       │   ├── ims_to_zarr2_s0.py        # IMS to Zarr V2 level s0 with OME-Zarr metadata
 │       │   ├── ims_to_zarr3_s0.py        # IMS to Zarr V3 level s0 with OME-Zarr metadata
 │       ├── utils.py                      # Common utilities and OME-Zarr metadata functions
+│       ├── dask_utils.py                 # Dask JobQueue integration for cluster execution
 │       └── gui/                          # Web GUI interface
 │           ├── app.py                    # Main GUI application
 │           ├── launch_gui.py             # GUI server launcher
 │           ├── README_GUI.md             # GUI documentation
+│           ├── format_detection/         # Smart workflow and format auto-detection
+│           │   ├── __init__.py
+│           │   ├── format_detector.py    # Auto-detect file formats and metadata
+│           │   └── task_planner.py       # Intelligent conversion planning
 │           └── lab_paths_system/         # HHMI lab paths integration
+│               ├── __init__.py
+│               ├── lab_paths.py          # Lab path management
+│               ├── path_selector.py      # Path selection UI
+│               ├── hierarchical_lab_paths.json
+│               ├── lab_paths_data.json
+│               └── Lab_and_project_file_share_path.xlsx
 ├── contrib
 │   ├── bleaching_correction_task.py      # Z-direction bleaching correction for microscopy datasets
 │   ├── re_submit_jobs.ipynb              # Jupyter notebook to re-submit failed chunk jobs
