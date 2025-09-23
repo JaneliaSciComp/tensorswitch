@@ -626,10 +626,22 @@ def update_ome_multiscale_metadata_zarr2(zarr_path, max_level=4):
     print(f"Updated zarr2 OME metadata for {zarr_path} with levels multiscale/s0-s{max_level}")
 
 def load_ims_stack(ims_file):
-    """Load IMS data as a dask array using h5py."""
+    """Load IMS data as a dask array using h5py, trimmed to actual data bounds."""
     if not os.path.isfile(ims_file):
         raise ValueError(f"IMS file does not exist: {ims_file}")
-    
+
+    # Extract metadata first to check for padding
+    metadata, _ = extract_ims_metadata(ims_file)
+    actual_z_slices = None
+
+    # Get actual Z-dimension from metadata
+    if 'Z' in metadata:
+        try:
+            actual_z_slices = int(metadata['Z'])
+            print(f"Metadata indicates {actual_z_slices} actual Z-slices")
+        except (ValueError, TypeError):
+            print("Warning: Could not parse Z-dimension from metadata")
+
     # Open IMS file with h5py and navigate to the image data
     h5_file = h5py.File(ims_file, 'r')
     
@@ -653,12 +665,25 @@ def load_ims_stack(ims_file):
     for channel_key in channel_keys:
         channel_group = timepoint_group[channel_key]
         data_dataset = channel_group['Data']
-        
-        # Create dask array from h5py dataset
-        channel_array = da.from_array(data_dataset, chunks='auto')
+
+        print(f"{channel_key} full shape: {data_dataset.shape}, dtype: {data_dataset.dtype}")
+
+        # Check for padding mismatch and trim if necessary
+        if actual_z_slices is not None and actual_z_slices < data_dataset.shape[0]:
+            print(f"PADDING DETECTED: Trimming Z from {data_dataset.shape[0]} to {actual_z_slices} slices")
+            # Create trimmed dask array - only use actual data slices
+            trimmed_dataset = data_dataset[:actual_z_slices, :, :]
+            channel_array = da.from_array(trimmed_dataset, chunks='auto')
+            print(f"{channel_key} trimmed shape: {trimmed_dataset.shape}")
+        else:
+            # No padding detected or no metadata - use full array
+            if actual_z_slices is None:
+                print(f"{channel_key}: No metadata Z-dimension found, using full array")
+            else:
+                print(f"{channel_key}: No padding detected (metadata Z={actual_z_slices} matches array Z={data_dataset.shape[0]})")
+            channel_array = da.from_array(data_dataset, chunks='auto')
+
         channel_arrays.append(channel_array)
-        
-        print(f"{channel_key} shape: {data_dataset.shape}, dtype: {data_dataset.dtype}")
     
     # Stack channels along first axis if multiple channels exist
     if len(channel_arrays) > 1:
