@@ -29,21 +29,24 @@ class PathHelper(param.Parameterized):
     selected_lab = param.ObjectSelector(
         default="",
         objects=[""],
-        doc="Select lab"
+        doc="Select lab",
+        label="Lab"
     )
     
     # Storage selection (dynamic based on lab)
     selected_storage = param.ObjectSelector(
         default="",
         objects=[""],
-        doc="Storage type (primary, home, scratch, etc.)"
+        doc="Storage type (primary, home, scratch, etc.)",
+        label="Storage"
     )
     
     # Platform selection (for display only - always returns cluster path)
     selected_platform = param.ObjectSelector(
         default="Cluster and Linux",
         objects=["Mac", "Windows(or Linux SMB)", "Cluster and Linux"],
-        doc="Platform type"
+        doc="Platform type",
+        label="Platform"
     )
     
     # Generated cluster path (always from cluster column)
@@ -162,28 +165,31 @@ def create_path_helper_panel():
     toggle_widget = pn.Param(
         path_helper,
         parameters=['use_path_helper'],
-        widgets={'use_path_helper': pn.widgets.Checkbox}
+        widgets={'use_path_helper': {'type': pn.widgets.Checkbox, 'name': 'Use path helper'}}
     )
     
     # Lab dropdown
     lab_widget = pn.Param(
         path_helper,
         parameters=['selected_lab'],
-        widgets={'selected_lab': {'type': pn.widgets.Select, 'width': 250}}
+        widgets={'selected_lab': {'type': pn.widgets.Select, 'width': 250, 'name': ''}},
+        show_name=False
     )
-    
+
     # Storage dropdown
     storage_widget = pn.Param(
         path_helper,
         parameters=['selected_storage'],
-        widgets={'selected_storage': {'type': pn.widgets.Select, 'width': 200}}
+        widgets={'selected_storage': {'type': pn.widgets.Select, 'width': 200, 'name': ''}},
+        show_name=False
     )
-    
+
     # Platform dropdown (for display/reference only)
     platform_widget = pn.Param(
         path_helper,
         parameters=['selected_platform'],
-        widgets={'selected_platform': {'type': pn.widgets.Select, 'width': 200}}
+        widgets={'selected_platform': {'type': pn.widgets.Select, 'width': 200, 'name': ''}},
+        show_name=False
     )
     
     # Path suggestions display - shows all platform paths as hints
@@ -229,21 +235,26 @@ def create_path_helper_panel():
     
     path_suggestions = pn.bind(update_path_suggestions, path_helper.param.selected_lab, path_helper.param.selected_storage)
     
-    # Helper content (only shown when path helper is enabled)
+    # Helper content (only shown when path helper is enabled) - full width layout
     helper_content = pn.Column(
         pn.Row(
-            pn.Column("**Lab:**", lab_widget, margin=(0, 10)),
-            pn.Column("**Storage:**", storage_widget, margin=(0, 10)),
-            pn.Column("**Platform (Reference):**", platform_widget, margin=(0, 10))
+            pn.Column("**Lab:**", lab_widget, margin=(0, 15)),
+            pn.Column("**Storage:**", storage_widget, margin=(0, 15)),
+            pn.Column("**Platform (Reference):**", platform_widget, margin=(0, 15))
         ),
         path_suggestions,
-        visible=pn.bind(lambda x: x, path_helper.param.use_path_helper)
+        pn.pane.Markdown("""
+**📚 Wiki Reference**: [Lab and Project File Share Paths](https://hhmi.atlassian.net/wiki/spaces/SCS/pages/152469629/Lab+and+Project+File+Share+Paths)
+        """, styles={'background': '#f8f9fa', 'padding': '10px', 'border-radius': '5px', 'margin-top': '10px'}),
+        visible=pn.bind(lambda x: x, path_helper.param.use_path_helper),
+        styles={'margin-top': '5px', 'margin-bottom': '5px', 'width': '100%'}
     )
     
-    # Complete panel
+    # Complete panel - ensure it stays within container bounds
     panel = pn.Column(
         toggle_widget,
-        helper_content
+        helper_content,
+        styles={'overflow': 'visible', 'width': '100%'}
     )
     
     return panel, path_helper

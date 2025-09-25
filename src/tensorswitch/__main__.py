@@ -29,6 +29,7 @@ from .dask_utils import submit_dask_job
 # Set umask to allow group write access
 os.umask(0o0002)
 
+
 def submit_job(args):
     """Handles LSF cluster job submission for different tasks."""
     output_dir = os.path.join(os.getcwd(), "output")
@@ -144,15 +145,10 @@ def submit_job(args):
     print(f"The total number of chunks is {total_chunks} with downsample={args.downsample} and level={args.level}")
     
     # Check if using Dask JobQueue
+    # TODO: probably need "busb" here to submit a job that submit the dask job to the cluster...so that my dask job is not going to be killed by the gui
     if hasattr(args, 'use_dask_jobqueue') and args.use_dask_jobqueue:
         print("Using Dask JobQueue submission")
-        success = submit_dask_job(args, total_chunks)
-        if not success:
-            print("Dask submission failed")
-            return
-        else:
-            print("Dask submission completed successfully")
-            return
+        
     
     # Traditional LSF bsub method
     print("Using traditional LSF bsub submission")
@@ -205,6 +201,7 @@ def submit_job(args):
             "memory_limit",
             "custom_shard_shape",
             "custom_chunk_shape"
+            "use_dask_jobqueue"
         ]
         for arg in forwarded_args:
             command += ["--"+arg, str(getattr(args, arg))]
@@ -260,6 +257,16 @@ def main():
         submit_job(args)
 
     else:
+        if hasattr(args, 'use_dask_jobqueue') and args.use_dask_jobqueue:
+            print("Using Dask JobQueue submission")
+            success = submit_dask_job(args, total_chunks)
+            if not success:
+                print("Dask submission failed")
+                return
+            else:
+                print("Dask submission completed successfully")
+                return
+
         if args.task == "n5_to_n5":
             n5_to_n5.convert(args.base_path, args.output_path, args.num_volumes, args.level, args.start_idx, args.stop_idx, args.memory_limit)
         elif args.task == "n5_to_zarr2":

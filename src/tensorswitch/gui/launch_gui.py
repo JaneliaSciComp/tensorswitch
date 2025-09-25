@@ -39,30 +39,30 @@ except ImportError as e:
 
 def main():
     """Launch the TensorSwitch GUI."""
-    
+
     print("Starting TensorSwitch GUI...")
     print("Project directory:", project_root)
-    
+
     # Set environment variables
     os.environ.setdefault('PANEL_ALLOW_WEBSOCKET_ORIGIN', '*')
     os.environ.setdefault('PANEL_LOG_LEVEL', 'info')
-    
+
     # Configure Panel
     pn.config.console_output = 'accumulate'
-    
+
     try:
         # Create the simple app
         app = create_simple_app()
-        
+
         # Get port from environment or use default
         port = int(os.environ.get('TENSORSWITCH_GUI_PORT', 5000))
-        
+
         print(f"\nTensorSwitch GUI is starting on port {port}...")
         print(f"For JupyterHub users: http://[your-host]:{port}")
-        print(f"For local users: http://localhost:{port}") 
+        print(f"For local users: http://localhost:{port}")
         print("Press Ctrl+C to stop the server")
         print("\n" + "="*60)
-        
+
         # Serve the app
         pn.serve(
             app,
@@ -72,7 +72,7 @@ def main():
             autoreload=False,  # Disable for production
             title="TensorSwitch GUI"
         )
-        
+
     except KeyboardInterrupt:
         print("\nTensorSwitch GUI stopped by user")
     except Exception as e:
