@@ -37,6 +37,19 @@ except Exception as e:
     import traceback
     traceback.print_exc()
 
+# Import AI assistant system
+AI_ASSISTANT_AVAILABLE = False
+try:
+    from ai import create_floating_ai_assistant, ai_config
+    AI_ASSISTANT_AVAILABLE = True
+    print("GUI: AI Assistant system loaded successfully")
+except ImportError as e:
+    print(f"GUI: AI Assistant system not available: {e}")
+except Exception as e:
+    print(f"GUI: AI Assistant system failed: {e}")
+    import traceback
+    traceback.print_exc()
+
 class SimpleTensorSwitchGUI(param.Parameterized):
     """TensorSwitch GUI for data format conversion"""
     
@@ -155,7 +168,7 @@ class SimpleTensorSwitchGUI(param.Parameterized):
         
         # Set the layout to the main container
         self.layout = self.main_container
-        
+
         # Start with welcome page
         self.show_welcome_page()
         
@@ -199,12 +212,30 @@ class SimpleTensorSwitchGUI(param.Parameterized):
         
         # Let's convert button
         self.start_btn = pn.widgets.Button(
-            name="🚀 Let's Convert!", 
+            name="🚀 Let's Convert!",
             button_type="primary",
-            width=250,
-            height=60,
-            styles={'font-size': '1.3em', 'margin': '20px auto', 'display': 'block'}
+            width=280,
+            height=65,
+            styles={
+                'font-size': '1.4em',
+                'font-weight': '600',
+                'margin': '30px auto',
+                'display': 'block',
+                'border-radius': '16px',
+                'background': '#87CEEB !important',
+                'border': 'none !important',
+                'color': 'white !important',
+                'box-shadow': '0 6px 20px rgba(135, 206, 235, 0.4)',
+                'cursor': 'pointer'
+            }
         )
+        # Apply additional styling for gradient
+        self.start_btn.stylesheets = ["""
+        .bk-btn-primary {
+            background: linear-gradient(135deg, #87CEEB 0%, #4682B4 100%) !important;
+            border: none !important;
+        }
+        """]
         self.start_btn.on_click(self.show_conversion_page)
         
         self.welcome_layout = pn.Column(
@@ -222,9 +253,9 @@ class SimpleTensorSwitchGUI(param.Parameterized):
         # 🔬 TensorSwitch Conversion Workflow
 
         <div style="background: #e3f2fd; padding: 20px; border-radius: 10px; margin-bottom: 30px;">
-        <h3 style="margin-top: 0; color: #1976d2;">📋 Simple 4-Step Process:</h3>
+        <h3 style="margin-top: 0; color: #1976d2;">📋 Simple 3-Step Process:</h3>
         <p style="margin-bottom: 0; font-size: 1.1em;">
-        <strong>Step 1:</strong> Enter file paths → <strong>Step 2:</strong> Choose workflow mode → <strong>Step 3:</strong> Configure conversion → <strong>Step 4:</strong> Execute
+        <strong>Step 1:</strong> Enter file paths → <strong>Step 2:</strong> Configure conversion strategy → <strong>Step 3:</strong> Execute conversion
         </p>
         </div>
         """, styles={'text-align': 'center', 'margin-bottom': '20px'})
@@ -234,12 +265,6 @@ class SimpleTensorSwitchGUI(param.Parameterized):
         ## 📁 Step 1: Specify Input and Output Paths
         """, styles={'color': '#1976d2', 'margin-bottom': '15px'})
 
-        file_hints = pn.pane.Markdown("""
-        **💡 Path Hints:**
-        - **PRFS storage**: `/groups/[lab_name]/...`
-        - **NRS storage**: `/nrs/[lab_name]/...`
-        - **Wiki Lab Path**: [Lab and Project File Share Paths](https://hhmi.atlassian.net/wiki/spaces/SCS/pages/152469629/Lab+and+Project+File+Share+Paths)
-        """, styles={'background': '#fff3cd', 'padding': '15px', 'border-radius': '8px', 'margin-bottom': '15px'})
         
         self.input_widget = pn.widgets.TextInput(
             name="📁 Input File/Directory Path", 
@@ -262,23 +287,38 @@ class SimpleTensorSwitchGUI(param.Parameterized):
                 self.path_helper_widget, self.path_helper = create_simple_path_helper_panel()
                 path_selector_widget = self.path_helper_widget
             except Exception as e:
-                path_selector_widget = pn.pane.Markdown("*Path helper not available*")
+                print(f"Path helper creation failed: {e}")
+                path_selector_widget = pn.pane.Markdown(
+                    "*Path helper temporarily unavailable*",
+                    styles={'margin': '0', 'padding': '5px', 'font-style': 'italic', 'color': '#666'}
+                )
         else:
-            path_selector_widget = pn.pane.Markdown("*Path helper not available*")
+            path_selector_widget = pn.pane.Markdown(
+                "*Path helper not loaded*",
+                styles={'margin': '0', 'padding': '5px', 'font-style': 'italic', 'color': '#666'}
+            )
         
         file_section = pn.Column(
             step1_header,
-            file_hints,
             path_selector_widget,
             pn.layout.Divider(),
             self.input_widget,
             self.output_widget,
-            styles={'background': '#ffffff', 'padding': '20px', 'border-radius': '10px', 'margin-bottom': '20px'}
+            styles={
+                'background': '#ffffff',
+                'padding': '20px',
+                'border-radius': '10px',
+                'margin-bottom': '20px',
+                'border': '2px solid #C8E6C9',
+                'border-left': '6px solid #81C784',
+                'min-width': '100%',
+                'overflow': 'visible'
+            }
         )
         
         # STEP 2: Workflow mode selection
         step2_header = pn.pane.Markdown("""
-        ## 🔄 Step 2: Choose Your Workflow Mode
+        ## 🔄 Step 2: Configure Conversion Strategy
         """, styles={'color': '#1976d2', 'margin-bottom': '15px'})
 
         mode_section = pn.Column(
@@ -295,22 +335,28 @@ class SimpleTensorSwitchGUI(param.Parameterized):
                     'workflow_mode': {'type': pn.widgets.RadioButtonGroup, 'name': 'Mode'}
                 }
             ),
-            styles={'background': '#ffffff', 'padding': '20px', 'border-radius': '10px', 'margin-bottom': '20px'}
+            styles={
+                'background': '#ffffff',
+                'padding': '20px',
+                'border-radius': '10px',
+                'margin-bottom': '10px'
+            },
+            visible=False  # Initially hidden - shown after Step 1
         )
 
-        # STEP 3A: Format detection section (dynamic - only for smart mode)
+        # STEP 2A: Format detection section (dynamic - only for smart mode)
         format_header = pn.pane.Markdown("""
-        ## 🔍 Step 3A: Smart Format Detection (Smart Mode Only)
+        ## 🔍 Step 2A: Smart Format Detection (Smart Mode Only)
         """, styles={'color': '#1976d2', 'margin-bottom': '15px'})
         format_content = pn.pane.Markdown(
             "**🔄 Format Detection**: Enter input path above to auto-detect format and view file metadata",
             styles={'background': '#e3f2fd', 'padding': '15px', 'border-radius': '8px', 'margin-bottom': '20px'}
         )
-        self.format_section = pn.Column(format_header, format_content)
+        self.format_section = pn.Column(format_header, format_content, visible=False)
 
-        # STEP 3B: Output format selection section (smart mode only)
+        # STEP 2B: Output format selection section (smart mode only)
         output_header = pn.pane.Markdown("""
-        ## 📤 Step 3B: Configure Output Format (Smart Mode Only)
+        ## 📤 Step 2B: Configure Output Format (Smart Mode Only)
         """, styles={'color': '#1976d2', 'margin-bottom': '15px'})
 
         self.output_section = pn.Column(
@@ -329,7 +375,8 @@ class SimpleTensorSwitchGUI(param.Parameterized):
                     'max_downsample_level': {'type': pn.widgets.IntSlider, 'name': 'Max downsample level (0=no downsampling)'},
                 }
             ),
-            styles={'background': '#ffffff', 'padding': '20px', 'border-radius': '10px', 'margin-bottom': '20px'}
+            styles={'background': '#ffffff', 'padding': '20px', 'border-radius': '10px', 'margin-bottom': '10px'},
+            visible=False
         )
 
         # Conversion plan section (dynamic)
@@ -338,7 +385,41 @@ class SimpleTensorSwitchGUI(param.Parameterized):
             "**Conversion Plan**: Configure input and output to see execution plan",
             styles={'background': '#f8f9fa', 'padding': '15px', 'border-radius': '8px', 'margin-bottom': '20px'}
         )
-        self.plan_section = pn.Column(plan_header, plan_content)
+
+        # Confirmation button for proceeding to Step 3
+        self.confirm_plan_btn = pn.widgets.Button(
+            name="✅ I like this conversion plan - Next Step!",
+            button_type="primary",
+            visible=False,
+            styles={
+                'margin': '20px 0',
+                'width': '100%',
+                'height': '50px',
+                'font-size': '16px',
+                'font-weight': '600',
+                'border-radius': '12px',
+                'background': '#87CEEB !important',
+                'border': 'none !important',
+                'color': 'white !important',
+                'box-shadow': '0 4px 12px rgba(135, 206, 235, 0.4)',
+                'cursor': 'pointer'
+            }
+        )
+        # Apply additional styling after creation
+        self.confirm_plan_btn.stylesheets = ["""
+        .bk-btn-primary {
+            background: linear-gradient(135deg, #87CEEB 0%, #4682B4 100%) !important;
+            border: none !important;
+        }
+        """]
+        self.confirm_plan_btn.on_click(self._confirm_conversion_plan)
+
+        self.plan_section = pn.Column(
+            plan_header,
+            plan_content,
+            self.confirm_plan_btn,
+            visible=False
+        )
         
         # Task selection with helpful description
         task_description = pn.pane.Markdown("""
@@ -361,10 +442,38 @@ class SimpleTensorSwitchGUI(param.Parameterized):
         - **n5_to_n5**: Re-chunk existing N5 files
         """, styles={'background': '#f8f9fa', 'padding': '10px', 'border-radius': '5px', 'margin-bottom': '10px'})
         
-        # STEP 3C: Task selection section (manual mode only)
+        # STEP 2C: Task selection section (manual mode only)
         manual_task_header = pn.pane.Markdown("""
-        ## ⚙️ Step 3: Manual Task Selection (Manual Mode Only)
+        ## ⚙️ Step 2C: Manual Task Selection (Manual Mode Only)
         """, styles={'color': '#1976d2', 'margin-bottom': '15px'})
+
+        # Confirmation button for manual mode
+        self.confirm_manual_btn = pn.widgets.Button(
+            name="✅ I've selected the right task - Next Step!",
+            button_type="primary",
+            visible=False,
+            styles={
+                'margin': '20px 0',
+                'width': '100%',
+                'height': '50px',
+                'font-size': '16px',
+                'font-weight': '600',
+                'border-radius': '12px',
+                'background': '#87CEEB !important',
+                'border': 'none !important',
+                'color': 'white !important',
+                'box-shadow': '0 4px 12px rgba(135, 206, 235, 0.4)',
+                'cursor': 'pointer'
+            }
+        )
+        # Apply additional styling after creation
+        self.confirm_manual_btn.stylesheets = ["""
+        .bk-btn-primary {
+            background: linear-gradient(135deg, #87CEEB 0%, #4682B4 100%) !important;
+            border: none !important;
+        }
+        """]
+        self.confirm_manual_btn.on_click(self._confirm_conversion_plan)
 
         self.task_section = pn.Column(
             manual_task_header,
@@ -374,7 +483,8 @@ class SimpleTensorSwitchGUI(param.Parameterized):
                 parameters=['task'],
                 widgets={'task': {'type': pn.widgets.Select, 'name': 'Select conversion task'}}
             ),
-            styles={'background': '#ffffff', 'padding': '20px', 'border-radius': '10px', 'margin-bottom': '20px'},
+            self.confirm_manual_btn,
+            styles={'background': '#ffffff', 'padding': '20px', 'border-radius': '10px', 'margin-bottom': '10px'},
             visible=False  # Start hidden since we default to smart mode
         )
         
@@ -385,20 +495,21 @@ class SimpleTensorSwitchGUI(param.Parameterized):
         - **Submit to cluster**: Use LSF cluster (recommended for large files, requires project billing)
         """, styles={'background': '#f8f9fa', 'padding': '10px', 'border-radius': '5px', 'margin-bottom': '10px'})
         
-        # STEP 4: Execution configuration
-        step4_header = pn.pane.Markdown("""
-        ## 🚀 Step 4: Configure Execution & Run
+        # STEP 3: Execution configuration
+        step3_header = pn.pane.Markdown("""
+        ## 🚀 Step 3: Configure Execution & Run
         """, styles={'color': '#1976d2', 'margin-bottom': '15px'})
 
         execution_section = pn.Column(
-            step4_header,
+            step3_header,
             execution_description,
             pn.Param(
                 self,
                 parameters=['run_locally'],
                 widgets={'run_locally': {'type': pn.widgets.Checkbox, 'name': 'Run locally (uncheck to submit to cluster)'}}
             ),
-            styles={'background': '#f8f9fa', 'padding': '20px', 'border-radius': '10px', 'margin-bottom': '20px'}
+            styles={'background': '#f8f9fa', 'padding': '20px', 'border-radius': '10px', 'margin-bottom': '20px'},
+            visible=False  # Initially hidden - shown after Step 3
         )
         
         # Conditional parameters containers
@@ -413,7 +524,12 @@ class SimpleTensorSwitchGUI(param.Parameterized):
                     'memory_limit': {'type': pn.widgets.IntSlider, 'name': 'Memory limit (%)'},
                 }
             ),
-            styles={'background': '#e8f5e8', 'padding': '20px', 'border-radius': '10px', 'margin-bottom': '20px'}
+            styles={
+                'background': '#e8f5e8',
+                'padding': '15px',
+                'border-radius': '8px',
+                'margin-bottom': '10px'
+            }
         )
 
         # Advanced shape parameters section (conditional)
@@ -459,14 +575,60 @@ class SimpleTensorSwitchGUI(param.Parameterized):
             ),
             dask_description,
             pn.pane.Markdown("**Plus all local processing options above**"),
-            styles={'background': '#fff3cd', 'padding': '20px', 'border-radius': '10px', 'margin-bottom': '20px'},
+            styles={
+                'background': '#fff3cd',
+                'padding': '15px',
+                'border-radius': '8px',
+                'margin-bottom': '10px'
+            },
             visible=False
         )
         
         # Action buttons
-        self.back_btn = pn.widgets.Button(name="← Back to Welcome", button_type="light")
-        self.preview_btn = pn.widgets.Button(name="🔍 Preview Job", button_type="light")
-        self.submit_btn = pn.widgets.Button(name="🚀 Run Job", button_type="primary")
+        self.back_btn = pn.widgets.Button(
+            name="← Back to Welcome",
+            button_type="light",
+            styles={
+                'height': '42px',
+                'border-radius': '10px',
+                'font-weight': '500',
+                'border': '2px solid #ddd',
+                'background': '#f8f9fa',
+                'color': '#495057'
+            }
+        )
+        self.preview_btn = pn.widgets.Button(
+            name="🔍 Preview Job",
+            button_type="light",
+            styles={
+                'height': '42px',
+                'border-radius': '10px',
+                'font-weight': '500',
+                'border': '2px solid #ddd',
+                'background': '#f8f9fa',
+                'color': '#495057'
+            }
+        )
+        self.submit_btn = pn.widgets.Button(
+            name="🚀 Run Job",
+            button_type="primary",
+            styles={
+                'height': '42px',
+                'font-weight': '600',
+                'border-radius': '10px',
+                'background': '#87CEEB !important',
+                'border': 'none !important',
+                'color': 'white !important',
+                'box-shadow': '0 3px 10px rgba(135, 206, 235, 0.4)'
+            }
+        )
+        # Apply additional styling
+        self.submit_btn.stylesheets = ["""
+        .bk-btn-primary {
+            background: linear-gradient(135deg, #87CEEB 0%, #4682B4 100%) !important;
+            border: none !important;
+        }
+        """]
         
         self.back_btn.on_click(self.show_welcome_page)
         self.preview_btn.on_click(self.preview_job)
@@ -475,50 +637,102 @@ class SimpleTensorSwitchGUI(param.Parameterized):
         button_row = pn.Row(
             self.back_btn,
             pn.Spacer(),
-            self.preview_btn, 
+            self.preview_btn,
             self.submit_btn,
-            styles={'margin': '20px 0'}
+            styles={'margin': '20px 0'},
+            visible=False  # Initially hidden - shown after Step 3
         )
         
         # Preview box
         self.preview_box = pn.pane.Markdown(
             "**Job Preview**: Click '🔍 Preview Job' to see job details",
-            styles={'background': '#e3f2fd', 'padding': '15px', 'border-radius': '8px', 'border-left': '4px solid #2196f3', 'margin-bottom': '15px'}
+            styles={'background': '#e3f2fd', 'padding': '15px', 'border-radius': '8px', 'border-left': '4px solid #2196f3', 'margin-bottom': '15px'},
+            visible=False  # Initially hidden - shown with buttons after Step 3
         )
         
-        self.conversion_layout = pn.Column(
-            header,
-            file_section,
+        # Create Step 2 container (combines all Step 2 subsections)
+        self.step2_container = pn.Column(
             mode_section,
             self.format_section,
             self.output_section,
             self.plan_section,
             self.task_section,
+            styles={
+                'border': '2px solid #FFE0B2',
+                'border-left': '6px solid #FFB74D',
+                'border-radius': '10px',
+                'padding': '15px',
+                'margin-bottom': '20px'
+            },
+            visible=False
+        )
+
+        # Create Step 3 container (includes header and all Step 3 content)
+        self.step3_container = pn.Column(
             execution_section,
             self.local_params,
             self.cluster_params,
             button_row,
             self.preview_box,
-            sizing_mode="stretch_width",
-            styles={'max-width': '800px', 'margin': '0 auto', 'padding': '20px'}
+            styles={
+                'border': '2px solid #BBDEFB',
+                'border-left': '6px solid #64B5F6',
+                'border-radius': '10px',
+                'padding': '15px',
+                'margin-bottom': '20px'
+            },
+            visible=False
         )
 
-        # Set initial visibility based on workflow mode
-        self._update_workflow_visibility()
-        
+        # Store section references for progressive disclosure
+        self.file_section = file_section
+        self.mode_section = mode_section
+        self.execution_section = execution_section
+        self.button_row = button_row
+
+        # Main conversion content - now using containers (wider to accommodate path helper)
+        conversion_content = pn.Column(
+            header,
+            file_section,
+            self.step2_container,
+            self.step3_container,
+            sizing_mode="stretch_width",
+            styles={'max-width': '900px', 'margin': '0 auto', 'padding': '20px'}
+        )
+
+        # Create conversion layout without sidebar (AI will be floating)
+        self.conversion_layout = conversion_content
+
+        # Create floating AI assistant if available
+        self.floating_ai = None
+        if AI_ASSISTANT_AVAILABLE:
+            self.floating_ai = create_floating_ai_assistant()
+
+        # Initialize plan confirmation state
+        self._plan_confirmed = False
+
+        # Set initial visibility - start with progressive disclosure
+        self._update_progressive_disclosure()
+
         # Watch for run_locally changes to show/hide cluster options
         self.param.watch(self.update_execution_options, 'run_locally')
         # Watch for task changes to handle Zarr2-specific logic
         self.param.watch(self.update_task_options, 'task')
         # Watch for use_shard changes to show/hide custom shape options
         self.param.watch(self.update_shape_options_visibility, 'use_shard')
-        # Watch for input path changes to trigger format detection
+        # Watch for input path changes to trigger format detection AND progressive disclosure
         self.input_widget.param.watch(self.analyze_input_file, 'value')
+        self.input_widget.param.watch(self._check_step1_completion, 'value')
+        self.output_widget.param.watch(self._check_step1_completion, 'value')
         # Watch for output configuration changes to update conversion plan
         self.param.watch(self.update_conversion_plan, 'output_format')
         self.param.watch(self.update_conversion_plan, 'max_downsample_level')
-        # Watch for workflow mode changes
+        # Watch for workflow mode changes to trigger progressive disclosure
         self.param.watch(self._update_workflow_visibility, 'workflow_mode')
+        self.param.watch(self._check_step2_completion, 'workflow_mode')
+        # Watch for step 2 configuration completion triggers
+        self.param.watch(self._check_step2_completion_config, 'output_format')
+        self.param.watch(self._check_step2_completion_config, 'task')
         
     def create_progress_page(self):
         """Create the progress monitoring page"""
@@ -574,11 +788,15 @@ class SimpleTensorSwitchGUI(param.Parameterized):
         self.main_container.append(self.welcome_layout)
         
     def show_conversion_page(self, event=None):
-        """Show the conversion configuration page"""
+        """Show the conversion configuration page with floating AI"""
         self.current_page = "conversion"
         # Clear main container and add conversion content
         self.main_container.clear()
         self.main_container.append(self.conversion_layout)
+
+        # Add floating AI if available (only on conversion page)
+        if AI_ASSISTANT_AVAILABLE and hasattr(self, 'floating_ai') and self.floating_ai:
+            self.main_container.append(self.floating_ai)
         
     def show_progress_page(self, event=None):
         """Show the progress monitoring page"""
@@ -739,31 +957,121 @@ class SimpleTensorSwitchGUI(param.Parameterized):
             # Show error
             content = f"**Plan Error**: ❌ {self.conversion_plan['error']}"
             style = {'background': '#f8d7da', 'padding': '15px', 'border-radius': '8px'}
+            # Hide confirmation button on error
+            if hasattr(self, 'confirm_plan_btn'):
+                self.confirm_plan_btn.visible = False
         elif self.conversion_plan.get('tasks'):
             # Show conversion plan
             file_size_mb = self.input_analysis.get('size_mb', 0)
             plan_summary = self.task_planner.format_plan_summary(self.conversion_plan, file_size_mb)
             content = f"**Execution Plan**:\n{plan_summary}"
             style = {'background': '#d4edda', 'padding': '15px', 'border-radius': '8px'}
+            # Show confirmation button when plan is ready
+            if hasattr(self, 'confirm_plan_btn') and not getattr(self, '_plan_confirmed', False):
+                self.confirm_plan_btn.visible = True
         else:
             content = "**Conversion Plan**: Configure input and output to see execution plan"
             style = {'background': '#f8f9fa', 'padding': '15px', 'border-radius': '8px'}
+            # Hide confirmation button when no plan
+            if hasattr(self, 'confirm_plan_btn'):
+                self.confirm_plan_btn.visible = False
 
         # Update plan section content
         self.plan_section[1].object = content
         self.plan_section[1].styles = style
 
+    def _update_progressive_disclosure(self):
+        """Update visibility based on progressive step completion"""
+        # Step 1: Always visible (input/output paths)
+        self.file_section.visible = True
+
+        # Step 2: Show entire container after Step 1 is complete
+        step1_complete = self._is_step1_complete()
+        self.step2_container.visible = step1_complete
+
+        # Control subsections within Step 2
+        if step1_complete:
+            self.mode_section.visible = True
+            self.format_section.visible = self.workflow_mode == "smart"
+            self.output_section.visible = self.workflow_mode == "smart"
+            self.plan_section.visible = self.workflow_mode == "smart"
+            self.task_section.visible = self.workflow_mode == "manual"
+        else:
+            # Hide all Step 2 subsections if Step 1 not complete
+            self.mode_section.visible = False
+            self.format_section.visible = False
+            self.output_section.visible = False
+            self.plan_section.visible = False
+            self.task_section.visible = False
+
+        # Show confirmation buttons when Step 2 configuration is complete
+        step2_config_complete = step1_complete and self._is_step2_complete()
+        if hasattr(self, 'confirm_plan_btn'):
+            # Smart mode confirmation button (shown via _update_plan_section when plan is ready)
+            pass
+        if hasattr(self, 'confirm_manual_btn'):
+            # Manual mode confirmation button
+            self.confirm_manual_btn.visible = (step2_config_complete and
+                                               self.workflow_mode == "manual" and
+                                               not getattr(self, '_plan_confirmed', False))
+
+        # Step 3: Show entire container only after plan is confirmed
+        step3_should_show = getattr(self, '_plan_confirmed', False)
+        self.step3_container.visible = step3_should_show
+
+        # Control subsections within Step 3
+        if step3_should_show:
+            self.execution_section.visible = True
+            self.local_params.visible = self.run_locally
+            self.cluster_params.visible = not self.run_locally
+            self.button_row.visible = True
+            self.preview_box.visible = True
+        else:
+            # Hide all Step 3 subsections if not confirmed
+            self.execution_section.visible = False
+            self.local_params.visible = False
+            self.cluster_params.visible = False
+            self.button_row.visible = False
+            self.preview_box.visible = False
+
+    def _is_step1_complete(self):
+        """Check if Step 1 (paths) is complete"""
+        input_path = self.input_widget.value.strip() if self.input_widget.value else ""
+        output_path = self.output_widget.value.strip() if self.output_widget.value else ""
+        return len(input_path) > 0 and len(output_path) > 0
+
+
+    def _is_step2_complete(self):
+        """Check if Step 2 (configuration) is complete"""
+        if self.workflow_mode == "smart":
+            # Smart mode: need output format selected
+            return bool(self.output_format)
+        else:
+            # Manual mode: need task selected
+            return bool(self.task)
+
+    def _confirm_conversion_plan(self, event):
+        """Handle confirmation of conversion plan"""
+        self._plan_confirmed = True
+        self.confirm_plan_btn.visible = False
+        self._update_progressive_disclosure()
+
+    def _check_step1_completion(self, *args, **kwargs):
+        """Check Step 1 completion and update disclosure"""
+        self._update_progressive_disclosure()
+
+    def _check_step2_completion(self, *args, **kwargs):
+        """Check Step 2 completion and update disclosure"""
+        self._update_progressive_disclosure()
+
+    def _check_step2_completion_config(self, *args, **kwargs):
+        """Check Step 2 configuration completion and update disclosure"""
+        self._update_progressive_disclosure()
+
     def _update_workflow_visibility(self, *args, **kwargs):
         """Update section visibility based on workflow mode"""
-        is_smart_mode = self.workflow_mode == "smart"
-
-        # Smart mode sections
-        self.format_section.visible = is_smart_mode
-        self.output_section.visible = is_smart_mode
-        self.plan_section.visible = is_smart_mode
-
-        # Manual mode sections
-        self.task_section.visible = not is_smart_mode
+        # Use progressive disclosure instead of just workflow mode
+        self._update_progressive_disclosure()
 
     def sync_path_selector_to_form(self):
         """Sync path helper selections to form fields"""
@@ -803,8 +1111,9 @@ class SimpleTensorSwitchGUI(param.Parameterized):
             self.preview_box.styles = {'background': '#fff3cd', 'padding': '15px', 'border-radius': '8px', 'border-left': '4px solid #ffc107', 'margin-bottom': '15px'}
             return
             
-        if not self.project:
-            self.preview_box.object = "**Job Preview**: ⚠️ Please select a project for billing"
+        # Only require project selection for cluster jobs, not local runs
+        if not self.run_locally and not self.project:
+            self.preview_box.object = "**Job Preview**: ⚠️ Please select a project for billing (required for cluster jobs)"
             self.preview_box.styles = {'background': '#fff3cd', 'padding': '15px', 'border-radius': '8px', 'border-left': '4px solid #ffc107', 'margin-bottom': '15px'}
             return
         
@@ -1106,7 +1415,11 @@ Click **🚀 Run Job** to execute this configuration.
 **Input:** `{input_path}`  
 **Output:** `{output_path}`  
 **Project:** `{self.project}`  
-**Resources:** {self.cores} cores, {self.wall_time} wall time{job_info}
+**Resources:** {self.cores} cores, {self.wall_time} wall time
+
+**Job Info:** [START]{job_info} [END]
+**stdout:** [START]{result.stdout} [END]
+**Errors:** [START]{result.stderr}[END]
 
 **💡 Tip:** Jobs are running in the background. Check output directory when complete!"""
                 
@@ -1122,13 +1435,15 @@ Click **🚀 Run Job** to execute this configuration.
 def create_simple_app():
     """Create simple test app"""
     pn.extension()
-    
+
     gui = SimpleTensorSwitchGUI()
-    
+
     # Store gui reference globally so callback can be added later
     global global_gui
     global_gui = gui
-    
+
+    # Return just the main GUI layout
+    # AI sidebar will be added to conversion page only
     return gui.layout
 
 if __name__ == "__main__":
@@ -1147,7 +1462,20 @@ if __name__ == "__main__":
 
     # Schedule callback to be added when server starts
     pn.state.onload(add_callback)
-    
+
+    # Add cleanup callback for when server shuts down
+    def cleanup_on_exit():
+        try:
+            if AI_ASSISTANT_AVAILABLE:
+                ai_config.cleanup_session()
+                print("AI session cleanup completed")
+        except Exception as e:
+            print(f"Warning: AI cleanup failed: {e}")
+
+    # Register cleanup for server shutdown
+    import atexit
+    atexit.register(cleanup_on_exit)
+
     # Serve the app for JupyterHub
     pn.serve(
         app,
