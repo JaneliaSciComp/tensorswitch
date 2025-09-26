@@ -22,7 +22,6 @@ def update_zarr_ome_xml_ims(multiscale_path, source_ims_path):
     
     # Extract enhanced metadata from source IMS
     try:
-        from ..utils import extract_ims_metadata
         ims_metadata, voxel_sizes = extract_ims_metadata(source_ims_path)
         
         if ims_metadata:
