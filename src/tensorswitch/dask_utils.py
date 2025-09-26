@@ -4,9 +4,17 @@ Dask utilities for TensorSwitch LSF cluster integration.
 """
 
 import os
+import sys
+import re
 import logging
+import subprocess
+import argparse
+import tensorstore as ts
 from dask.distributed import Client
 from dask_jobqueue import LSFCluster
+from tensorswitch.utils import (zarr3_store_spec, get_chunk_domains, load_nd2_stack,
+                                load_tiff_stack, extract_nd2_ome_metadata,
+                                convert_ome_to_zarr3_metadata, write_zarr3_group_metadata)
 
 logger = logging.getLogger(__name__)
 
@@ -37,53 +45,110 @@ def create_lsf_cluster(
     return cluster
 
 
-def simple_test_function(x):
-    """Simple test function for testing cluster connectivity."""
-    return x * x
+def process_chunk_task(chunk_task):
+    """Process a single chunk on a Dask worker."""
+    # Add tensorswitch to path
+    sys.path.insert(0, chunk_task['tensorswitch_path'])
 
+    # Task parameters
+    task_type = chunk_task['task']
+    base_path = chunk_task['base_path']
+    output_path = chunk_task['output_path']
+    chunk_idx = chunk_task['chunk_idx']
+    use_shard = chunk_task['use_shard']
+    use_ome_structure = chunk_task['use_ome_structure']
 
-def run_tensorswitch_cli(cmd_args):
-    """Run TensorSwitch as CLI subprocess on worker."""
-    import subprocess
-    import sys
-    
-    print(f"Worker executing: {' '.join(cmd_args)}")
-    
+    print(f"Worker processing chunk {chunk_idx} for task {task_type}")
+
     try:
-        # Run as subprocess to avoid serialization issues
-        result = subprocess.run(
-            cmd_args,
-            capture_output=True,
-            text=True,
-            timeout=3600  # 1 hour timeout
-        )
-        
-        if result.returncode == 0:
-            print(f"Worker completed successfully")
-            return {"success": True, "stdout": result.stdout}
-        else:
-            print(f"Worker failed with return code {result.returncode}")
-            print(f"stderr: {result.stderr}")
-            return {"success": False, "stderr": result.stderr}
-            
-    except subprocess.TimeoutExpired:
-        print("Worker timed out")
-        return {"success": False, "error": "timeout"}
-    except Exception as e:
-        print(f"Worker error: {e}")
-        return {"success": False, "error": str(e)}
+        if task_type == "nd2_to_zarr3_s0":
+            # Load data and open store
+            volume = load_nd2_stack(base_path)
+            store_spec = zarr3_store_spec(
+                path=output_path,
+                shape=volume.shape,
+                dtype=str(volume.dtype),
+                use_shard=use_shard,
+                use_ome_structure=use_ome_structure,
+                custom_shard_shape=chunk_task.get('custom_shard_shape'),
+                custom_chunk_shape=chunk_task.get('custom_chunk_shape')
+            )
 
+            store = ts.open(store_spec, open=True).result()
+
+            # Get specific chunk domain
+            chunk_shape = store.chunk_layout.write_chunk.shape
+            chunk_domains = list(get_chunk_domains(chunk_shape, store, linear_indices_to_process=[chunk_idx]))
+
+            if not chunk_domains:
+                print(f"No chunk domain found for index {chunk_idx}")
+                return False
+
+            domain = chunk_domains[0]
+
+            # Process the chunk
+            slices = tuple(slice(min, max) for (min, max) in zip(domain.inclusive_min, domain.exclusive_max))
+            slice_data = volume[slices]
+
+            # Write chunk
+            task = store[domain].write(slice_data.compute())
+            task.result()
+
+            print(f"Successfully processed chunk {chunk_idx}")
+            return True
+
+        elif task_type == "tiff_to_zarr3_s0":
+            # Load data and open store
+            volume = load_tiff_stack(base_path)
+            store_spec = zarr3_store_spec(
+                path=output_path,
+                shape=volume.shape,
+                dtype=str(volume.dtype),
+                use_shard=use_shard,
+                use_ome_structure=use_ome_structure
+            )
+
+            store = ts.open(store_spec, open=True).result()
+
+            # Get specific chunk domain
+            chunk_shape = store.chunk_layout.write_chunk.shape
+            chunk_domains = list(get_chunk_domains(chunk_shape, store, linear_indices_to_process=[chunk_idx]))
+
+            if not chunk_domains:
+                print(f"No chunk domain found for index {chunk_idx}")
+                return False
+
+            domain = chunk_domains[0]
+
+            # Process the chunk
+            slices = tuple(slice(min, max) for (min, max) in zip(domain.inclusive_min, domain.exclusive_max))
+            slice_data = volume[slices]
+
+            # Write chunk
+            task = store[domain].write(slice_data.compute())
+            task.result()
+
+            print(f"Successfully processed chunk {chunk_idx}")
+            return True
+
+        else:
+            print(f"Task type {task_type} not implemented for chunk-level processing yet")
+            return False
+
+    except Exception as e:
+        print(f"Error processing chunk {chunk_idx}: {e}")
+        return False
 
 def submit_dask_job(args, total_chunks):
-    """Submit TensorSwitch job using Dask JobQueue."""
-    
+    """Submit TensorSwitch job using Dask task distribution."""
+
     print("Using Dask JobQueue for task submission")
     print(f"Total chunks: {total_chunks}")
     print(f"Workers: {args.num_volumes}, Cores per worker: {args.cores}")
-    
+
     cluster = None
     client = None
-    
+
     try:
         # Create cluster
         cluster = create_lsf_cluster(
@@ -93,110 +158,232 @@ def submit_dask_job(args, total_chunks):
             walltime=args.wall_time,
             project=args.project
         )
-        
+
         client = Client(cluster)
         print(f"Dashboard: {client.dashboard_link}")
-        
+
         # Parse custom shapes
         custom_shard_shape = None
         if hasattr(args, 'custom_shard_shape') and args.custom_shard_shape:
             custom_shard_shape = [int(x) for x in args.custom_shard_shape.split(',')]
-        
+
         custom_chunk_shape = None
         if hasattr(args, 'custom_chunk_shape') and args.custom_chunk_shape:
             custom_chunk_shape = [int(x) for x in args.custom_chunk_shape.split(',')]
-        
-        # Calculate chunk distribution
-        num_workers = min(total_chunks, args.num_volumes)
-        chunks_per_worker = total_chunks // num_workers
-        
-        print(f"Distributing {total_chunks} chunks across {num_workers} workers")
-        
-        # Submit tasks
+
+        # Initialize output store
+        print("Initializing output store...")
+        if args.task == "nd2_to_zarr3_s0":
+
+            volume = load_nd2_stack(args.base_path)
+            store_spec = zarr3_store_spec(
+                path=args.output_path,
+                shape=volume.shape,
+                dtype=str(volume.dtype),
+                use_shard=bool(args.use_shard),
+                use_ome_structure=bool(args.use_ome_structure),
+                custom_shard_shape=custom_shard_shape,
+                custom_chunk_shape=custom_chunk_shape
+            )
+
+            store = ts.open(store_spec, create=True, delete_existing=True).result()
+
+        elif args.task == "tiff_to_zarr3_s0":
+
+            volume = load_tiff_stack(args.base_path)
+            store_spec = zarr3_store_spec(
+                path=args.output_path,
+                shape=volume.shape,
+                dtype=str(volume.dtype),
+                use_shard=bool(args.use_shard),
+                use_ome_structure=bool(args.use_ome_structure)
+            )
+
+            store = ts.open(store_spec, create=True, delete_existing=True).result()
+
+        # Create individual chunk tasks
+        print(f"Creating {total_chunks} chunk tasks...")
+        chunk_tasks = []
+        tensorswitch_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+        for chunk_idx in range(total_chunks):
+            chunk_task = {
+                'task': args.task,
+                'base_path': args.base_path,
+                'output_path': args.output_path,
+                'chunk_idx': chunk_idx,
+                'use_shard': bool(args.use_shard),
+                'use_ome_structure': bool(args.use_ome_structure),
+                'custom_shard_shape': custom_shard_shape,
+                'custom_chunk_shape': custom_chunk_shape,
+                'tensorswitch_path': tensorswitch_path
+            }
+            chunk_tasks.append(chunk_task)
+
+        # Submit chunk tasks to workers
+        print(f"Submitting {len(chunk_tasks)} chunk tasks to {args.num_volumes} workers...")
         futures = []
-        for i in range(num_workers):
-            start_idx = i * chunks_per_worker
-            if i == num_workers - 1:
-                stop_idx = total_chunks
-            else:
-                stop_idx = (i + 1) * chunks_per_worker
-            
-            print(f"Submitting worker {i+1}/{num_workers}: chunks {start_idx}-{stop_idx}")
-            
-            # Build CLI command for worker
-            cmd_args = [
-                "python", "-m", "tensorswitch",
-                "--task", args.task,
-                "--base_path", args.base_path,
-                "--output_path", args.output_path,
-                "--level", str(args.level),
-                "--start_idx", str(start_idx),
-                "--stop_idx", str(stop_idx),
-                "--memory_limit", str(args.memory_limit)
-            ]
-            
-            # Add optional arguments
-            if getattr(args, 'downsample', False):
-                cmd_args.extend(["--downsample", "1"])
-            if args.use_shard:
-                cmd_args.extend(["--use_shard", "1"])
-            if args.use_ome_structure:
-                cmd_args.extend(["--use_ome_structure", "1"])
-            if custom_shard_shape:
-                cmd_args.extend(["--custom_shard_shape", ",".join(map(str, custom_shard_shape))])
-            if custom_chunk_shape:
-                cmd_args.extend(["--custom_chunk_shape", ",".join(map(str, custom_chunk_shape))])
-            
-            future = client.submit(run_tensorswitch_cli, cmd_args)
+        for chunk_task in chunk_tasks:
+            future = client.submit(process_chunk_task, chunk_task)
             futures.append(future)
-        
-        # Wait for completion
-        print("Waiting for task completion...")
-        completed = 0
-        failed = 0
-        for future in futures:
+
+        print("Waiting for chunk tasks to complete...")
+        results = client.gather(futures)
+
+        # Check results
+        successful_chunks = sum(results)
+        failed_chunks = len(results) - successful_chunks
+
+        print(f"Chunk processing complete: {successful_chunks} successful, {failed_chunks} failed")
+
+        if failed_chunks > 0:
+            print(f"WARNING: {failed_chunks} chunks failed to process")
+            return False
+
+        # Write metadata after chunk processing
+        if args.task == "nd2_to_zarr3_s0" and bool(args.use_ome_structure):
+            print("Writing OME-Zarr metadata...")
             try:
-                result = future.result()
-                if result["success"]:
-                    completed += 1
-                    print(f"Task {completed}/{len(futures)} completed successfully")
+
+                ome_metadata = extract_nd2_ome_metadata(args.base_path)
+                if ome_metadata:
+                    image_name = os.path.splitext(os.path.basename(args.base_path))[0]
+                    zarr3_metadata = convert_ome_to_zarr3_metadata(ome_metadata, image_name)
+
+                    if bool(args.use_ome_structure):
+                        output_group_path = os.path.join(args.output_path, "multiscale")
+                    else:
+                        output_group_path = args.output_path
+
+                    write_zarr3_group_metadata(output_group_path, zarr3_metadata)
+                    print("OME metadata written successfully")
                 else:
-                    failed += 1
-                    print(f"Task failed: {result.get('stderr', result.get('error', 'unknown'))}")
+                    print("No OME metadata found in source file")
             except Exception as e:
-                failed += 1
-                print(f"Task failed with exception: {e}")
-        
-        if failed > 0:
-            print(f"Warning: {failed} tasks failed, {completed} succeeded")
-        else:
-            print(f"All {completed} tasks completed successfully")
-        
-        # Apply OME metadata if needed
-        if hasattr(args, 'use_ome_structure') and args.use_ome_structure:
-            try:
-                from tensorswitch.utils import update_ome_metadata_if_needed
-                update_ome_metadata_if_needed(args.output_path, use_ome_structure=True)
-                print("OME metadata updated")
-            except Exception as e:
-                print(f"OME metadata update failed: {e}")
-        
+                print(f"Warning: Could not write OME metadata: {e}")
+
+        print("All chunk tasks completed successfully")
+        print("=== NORMAL COMPLETION: Dask will now terminate worker jobs ===")
+        print("NOTE: LSF 'TERM_OWNER: job killed by owner' messages are EXPECTED")
+        print("This indicates normal Dask cleanup, not a failure")
         return True
-        
+
     except Exception as e:
         print(f"Dask job submission failed: {e}")
-        import traceback
-        traceback.print_exc()
+        print("=== JOB FAILED: Check error details above ===")
         return False
-        
-    finally:
-        # FIXED: Original code below was causing "killed by owner" errors:
-        if client is not None:
-             client.close()
-        if cluster is not None:
-             cluster.close()
 
-        # Let LSF jobs run independently. The cluster will auto-cleanup when jobs complete.
+    finally:
         print("Jobs submitted - cluster will manage LSF execution independently")
         print(f"Logs in: {os.path.abspath('./output')}")
+        if client:
+            print("=== Shutting down Dask cluster - worker termination is expected ===")
+            client.close()
+        if cluster:
+            cluster.close()
+
+
+
+def submit_dask_wrapper_job(args, total_chunks):
+    """Submit wrapper LSF job that runs Dask job independently."""
+
+    # Validate project before submission
+    if not args.project or args.project == "None" or args.project.strip() == "":
+        raise ValueError(f"Invalid project '{args.project}' for Dask JobQueue submission. Please specify a valid LSF project.")
+
+    # Create output directory
+    output_dir = os.path.abspath("./output")
+    os.makedirs(output_dir, exist_ok=True)
+
+    # Build the Python command that will run inside the wrapper job
+    python_cmd = [
+        sys.executable, "-c", f'''
+import sys
+sys.path.insert(0, "{os.path.dirname(os.path.dirname(os.path.abspath(__file__)))}")
+
+import argparse
+
+# Recreate args namespace
+class Args:
+    def __init__(self):
+        self.task = "{args.task}"
+        self.base_path = "{args.base_path}"
+        self.output_path = "{args.output_path}"
+        self.level = {args.level}
+        self.num_volumes = {args.num_volumes}
+        self.downsample = {args.downsample}
+        self.use_shard = {args.use_shard}
+        self.use_ome_structure = {args.use_ome_structure}
+        self.memory_limit = {args.memory_limit}
+        self.project = "{args.project}"
+        self.cores = "{args.cores}"
+        self.wall_time = "{args.wall_time}"
+        self.custom_shard_shape = "{args.custom_shard_shape if args.custom_shard_shape else ''}"
+        self.custom_chunk_shape = "{args.custom_chunk_shape if args.custom_chunk_shape else ''}"
+
+args = Args()
+total_chunks = {total_chunks}
+
+# Import and run the actual Dask job
+from tensorswitch.dask_utils import submit_dask_job
+print("=== Dask Wrapper Job Started ===")
+print(f"Task: {{args.task}}")
+print(f"Input: {{args.base_path}}")
+print(f"Output: {{args.output_path}}")
+print(f"Total chunks: {{total_chunks}}")
+
+success = submit_dask_job(args, total_chunks)
+if success:
+    print("=== Dask Wrapper Job Completed Successfully ===")
+    print("NOTE: Any subsequent 'TERM_OWNER: job killed by owner' messages")
+    print("in worker logs are NORMAL and indicate proper Dask cleanup")
+else:
+    print("=== Dask Wrapper Job Failed ===")
+    print("Check error messages above for details")
+'''
+    ]
+
+    # Build LSF bsub command
+    job_name = f"dask_wrapper_{args.task}"
+    bsub_cmd = [
+        "bsub",
+        "-J", job_name,
+        "-P", args.project,
+        "-n", "2",
+        "-W", "1:00",
+        "-o", f"{output_dir}/wrapper_{job_name}_%J.out",
+        "-e", f"{output_dir}/wrapper_{job_name}_%J.err"
+    ]
+
+    # Add the Python command
+    bsub_cmd.extend(python_cmd)
+
+    print("=== Submitting Dask Wrapper Job ===")
+    print(f"Command: {' '.join(bsub_cmd[:10])}...")
+    print(f"Job name: {job_name}")
+    print(f"Project: {args.project}")
+    print(f"Output files will be in: {output_dir}")
+
+    try:
+        result = subprocess.run(bsub_cmd, capture_output=True, text=True, check=True)
+        print(f"Wrapper job submitted successfully!")
+        print(f"LSF output: {result.stdout.strip()}")
+
+        # Extract job ID from bsub output
+        job_id_match = re.search(r'Job <(\d+)>', result.stdout)
+        if job_id_match:
+            job_id = job_id_match.group(1)
+            print(f"Job ID: {job_id}")
+            print(f"Monitor with: bjobs {job_id}")
+            print(f"Logs: {output_dir}/wrapper_{job_name}_{job_id}.out")
+
+        return True
+
+    except subprocess.CalledProcessError as e:
+        print(f"Failed to submit wrapper job: {e}")
+        print(f"stderr: {e.stderr}")
+        return False
+    except Exception as e:
+        print(f"Error submitting wrapper job: {e}")
+        return False
 

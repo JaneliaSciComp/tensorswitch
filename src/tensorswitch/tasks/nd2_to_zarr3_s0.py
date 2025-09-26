@@ -1,7 +1,8 @@
 from dask.cache import Cache
-from ..utils import (load_nd2_stack, zarr3_store_spec, get_chunk_domains, commit_tasks, 
-                    get_total_chunks_from_store, extract_nd2_ome_metadata, 
-                    convert_ome_to_zarr3_metadata, write_zarr3_group_metadata)
+from ..utils import (load_nd2_stack, zarr3_store_spec, get_chunk_domains, commit_tasks,
+                    get_total_chunks_from_store, extract_nd2_ome_metadata,
+                    convert_ome_to_zarr3_metadata, write_zarr3_group_metadata,
+                    write_dual_zarr_metadata)
 import tensorstore as ts
 import numpy as np
 import psutil
@@ -42,7 +43,7 @@ def update_zarr_ome_xml_nd2(multiscale_path, source_nd2_path):
     else:
         print("No OME XML found in source ND2")
 
-def process(base_path, output_path, use_shard=False, memory_limit=50, start_idx=0, stop_idx=None, use_ome_structure=True, custom_shard_shape=None, custom_chunk_shape=None):
+def process(base_path, output_path, use_shard=False, memory_limit=50, start_idx=0, stop_idx=None, use_ome_structure=True, custom_shard_shape=None, custom_chunk_shape=None, create_dual_metadata=True):
     print(f"Loading ND2 file from: {base_path}", flush=True)
 
     volume = load_nd2_stack(base_path)
@@ -124,7 +125,6 @@ def process(base_path, output_path, use_shard=False, memory_limit=50, start_idx=
         try:
             ome_metadata = extract_nd2_ome_metadata(base_path)
             # Extract image name from file path
-            import os
             image_name = os.path.splitext(os.path.basename(base_path))[0]
             
             zarr3_metadata = convert_ome_to_zarr3_metadata(ome_metadata, volume.shape, image_name)
@@ -145,5 +145,17 @@ def process(base_path, output_path, use_shard=False, memory_limit=50, start_idx=
             print(f"Warning: Could not write OME-Zarr metadata: {e}", flush=True)
     else:
         print("Skipping OME-ZARR metadata (plain zarr3 format)", flush=True)
-    
+
+    # Create dual zarr v2/v3 metadata if requested and using OME structure
+    if create_dual_metadata and use_ome_structure:
+        print("Creating dual zarr v2/v3 metadata...", flush=True)
+        try:
+            success = write_dual_zarr_metadata(output_path, base_path)
+            if success:
+                print("Dual zarr v2/v3 metadata created successfully", flush=True)
+            else:
+                print("Warning: Failed to create dual zarr metadata", flush=True)
+        except Exception as e:
+            print(f"Warning: Could not create dual zarr metadata: {e}", flush=True)
+
     print(f"Completed writing Zarr3 s0 at: {output_path} [{start_idx}:{stop_idx}]", flush=True)
