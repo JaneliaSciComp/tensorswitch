@@ -13,8 +13,9 @@ import tensorstore as ts
 from dask.distributed import Client
 from dask_jobqueue import LSFCluster
 from tensorswitch.utils import (zarr3_store_spec, get_chunk_domains, load_nd2_stack,
-                                load_tiff_stack, extract_nd2_ome_metadata,
-                                convert_ome_to_zarr3_metadata, write_zarr3_group_metadata)
+                                load_tiff_stack, extract_nd2_ome_metadata, extract_tiff_ome_metadata,
+                                extract_ims_metadata, convert_ome_to_zarr3_metadata,
+                                convert_ims_to_zarr3_metadata, write_zarr3_group_metadata)
 
 logger = logging.getLogger(__name__)
 
@@ -241,22 +242,62 @@ def submit_dask_job(args, total_chunks):
             return False
 
         # Write metadata after chunk processing
-        if args.task == "nd2_to_zarr3_s0" and bool(args.use_ome_structure):
+        if args.task in ["nd2_to_zarr3_s0", "tiff_to_zarr3_s0", "ims_to_zarr3_s0"] and bool(args.use_ome_structure):
             print("Writing OME-Zarr metadata...")
             try:
+                if bool(args.use_ome_structure):
+                    output_group_path = os.path.join(args.output_path, "multiscale")
+                else:
+                    output_group_path = args.output_path
 
-                ome_metadata = extract_nd2_ome_metadata(args.base_path)
-                if ome_metadata:
+                if args.task == "nd2_to_zarr3_s0":
+                    ome_metadata = extract_nd2_ome_metadata(args.base_path)
+                    if ome_metadata:
+                        image_name = os.path.splitext(os.path.basename(args.base_path))[0]
+                        zarr3_metadata = convert_ome_to_zarr3_metadata(ome_metadata, image_name)
+                        write_zarr3_group_metadata(output_group_path, zarr3_metadata)
+                        print("OME metadata written successfully")
+
+                        # Update metadata with OME XML from source ND2
+                        try:
+                            print("Updating zarr.json with enhanced OME XML metadata...")
+                            from tensorswitch.tasks.nd2_to_zarr3_s0 import update_zarr_ome_xml_nd2
+                            update_zarr_ome_xml_nd2(output_group_path, args.base_path)
+                            print("Enhanced OME XML metadata updated successfully")
+                        except Exception as e:
+                            print(f"Warning: Could not update enhanced OME XML metadata: {e}")
+
+                elif args.task == "tiff_to_zarr3_s0":
+                    ome_metadata = extract_tiff_ome_metadata(args.base_path)
                     image_name = os.path.splitext(os.path.basename(args.base_path))[0]
                     zarr3_metadata = convert_ome_to_zarr3_metadata(ome_metadata, image_name)
-
-                    if bool(args.use_ome_structure):
-                        output_group_path = os.path.join(args.output_path, "multiscale")
-                    else:
-                        output_group_path = args.output_path
-
                     write_zarr3_group_metadata(output_group_path, zarr3_metadata)
                     print("OME metadata written successfully")
+
+                    # Update metadata with OME XML from source TIFF
+                    try:
+                        print("Updating zarr.json with enhanced OME XML metadata...")
+                        from tensorswitch.tasks.tiff_to_zarr3_s0 import update_zarr_ome_xml
+                        update_zarr_ome_xml(output_group_path, args.base_path)
+                        print("Enhanced OME XML metadata updated successfully")
+                    except Exception as e:
+                        print(f"Warning: Could not update enhanced OME XML metadata: {e}")
+
+                elif args.task == "ims_to_zarr3_s0":
+                    metadata, voxel_sizes = extract_ims_metadata(args.base_path)
+                    zarr3_metadata = convert_ims_to_zarr3_metadata(args.base_path, None, voxel_sizes)  # volume.shape not available here
+                    write_zarr3_group_metadata(output_group_path, zarr3_metadata)
+                    print("OME metadata written successfully")
+
+                    # Update metadata with enhanced IMS metadata
+                    try:
+                        print("Updating zarr.json with enhanced IMS metadata...")
+                        from tensorswitch.tasks.ims_to_zarr3_s0 import update_zarr_ome_xml_ims
+                        update_zarr_ome_xml_ims(output_group_path, args.base_path)
+                        print("Enhanced IMS metadata updated successfully")
+                    except Exception as e:
+                        print(f"Warning: Could not update enhanced IMS metadata: {e}")
+
                 else:
                     print("No OME metadata found in source file")
             except Exception as e:
