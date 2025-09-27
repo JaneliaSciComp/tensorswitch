@@ -170,8 +170,89 @@ All conversion tasks now support both Zarr V2 and Zarr V3 formats with automatic
 - Added missing .zgroup files for zarr2 format compliance
 - Universal metadata handling across all formats
 
+### 4. Dual Zarr v2/v3 Format Compatibility
 
-### 4. Example Commands
+Create Zarr files that work with both v2 and v3 tools for maximum compatibility.
+
+#### Available Options
+
+Use `--dual_zarr_approach` with any Zarr v3 conversion task:
+
+| Option | Description | When to Use |
+|--------|-------------|-------------|
+| `none` | **Default**. Pure Zarr v3 | Standard workflows |
+| `v2_chunks` | Dual format with v2 chunk structure | Maximum compatibility |
+| `v3_chunks` | Dual format with v3 chunk structure | Specific research needs |
+
+#### Key Features
+
+- **Auto-disable sharding**: Dual format prevents sharding (shown in logs)
+- **Cross-tool compatibility**: Same data readable by both Zarr v2 and v3 libraries
+- **Multiple entry points**: Root and multiscale access for flexible tool support
+
+#### Examples
+
+```bash
+# Default: Pure Zarr v3
+python -m tensorswitch --task nd2_to_zarr3_s0 --base_path file.nd2 --output_path output.zarr
+
+# Dual format for maximum compatibility
+python -m tensorswitch --task nd2_to_zarr3_s0 --base_path file.nd2 --output_path output.zarr --dual_zarr_approach v2_chunks
+
+# Dual format with v3 chunk structure
+python -m tensorswitch --task nd2_to_zarr3_s0 --base_path file.nd2 --output_path output.zarr --dual_zarr_approach v3_chunks
+```
+
+### 5. Cluster Job Submission
+
+Submit conversions to LSF cluster with automatic job splitting.
+
+#### Traditional LSF Submission
+
+```bash
+# Submit ND2 to Zarr conversion to cluster
+python -m tensorswitch --task nd2_to_zarr3_s0 \
+  --base_path /path/to/file.nd2 \
+  --output_path /path/to/output.zarr \
+  --num_volumes 4 \
+  --cores 2 \
+  --wall_time 2:00 \
+  --project your_project \
+  --submit
+
+# Submit with dual format
+python -m tensorswitch --task nd2_to_zarr3_s0 \
+  --base_path /path/to/file.nd2 \
+  --output_path /path/to/output.zarr \
+  --dual_zarr_approach v2_chunks \
+  --num_volumes 8 \
+  --project your_project \
+  --submit
+```
+
+#### Dask JobQueue Submission
+
+```bash
+# Use Dask for advanced cluster scheduling
+python -m tensorswitch --task nd2_to_zarr3_s0 \
+  --base_path /path/to/file.nd2 \
+  --output_path /path/to/output.zarr \
+  --use_dask_jobqueue \
+  --project your_project \
+  --submit
+```
+
+#### Cluster Parameters
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `--num_volumes` | Number of parallel jobs | 8 |
+| `--cores` | Cores per job | 4 |
+| `--wall_time` | Time limit (HH:MM) | 1:00 |
+| `--project` | Billing project (required) | None |
+| `--use_dask_jobqueue` | Use Dask scheduling | False |
+
+### 6. Example Commands
 
 #### Convert N5 to Zarr V2 locally
 ```bash

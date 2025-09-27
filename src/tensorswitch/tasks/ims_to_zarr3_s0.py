@@ -1,7 +1,8 @@
 from dask.cache import Cache
-from ..utils import (load_ims_stack, zarr3_store_spec, get_chunk_domains, commit_tasks, 
-                    get_total_chunks_from_store, extract_ims_metadata, 
-                    convert_ims_to_zarr3_metadata, write_zarr3_group_metadata)
+from ..utils import (load_ims_stack, zarr3_store_spec, get_chunk_domains, commit_tasks,
+                    get_total_chunks_from_store, extract_ims_metadata,
+                    convert_ims_to_zarr3_metadata, write_zarr3_group_metadata,
+                    write_dual_zarr_metadata)
 import tensorstore as ts
 import numpy as np
 import psutil
@@ -53,7 +54,7 @@ def update_zarr_ome_xml_ims(multiscale_path, source_ims_path):
     except Exception as e:
         print(f"Could not extract IMS metadata: {e}")
 
-def process(base_path, output_path, use_shard=False, memory_limit=50, start_idx=0, stop_idx=None, use_ome_structure=True):
+def process(base_path, output_path, use_shard=False, memory_limit=50, start_idx=0, stop_idx=None, use_ome_structure=True, create_dual_metadata=True, use_v2_encoding=True):
     print(f"Loading IMS file from: {base_path}", flush=True)
 
     volume, h5_file = load_ims_stack(base_path)
@@ -88,7 +89,8 @@ def process(base_path, output_path, use_shard=False, memory_limit=50, start_idx=
         dtype=str(volume.dtype),
         use_shard=use_shard,
         level_path="s0",
-        use_ome_structure=use_ome_structure
+        use_ome_structure=use_ome_structure,
+        use_v2_encoding=use_v2_encoding
     )
 
     store = ts.open(store_spec, create=True, open=True, delete_existing=False).result()
@@ -159,5 +161,17 @@ def process(base_path, output_path, use_shard=False, memory_limit=50, start_idx=
             print(f"Warning: Could not write OME-Zarr metadata: {e}", flush=True)
     else:
         print("Skipping OME-ZARR metadata (plain zarr3 format)", flush=True)
-    
+
+    # Create dual zarr v2/v3 metadata if requested and using OME structure
+    if create_dual_metadata and use_ome_structure:
+        print("Creating dual metadata...", flush=True)
+        try:
+            success = write_dual_zarr_metadata(output_path, base_path)
+            if success:
+                print("Dual metadata created", flush=True)
+            else:
+                print("Warning: Failed to create dual metadata", flush=True)
+        except Exception as e:
+            print(f"Warning: Could not create dual metadata: {e}", flush=True)
+
     print(f"Completed writing Zarr3 s0 at: {output_path} [{start_idx}:{stop_idx}]", flush=True)
