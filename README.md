@@ -5,12 +5,14 @@ This package provides a unified entry point for managing N5/Zarr dataset convers
 ## Features
 
 - **Web GUI Interface**: Production-ready web interface for scientists (no programming required)
+- **AI Assistant**: Integrated OpenAI-powered assistant for conversion guidance and parameter optimization
 - **Command-Line Interface**: Full-featured CLI for automated workflows
-- **Dask JobQueue Integration**: Advanced cluster scheduling with hybrid Dask-LSF execution
+- **Advanced Dask JobQueue**: Hybrid Dask-LSF execution with automatic scaling and error recovery
 - **Smart Workflow System**: Auto-detect input formats and intelligently plan conversions
 - **Enhanced OME-ZARR Metadata**: Automatic preservation of rich metadata from TIFF, ND2, and IMS files
+- **Dual Zarr Format Support**: Create files compatible with both Zarr v2 and v3 tools
 - **Lab Path Integration**: Built-in HHMI lab storage paths (131 labs, 126 projects)
-- **Cluster Integration**: LSF job submission with resource management
+- **Cluster Integration**: LSF job submission with resource management and real-time monitoring
 - **Multiple Format Support**: Complete Zarr2, Zarr3, N5, TIFF, ND2, and IMS conversions
 
 ## Folder Structure
@@ -42,6 +44,11 @@ tensorswitch/
 │           ├── app.py                    # Main GUI application
 │           ├── launch_gui.py             # GUI server launcher
 │           ├── README_GUI.md             # GUI documentation
+│           ├── ai/                       # AI assistant system
+│           │   ├── __init__.py
+│           │   ├── ai_config.py          # AI configuration and environment setup
+│           │   ├── ai_interface.py       # AI chat interface for GUI
+│           │   └── tensorswitch_assistant.py # AI knowledge base and OpenAI integration
 │           ├── format_detection/         # Smart workflow and format auto-detection
 │           │   ├── __init__.py
 │           │   ├── format_detector.py    # Auto-detect file formats and metadata
@@ -54,11 +61,13 @@ tensorswitch/
 │               ├── lab_paths_data.json
 │               └── Lab_and_project_file_share_path.xlsx
 ├── contrib
+│   ├── add_dimension_names.py            # Add dimension names to zarr.json files for all levels
 │   ├── bleaching_correction_task.py      # Z-direction bleaching correction for microscopy datasets
 │   ├── re_submit_jobs.ipynb              # Jupyter notebook to re-submit failed chunk jobs
 │   ├── start_neuroglancer_server.py      # Start a CORS-enabled web server
-│   ├── submit_bleaching_correction_s0.py # Submit bleaching correction jobs to LSF cluster
+│   ├── submit_bleaching_correction_general.py # Generic bleaching correction submission script
 │   ├── update_metadata.py                # Update OME-Zarr multiscale metadata and add ome_xml
+│   ├── update_metadata_zarr2.py          # Update OME-Zarr multiscale metadata for zarr2 datasets
 │   └── z_to_chunk_index.py               # Print chunk index ranges for resubmit failed or left over jobs
 └── tests
     ├── test_n5_to_n5.py                       # Test N5 to N5 conversion
@@ -101,11 +110,15 @@ pixi run python src/tensorswitch/gui/launch_gui.py
 ```
 
 **Features:**
-- Simple 3-step workflow: Select input → Configure → Convert
-- Built-in path suggestions for 131 HHMI labs
-- Real-time progress monitoring
-- Local or cluster job submission
-- All 6 conversion tasks supported
+- **AI Assistant**: Integrated OpenAI-powered chat for conversion guidance and parameter optimization
+- **Smart Mode**: Auto-detect file formats and suggest optimal conversion settings
+- **Simple 3-step workflow**: Select input → Configure → Convert
+- **Advanced Dask Submission**: Hybrid Dask-LSF execution with automatic scaling and error recovery
+- **Built-in path suggestions**: 131 HHMI labs with direct storage access
+- **Real-time progress monitoring**: Job status tracking and log viewing
+- **Dual format support**: Create Zarr files compatible with both v2 and v3 tools
+- **Local or cluster job submission**: Flexible execution options
+- **All conversion tasks supported**: TIFF, ND2, IMS to Zarr2/Zarr3
 
 See [GUI Documentation](src/tensorswitch/gui/README_GUI.md) for detailed usage.
 
@@ -203,7 +216,46 @@ python -m tensorswitch --task nd2_to_zarr3_s0 --base_path file.nd2 --output_path
 python -m tensorswitch --task nd2_to_zarr3_s0 --base_path file.nd2 --output_path output.zarr --dual_zarr_approach v3_chunks
 ```
 
-### 5. Cluster Job Submission
+### 5. AI Assistant Features
+
+The integrated AI assistant provides intelligent guidance for data conversion tasks.
+
+#### Enabling AI Assistant
+
+Set your OpenAI API key before launching the GUI:
+
+```bash
+export OPENAI_API_KEY="your-api-key-here"
+pixi run python src/tensorswitch/gui/launch_gui.py
+```
+
+#### AI Capabilities
+
+- **Format Detection Guidance**: Get recommendations based on your file types
+- **Parameter Optimization**: Optimal cores, memory, and time settings for your data size
+- **Lab Path Assistance**: Find your lab's storage locations quickly
+- **Smart vs Manual Mode**: Understand when to use each approach
+- **Conversion Best Practices**: Format-specific optimization tips
+- **Real-time Support**: Ask questions about any TensorSwitch feature
+
+#### Example AI Interactions
+
+```
+User: "I have a 5GB ND2 file, what settings should I use?"
+AI: "For a 5GB ND2 file, I recommend:
+     - Use Smart Mode for auto-detection
+     - 2 cores, 16GB memory, 2 hours wall time
+     - Enable OME structure for metadata preservation
+     - Consider Zarr3 format for better performance"
+
+User: "How do I find my lab's storage path?"
+AI: "Use the Lab Path Helper in the GUI. Your lab's paths are:
+     - NRS: /nrs/yourlab/
+     - Groups: /groups/yourlab/
+     - Click on the path suggestions for quick access"
+```
+
+### 6. Cluster Job Submission
 
 Submit conversions to LSF cluster with automatic job splitting.
 
@@ -382,12 +434,35 @@ Z-direction bleaching correction for microscopy datasets:
 python contrib/bleaching_correction_task.py --input_path /path/to/input.zarr --output_path /path/to/corrected.zarr
 ```
 
-### submit_bleaching_correction_s0.py
-Submit bleaching correction jobs to LSF cluster:
+
+### add_dimension_names.py
+Add dimension names to zarr.json files for all levels in a dataset:
 
 ```bash
-# Submit bleaching correction to cluster
-python contrib/submit_bleaching_correction_s0.py --input_path /path/to/input.zarr --output_path /path/to/corrected.zarr --project your_project
+# Add dimension names to all levels in a zarr dataset
+python contrib/add_dimension_names.py /path/to/dataset.zarr
+```
+
+### submit_bleaching_correction_general.py
+Generic bleaching correction submission script for s0 level:
+
+```bash
+# Submit bleaching correction with default settings
+python contrib/submit_bleaching_correction_general.py /path/to/input.zarr /path/to/corrected.zarr
+
+# Submit with custom volumes and project
+python contrib/submit_bleaching_correction_general.py /path/to/input.zarr /path/to/corrected.zarr 4 your_project
+```
+
+### update_metadata_zarr2.py
+Update zarr v2 metadata to fix common issues:
+
+```bash
+# Fix ome_xml placement in zarr v2 metadata
+python contrib/update_metadata_zarr2.py /path/to/dataset.zarr --check-ome-xml
+
+# Update multiscale metadata structure
+python contrib/update_metadata_zarr2.py /path/to/dataset.zarr --update-multiscale
 ```
 
 ### Other Contrib Scripts

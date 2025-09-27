@@ -32,11 +32,13 @@ The GUI helps you convert between different scientific data formats:
 - **Downsampling**: Create multi-resolution pyramids for Zarr2 and Zarr3 datasets
 
 ### Key Features
+- **AI Assistant**: Integrated OpenAI-powered chat for conversion guidance and parameter optimization
 - **Smart Workflow Mode**: Auto-detect input formats and intelligently plan conversions
 - **Manual Mode**: Traditional task selection for advanced users
 - **Lab Path Helper**: Built-in suggestions for 131 HHMI lab storage paths
 - **Project Billing**: Automatic project selection for cluster jobs (126 projects)
-- **Dask JobQueue**: Advanced cluster scheduling with hybrid Dask-LSF execution
+- **Advanced Dask JobQueue**: Hybrid Dask-LSF execution with automatic scaling and error recovery
+- **Dual Format Support**: Create Zarr files compatible with both v2 and v3 tools
 - **Progress Tracking**: Watch conversion progress in real-time
 - **Local or Cluster**: Run jobs locally or submit to LSF cluster
 
@@ -57,6 +59,56 @@ The GUI helps you convert between different scientific data formats:
 
 The GUI shows real-time progress and completion status for both workflows.
 
+## AI Assistant
+
+The integrated AI assistant provides intelligent guidance throughout your conversion workflow.
+
+### Enabling AI Assistant
+
+Set your OpenAI API key before launching the GUI:
+
+```bash
+export OPENAI_API_KEY="your-api-key-here"
+pixi run python src/tensorswitch/gui/launch_gui.py
+```
+
+### AI Features
+
+- **Real-time Chat**: Floating chat interface available throughout the GUI
+- **Format Guidance**: Get recommendations based on your specific file types
+- **Parameter Optimization**: AI suggests optimal cores, memory, and time settings
+- **Lab Path Help**: Find your lab's storage locations quickly
+- **Smart vs Manual**: Understand when to use each workflow mode
+- **Conversion Tips**: Format-specific best practices and optimization advice
+- **Error Diagnosis**: Get help troubleshooting conversion issues
+
+### Example AI Conversations
+
+```
+You: "I have a 2GB ND2 file, what conversion settings should I use?"
+
+AI: "For a 2GB ND2 file, I recommend:
+    - Use Smart Mode for automatic format detection
+    - 2 cores, 16GB memory, 1-2 hours wall time
+    - Enable OME structure to preserve metadata
+    - Consider Zarr3 for better performance
+    - Use cluster submission for reliability"
+
+You: "How do I find my lab's data storage path?"
+
+AI: "Use the Lab Path Helper in Step 1:
+    - Select your lab from the dropdown (131 labs available)
+    - Common paths: /nrs/yourlab/ or /groups/yourlab/
+    - Click suggested paths for quick access
+    - The system will verify path accessibility"
+```
+
+### Cost Management
+
+- Set spending limits at [platform.openai.com](https://platform.openai.com)
+- Typical usage: $0.01-0.05 per conversation
+- AI features are optional - full functionality available without AI
+
 ## Current Status
 
 **Production Ready** - The GUI is fully functional and ready to use.
@@ -76,6 +128,11 @@ The GUI shows real-time progress and completion status for both workflows.
   ├── launch_gui.py             # GUI server launcher
   ├── __init__.py               # Package initialization
   ├── README_GUI.md             # User documentation
+  ├── ai/                       # AI assistant system
+  │   ├── __init__.py
+  │   ├── ai_config.py          # AI configuration and environment setup
+  │   ├── ai_interface.py       # AI chat interface for GUI
+  │   └── tensorswitch_assistant.py # AI knowledge base and OpenAI integration
   ├── format_detection/         # Smart workflow system
   │   ├── __init__.py
   │   ├── format_detector.py    # Auto-detect file formats and extract metadata
@@ -95,6 +152,8 @@ Dependencies are managed in `pyproject.toml`:
 - `panel` - Web GUI framework
 - `param` - Parameter validation
 - `sqlalchemy` - Job database
+- `openai` - AI assistant integration (optional)
+- `dask-jobqueue` - Advanced cluster scheduling
 
 ## Troubleshooting
 
