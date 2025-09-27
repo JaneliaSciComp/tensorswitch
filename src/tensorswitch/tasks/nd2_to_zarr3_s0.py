@@ -43,7 +43,7 @@ def update_zarr_ome_xml_nd2(multiscale_path, source_nd2_path):
     else:
         print("No OME XML found in source ND2")
 
-def process(base_path, output_path, use_shard=False, memory_limit=50, start_idx=0, stop_idx=None, use_ome_structure=True, custom_shard_shape=None, custom_chunk_shape=None, create_dual_metadata=True):
+def process(base_path, output_path, use_shard=False, memory_limit=50, start_idx=0, stop_idx=None, use_ome_structure=True, custom_shard_shape=None, custom_chunk_shape=None, create_dual_metadata=True, use_v2_encoding=True):
     print(f"Loading ND2 file from: {base_path}", flush=True)
 
     volume = load_nd2_stack(base_path)
@@ -80,7 +80,8 @@ def process(base_path, output_path, use_shard=False, memory_limit=50, start_idx=
         level_path="s0",
         use_ome_structure=use_ome_structure,
         custom_shard_shape=custom_shard_shape,
-        custom_chunk_shape=custom_chunk_shape
+        custom_chunk_shape=custom_chunk_shape,
+        use_v2_encoding=use_v2_encoding
     )
 
     store = ts.open(store_spec, create=True, open=True, delete_existing=False).result()
@@ -148,14 +149,14 @@ def process(base_path, output_path, use_shard=False, memory_limit=50, start_idx=
 
     # Create dual zarr v2/v3 metadata if requested and using OME structure
     if create_dual_metadata and use_ome_structure:
-        print("Creating dual zarr v2/v3 metadata...", flush=True)
+        print("Creating dual metadata...", flush=True)
         try:
             success = write_dual_zarr_metadata(output_path, base_path)
             if success:
-                print("Dual zarr v2/v3 metadata created successfully", flush=True)
+                print("Dual metadata created", flush=True)
             else:
-                print("Warning: Failed to create dual zarr metadata", flush=True)
+                print("Warning: Failed to create dual metadata", flush=True)
         except Exception as e:
-            print(f"Warning: Could not create dual zarr metadata: {e}", flush=True)
+            print(f"Warning: Could not create dual metadata: {e}", flush=True)
 
     print(f"Completed writing Zarr3 s0 at: {output_path} [{start_idx}:{stop_idx}]", flush=True)

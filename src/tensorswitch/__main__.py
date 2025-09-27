@@ -12,41 +12,31 @@ if not __package__:
     sys.path.insert(0, package_source_path)
 
 from . import tasks
-from .utils import get_total_chunks, downsample_spec, zarr3_store_spec, get_chunk_domains, estimate_total_chunks_for_tiff, get_input_driver, get_total_chunks_from_store, load_tiff_stack, update_ome_metadata_if_needed
-from .tasks import downsample_shard_zarr3
-from .tasks import n5_to_n5
-from .tasks import n5_to_zarr2
-from .tasks import tiff_to_zarr3_s0
-from .tasks import nd2_to_zarr3_s0
-from .tasks import ims_to_zarr3_s0
-from .tasks import nd2_to_zarr2_s0
-from .tasks import ims_to_zarr2_s0
-from .tasks import tiff_to_zarr2_s0
-from .tasks import downsample_zarr2
-from .utils import load_nd2_stack, load_ims_stack, zarr3_store_spec, get_total_chunks_from_store
-from .dask_utils import submit_dask_job
+from .utils import (get_total_chunks, downsample_spec, zarr3_store_spec, get_chunk_domains,
+                    estimate_total_chunks_for_tiff, get_input_driver, get_total_chunks_from_store,
+                    load_tiff_stack, load_nd2_stack, load_ims_stack, update_ome_metadata_if_needed)
+from .tasks import (downsample_shard_zarr3, n5_to_n5, n5_to_zarr2, tiff_to_zarr3_s0,
+                    nd2_to_zarr3_s0, ims_to_zarr3_s0, nd2_to_zarr2_s0, ims_to_zarr2_s0,
+                    tiff_to_zarr2_s0, downsample_zarr2)
+from .dask_utils import submit_dask_job, submit_dask_wrapper_job
 
 # Set umask to allow group write access
 os.umask(0o0002)
 
 
-def submit_job(args):
-    """Handles LSF cluster job submission for different tasks."""
-    output_dir = os.path.join(os.getcwd(), "output")
-    os.makedirs(output_dir, exist_ok=True)
-
-    # Parse custom shard and chunk shapes for job submission
+def get_total_chunks_for_task(args, use_v2_encoding=True):
+    """Calculate total chunks for a given task."""
+    # Parse custom shard and chunk shapes
     custom_shard_shape = None
     if args.custom_shard_shape:
         custom_shard_shape = [int(x) for x in args.custom_shard_shape.split(',')]
-    
+
     custom_chunk_shape = None
     if args.custom_chunk_shape:
         custom_chunk_shape = [int(x) for x in args.custom_chunk_shape.split(',')]
 
-    #input_driver = get_input_driver(args.base_path)
     input_driver = "n5" if args.base_path.startswith("http") else get_input_driver(args.base_path)
-    
+
     if args.task == "tiff_to_zarr3_s0" and input_driver == "tiff":
         volume = load_tiff_stack(args.base_path)
         store_spec = zarr3_store_spec(
@@ -54,10 +44,12 @@ def submit_job(args):
             shape=volume.shape,
             dtype=str(volume.dtype),
             use_shard=bool(args.use_shard),
-            use_ome_structure=bool(args.use_ome_structure)
+            use_ome_structure=bool(args.use_ome_structure),
+            use_v2_encoding=use_v2_encoding
         )
         temp_store = ts.open(store_spec, create=True, delete_existing=True).result()
         total_chunks = get_total_chunks_from_store(temp_store)
+
     elif args.task == "nd2_to_zarr3_s0":
         volume = load_nd2_stack(args.base_path)
         store_spec = zarr3_store_spec(
@@ -67,15 +59,14 @@ def submit_job(args):
             use_shard=bool(args.use_shard),
             use_ome_structure=bool(args.use_ome_structure),
             custom_shard_shape=custom_shard_shape,
-            custom_chunk_shape=custom_chunk_shape
+            custom_chunk_shape=custom_chunk_shape,
+            use_v2_encoding=use_v2_encoding
         )
         temp_store = ts.open(store_spec, create=True, delete_existing=True).result()
-        # For sharded stores, use the shard shape (write_chunk) not the inner chunk shape (read_chunk)
-        if bool(args.use_shard) and custom_shard_shape:
-            # Use custom shard shape for chunk counting
-            if len(volume.shape) == 3 and len(custom_shard_shape) == 3:
-                chunk_shape_for_counting = custom_shard_shape
-            elif len(volume.shape) == 4 and len(custom_shard_shape) == 3:
+
+        # Handle custom shapes for chunk counting
+        if custom_shard_shape:
+            if len(volume.shape) == 4 and len(custom_shard_shape) == 3:
                 chunk_shape_for_counting = [1] + custom_shard_shape
             elif len(volume.shape) == 5 and len(custom_shard_shape) == 3:
                 chunk_shape_for_counting = [1, 1] + custom_shard_shape
@@ -84,72 +75,54 @@ def submit_job(args):
             total_chunks = get_total_chunks_from_store(temp_store, chunk_shape_for_counting)
         else:
             total_chunks = get_total_chunks_from_store(temp_store)
+
     elif args.task == "ims_to_zarr3_s0":
         volume, h5_file = load_ims_stack(args.base_path)
-        h5_file.close()  # Close file handle after getting shape info
+        h5_file.close()
         store_spec = zarr3_store_spec(
             path=args.output_path,
             shape=volume.shape,
             dtype=str(volume.dtype),
             use_shard=bool(args.use_shard),
             level_path="s0",
-            use_ome_structure=bool(args.use_ome_structure)
+            use_ome_structure=bool(args.use_ome_structure),
+            use_v2_encoding=use_v2_encoding
         )
         temp_store = ts.open(store_spec, create=True, delete_existing=True).result()
         total_chunks = get_total_chunks_from_store(temp_store)
+
     else:
         if args.downsample and args.level > 0:
-            """
-            # Figure out the number of downsampled chunks
-            downsample_spec_dict = downsample_spec(args.base_path)
-            downsample_store = ts.open(downsample_spec_dict).result()
-            downsampled_saved_path = f"{args.output_path}/multiscale/s{args.level}"
-            # TODO generalize beyond zarr3
-            downsampled_saved_spec = zarr3_store_spec(
-                downsampled_saved_path,
-                downsample_store.shape,
-                downsample_store.dtype.name,
-                args.use_shard
-            )
-            total_chunks = get_total_chunks(downsampled_saved_spec)
-            """
-            # Always get chunks from the true input, not from the (possibly non-existent) output
-            # Use s(level-1) as input
             prev_level = args.level - 1
             if args.base_path.endswith(f"s{prev_level}"):
                 input_path = args.base_path
             else:
-                input_path = os.path.join(args.base_path, "multiscale", f"s{prev_level}")
+                input_path = os.path.join(args.base_path, f"s{prev_level}")
 
-            # Build the input spec and open it
-            downsample_spec_dict = downsample_spec(input_path)
-            downsample_store = ts.open(downsample_spec_dict).result()
-
-            # Create output spec as it would be written
-            downsampled_saved_path = f"{args.output_path}/multiscale/s{args.level}"
-            downsampled_saved_spec = zarr3_store_spec(
-                downsampled_saved_path,
-                downsample_store.shape,
-                downsample_store.dtype.name,
-                args.use_shard
-            )
-
-            # Count output chunks
-            # total_chunks = get_total_chunks(downsampled_saved_spec) 
+            downsample_store = ts.open({"driver": "zarr3", "kvstore": {"driver": "file", "path": input_path}}).result()
             chunk_shape = downsample_store.chunk_layout.read_chunk.shape
             total_chunks = get_total_chunks_from_store(downsample_store, chunk_shape=chunk_shape)
-
         else:
             total_chunks = get_total_chunks(args.base_path)
 
+    print(f"Calculated total chunks: {total_chunks} for task: {args.task}")
+    return total_chunks
+
+def submit_job(args, use_v2_encoding=True):
+    """Handles LSF cluster job submission for different tasks."""
+    output_dir = os.path.join(os.getcwd(), "output")
+    os.makedirs(output_dir, exist_ok=True)
+
+    # Use the centralized function to calculate total chunks
+    total_chunks = get_total_chunks_for_task(args, use_v2_encoding)
+
     print(f"The total number of chunks is {total_chunks} with downsample={args.downsample} and level={args.level}")
-    
+
     # Check if using Dask JobQueue
-    # TODO: probably need "busb" here to submit a job that submit the dask job to the cluster...so that my dask job is not going to be killed by the gui
     if hasattr(args, 'use_dask_jobqueue') and args.use_dask_jobqueue:
         print("Using Dask JobQueue submission")
-        
-    
+        return submit_dask_wrapper_job(args, total_chunks)
+
     # Traditional LSF bsub method
     print("Using traditional LSF bsub submission")
     
@@ -157,16 +130,11 @@ def submit_job(args):
     num_volumes = min(total_chunks, args.num_volumes)
     for i in range(num_volumes):
         start_idx = i * (total_chunks // num_volumes)
-        # stop_idx = (i + 1) * (total_chunks // num_volumes) if i < num_volumes - 1 else None
-        # for evenly split chunks per job with final chunk from last job be the total_chunks - 1 (inclusive), covering the full dataset
         if i == num_volumes - 1:
             stop_idx = total_chunks
         else:
             stop_idx = (i + 1) * (total_chunks // num_volumes)
         print(f"vol{i}: {start_idx}–{stop_idx}")
-
-            
-        #job_name = f"{args.task}_vol{i}"
 
         # Extract setup number from base_path if any
         match = re.search(r"setup(\d+)", args.base_path)
@@ -180,8 +148,8 @@ def submit_job(args):
         command = [
             "bsub",
             "-J", job_name,
-            "-n", args.cores,        # Changed from "2" to args.cores
-            "-W", args.wall_time,    # Changed from "1:00" to args.wall_time
+            "-n", args.cores,
+            "-W", args.wall_time,
             "-P", args.project,
             "-g", "/scicompsoft/chend/tensorstore",
             "-o", f"{output_dir}/output__{job_name}_%J.log",
@@ -190,21 +158,20 @@ def submit_job(args):
             "-m", "tensorswitch",
         ]
 
-        forwarded_args = [
-            "task",
-            "base_path",
-            "output_path",
-            "level",
-            "downsample",
-            "use_shard",
-            "use_ome_structure",
-            "memory_limit",
-            "custom_shard_shape",
-            "custom_chunk_shape"
-            "use_dask_jobqueue"
-        ]
-        for arg in forwarded_args:
-            command += ["--"+arg, str(getattr(args, arg))]
+        string_args = ["task", "base_path", "output_path", "custom_shard_shape", "custom_chunk_shape", "dual_zarr_approach"]
+        int_args = ["level", "downsample", "use_shard", "use_ome_structure", "memory_limit"]
+        boolean_flags = ["use_dask_jobqueue"]
+
+        # Add string and integer arguments
+        for arg in string_args + int_args:
+            value = getattr(args, arg)
+            if value is not None and str(value) != "None":
+                command += ["--"+arg, str(value)]
+
+        # Add boolean flags (only if True)
+        for arg in boolean_flags:
+            if getattr(args, arg, False):
+                command += ["--"+arg]
 
         command += ["--start_idx", str(start_idx)]
         if stop_idx is not None:
@@ -236,9 +203,26 @@ def main():
     parser.add_argument("--custom_shard_shape", type=str, help="Custom shard shape as comma-separated values (e.g., '128,576,576')")
     parser.add_argument("--custom_chunk_shape", type=str, help="Custom chunk shape as comma-separated values (e.g., '32,32,32')")
     parser.add_argument("--use_dask_jobqueue", action="store_true", help="Use Dask JobQueue instead of direct LSF submission")
+    parser.add_argument("--dual_zarr_approach", type=str, default="none", choices=["v2_chunks", "v3_chunks", "none"], help="Dual zarr v2/v3 compatibility approach: none (default, pure zarr v3), v2_chunks (colocated metadata), or v3_chunks (.zarray in c/ directory)")
 
     args = parser.parse_args()
-    
+
+    # Validate dual format and sharding compatibility
+    dual_format_requested = args.dual_zarr_approach in ["v2_chunks", "v3_chunks"]
+    if dual_format_requested and bool(args.use_shard):
+        print("ERROR: Cannot use dual format with sharding.")
+        print("Choose either --dual_zarr_approach v2_chunks or --use_shard 1")
+        sys.exit(1)
+
+    # Auto-disable sharding when dual format is requested
+    if dual_format_requested:
+        args.use_shard = 0
+        print(f"INFO: Sharding disabled for dual format ({args.dual_zarr_approach})")
+
+    # Determine chunk encoding and dual metadata creation
+    use_v2_encoding = (args.dual_zarr_approach == "v2_chunks")
+    create_dual_metadata = (args.dual_zarr_approach != "none")
+
     # Parse custom shard and chunk shapes
     custom_shard_shape = None
     if args.custom_shard_shape and args.custom_shard_shape != "None":
@@ -251,20 +235,19 @@ def main():
     if args.submit:
         if args.project == "None":
             raise ValueError(f"Project cannot be None when submitting.")
-        
-        # Both methods use the same submit_job function
-        # The Dask routing happens inside submit_job
-        submit_job(args)
+
+        submit_job(args, use_v2_encoding)
 
     else:
         if hasattr(args, 'use_dask_jobqueue') and args.use_dask_jobqueue:
             print("Using Dask JobQueue submission")
-            success = submit_dask_job(args, total_chunks)
+            total_chunks = get_total_chunks_for_task(args, use_v2_encoding)
+            success = submit_dask_wrapper_job(args, total_chunks)
             if not success:
-                print("Dask submission failed")
+                print("Dask wrapper job submission failed")
                 return
             else:
-                print("Dask submission completed successfully")
+                print("Dask wrapper job submitted successfully")
                 return
 
         if args.task == "n5_to_n5":
@@ -274,11 +257,11 @@ def main():
         elif args.task == "downsample_shard_zarr3":
             downsample_shard_zarr3.process(args.base_path, args.output_path, args.level, args.start_idx, args.stop_idx, bool(args.downsample), bool(args.use_shard), args.memory_limit, custom_shard_shape, custom_chunk_shape)
         elif args.task == "tiff_to_zarr3_s0":
-            tiff_to_zarr3_s0.process(args.base_path, args.output_path, bool(args.use_shard), args.memory_limit, args.start_idx, args.stop_idx, bool(args.use_ome_structure))
+            tiff_to_zarr3_s0.process(args.base_path, args.output_path, bool(args.use_shard), args.memory_limit, args.start_idx, args.stop_idx, bool(args.use_ome_structure), create_dual_metadata, use_v2_encoding)
         elif args.task == "nd2_to_zarr3_s0":
-            nd2_to_zarr3_s0.process(args.base_path, args.output_path, bool(args.use_shard), args.memory_limit, args.start_idx, args.stop_idx, bool(args.use_ome_structure), custom_shard_shape, custom_chunk_shape)
+            nd2_to_zarr3_s0.process(args.base_path, args.output_path, bool(args.use_shard), args.memory_limit, args.start_idx, args.stop_idx, bool(args.use_ome_structure), custom_shard_shape, custom_chunk_shape, create_dual_metadata, use_v2_encoding)
         elif args.task == "ims_to_zarr3_s0":
-            ims_to_zarr3_s0.process(args.base_path, args.output_path, bool(args.use_shard), args.memory_limit, args.start_idx, args.stop_idx, bool(args.use_ome_structure))
+            ims_to_zarr3_s0.process(args.base_path, args.output_path, bool(args.use_shard), args.memory_limit, args.start_idx, args.stop_idx, bool(args.use_ome_structure), create_dual_metadata, use_v2_encoding)
         elif args.task == "nd2_to_zarr2_s0":
             nd2_to_zarr2_s0.process(args.base_path, args.output_path, args.memory_limit, args.start_idx, args.stop_idx, bool(args.use_ome_structure), custom_shard_shape, custom_chunk_shape)
         elif args.task == "ims_to_zarr2_s0":

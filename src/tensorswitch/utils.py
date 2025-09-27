@@ -68,7 +68,7 @@ def zarr2_store_spec(zarr_level_path, shape, chunks):
     }
 
 
-def zarr3_store_spec(path, shape, dtype, use_shard=True, level_path="s0", use_ome_structure=True, custom_shard_shape=None, custom_chunk_shape=None):
+def zarr3_store_spec(path, shape, dtype, use_shard=True, level_path="s0", use_ome_structure=True, custom_shard_shape=None, custom_chunk_shape=None, use_v2_encoding=False):
     if use_shard:
         # Use custom chunk shape if provided, otherwise default
         inner_chunk_shape = custom_chunk_shape if custom_chunk_shape is not None else [32, 32, 32]
@@ -159,7 +159,7 @@ def zarr3_store_spec(path, shape, dtype, use_shard=True, level_path="s0", use_om
         'metadata': {
             'shape': shape,
             'chunk_grid': {'name': 'regular', 'configuration': {'chunk_shape': chunk_shape}},
-            'chunk_key_encoding': {'name': 'default'},
+            'chunk_key_encoding': {'name': 'v2', 'configuration': {'separator': '/'}} if use_v2_encoding else {'name': 'default'},
             'data_type': dtype,
             'node_type': 'array',
             'codecs': codecs,
@@ -1005,7 +1005,7 @@ def update_ome_metadata_if_needed(output_path, use_ome_structure):
     multiscale_path = os.path.join(output_path, 'multiscale')
     zarr3_metadata = os.path.join(multiscale_path, 'zarr.json')
     zarr2_metadata = os.path.join(multiscale_path, '.zattrs')
-    
+
     try:
         if os.path.exists(zarr3_metadata):
             print(f"Updating zarr3 OME metadata for {output_path} with levels s0-s{max_level}")
@@ -1019,5 +1019,343 @@ def update_ome_metadata_if_needed(output_path, use_ome_structure):
             print("Warning: No zarr metadata file found (.zattrs or zarr.json) - skipping metadata update")
     except Exception as e:
         print(f"Warning: Failed to update OME metadata: {e}")
+
+
+# =============================================================================
+# Dual Zarr v2/v3 Metadata Functions
+# =============================================================================
+
+def convert_dtype_v3_to_v2(v3_dtype):
+    """Convert zarr v3 data type to zarr v2 format."""
+    dtype_mapping = {
+        'uint8': '|u1',
+        'uint16': '<u2',
+        'uint32': '<u4',
+        'uint64': '<u8',
+        'int8': '|i1',
+        'int16': '<i2',
+        'int32': '<i4',
+        'int64': '<i8',
+        'float32': '<f4',
+        'float64': '<f8'
+    }
+    return dtype_mapping.get(v3_dtype, v3_dtype)
+
+def extract_compressor_from_v3_codecs(codecs):
+    """Extract compressor configuration from zarr v3 codecs for zarr v2 format."""
+    for codec in codecs:
+        if codec['name'] == 'zstd':
+            return {
+                'id': 'zstd',
+                'level': codec['configuration'].get('level', 1)
+            }
+        elif codec['name'] == 'gzip':
+            return {
+                'id': 'gzip',
+                'level': codec['configuration'].get('level', 6)
+            }
+    # Default to zstd level 1 if no compressor found
+    return {'id': 'zstd', 'level': 1}
+
+def create_zarr2_group_metadata():
+    """Create .zgroup file content for zarr v2 compatibility."""
+    return {"zarr_format": 2}
+
+def create_zarr2_array_metadata(shape, chunk_shape, dtype, codecs):
+    """Create .zarray file content for zarr v2 compatibility."""
+    return {
+        "shape": shape,
+        "chunks": chunk_shape,
+        "fill_value": 0,
+        "dtype": convert_dtype_v3_to_v2(dtype),
+        "filters": None,
+        "dimension_separator": "/",
+        "zarr_format": 2,
+        "order": "C",
+        "compressor": extract_compressor_from_v3_codecs(codecs)
+    }
+
+def convert_zarr3_to_zarr2_ome_metadata_root(zarr3_metadata):
+    """Convert zarr v3 OME metadata to zarr v2 .zattrs format for ROOT level (points to multiscale/s0)."""
+    if 'attributes' not in zarr3_metadata or 'ome' not in zarr3_metadata['attributes']:
+        return None
+
+    ome_data = zarr3_metadata['attributes']['ome']
+    multiscales = ome_data.get('multiscales', [])
+
+    if not multiscales:
+        return None
+
+    # Convert v3 format to v2 format - ROOT points to multiscale/s0
+    v2_multiscales = []
+    for ms in multiscales:
+        v2_ms = {
+            "name": ms.get("name", "/"),
+            "version": "0.4",
+            "axes": ms.get("axes", []),
+            "datasets": []
+        }
+
+        # ROOT level: prepend "multiscale/" to paths: s0 -> multiscale/s0
+        for dataset in ms.get("datasets", []):
+            v2_dataset = dataset.copy()
+            v2_dataset["path"] = f"multiscale/{dataset['path']}"
+            v2_ms["datasets"].append(v2_dataset)
+
+        # Copy type field (required for OME-ZARR spec)
+        if "type" in ms:
+            v2_ms["type"] = ms["type"]
+
+        v2_multiscales.append(v2_ms)
+
+    zarr2_attrs = {"multiscales": v2_multiscales}
+
+    # Copy over any additional OME metadata
+    if "ome_xml" in ome_data:
+        zarr2_attrs["ome_xml"] = ome_data["ome_xml"]
+
+    return zarr2_attrs
+
+def convert_zarr3_to_zarr2_ome_metadata_multiscale(zarr3_metadata):
+    """Convert zarr v3 OME metadata to zarr v2 .zattrs format for MULTISCALE level (points to s0)."""
+    if 'attributes' not in zarr3_metadata or 'ome' not in zarr3_metadata['attributes']:
+        return None
+
+    ome_data = zarr3_metadata['attributes']['ome']
+    multiscales = ome_data.get('multiscales', [])
+
+    if not multiscales:
+        return None
+
+    # Convert v3 format to v2 format - MULTISCALE keeps original paths: s0, s1, etc.
+    v2_multiscales = []
+    for ms in multiscales:
+        v2_ms = {
+            "name": ms.get("name", "/"),
+            "version": "0.4",
+            "axes": ms.get("axes", []),
+            "datasets": []
+        }
+
+        # MULTISCALE level: keep original paths: s0, s1, etc.
+        for dataset in ms.get("datasets", []):
+            v2_dataset = dataset.copy()
+            # Keep original path (s0, s1, etc.)
+            v2_ms["datasets"].append(v2_dataset)
+
+        # Copy type field (required for OME-ZARR spec)
+        if "type" in ms:
+            v2_ms["type"] = ms["type"]
+
+        v2_multiscales.append(v2_ms)
+
+    zarr2_attrs = {"multiscales": v2_multiscales}
+
+    # Copy over any additional OME metadata
+    if "ome_xml" in ome_data:
+        zarr2_attrs["ome_xml"] = ome_data["ome_xml"]
+
+    return zarr2_attrs
+
+def create_zarr3_root_metadata(zarr3_multiscale_metadata):
+    """Create zarr v3 root group metadata that points to multiscale/s0."""
+    if 'attributes' not in zarr3_multiscale_metadata or 'ome' not in zarr3_multiscale_metadata['attributes']:
+        return None
+
+    ome_data = zarr3_multiscale_metadata['attributes']['ome']
+    multiscales = ome_data.get('multiscales', [])
+
+    if not multiscales:
+        return None
+
+    # Create root zarr v3 metadata
+    root_metadata = {
+        "zarr_format": 3,
+        "node_type": "group",
+        "attributes": {
+            "ome": {
+                "version": ome_data.get("version", "0.5"),
+                "multiscales": []
+            }
+        }
+    }
+
+    # Convert multiscales to point to multiscale/s0 paths
+    for ms in multiscales:
+        root_ms = ms.copy()
+        root_datasets = []
+
+        for dataset in ms.get("datasets", []):
+            root_dataset = dataset.copy()
+            root_dataset["path"] = f"multiscale/{dataset['path']}"
+            root_datasets.append(root_dataset)
+
+        root_ms["datasets"] = root_datasets
+        root_metadata["attributes"]["ome"]["multiscales"].append(root_ms)
+
+    # Copy over any additional OME metadata
+    if "ome_xml" in ome_data:
+        root_metadata["attributes"]["ome"]["ome_xml"] = ome_data["ome_xml"]
+
+    return root_metadata
+
+
+def write_dual_zarr_metadata(output_path, source_file):
+    """
+    Write Mark's multi-level dual zarr v2/v3 metadata for compatibility.
+    Creates zarr v2 entry points at both root and multiscale levels.
+    """
+    multiscale_path = os.path.join(output_path, "multiscale")
+    zarr3_group_path = os.path.join(multiscale_path, "zarr.json")
+
+    if not os.path.exists(zarr3_group_path):
+        print(f"Warning: zarr v3 metadata not found at {zarr3_group_path}")
+        return False
+
+    try:
+        # Read zarr v3 group metadata
+        with open(zarr3_group_path, 'r') as f:
+            zarr3_metadata = json.load(f)
+
+        # 1. Create zarr v3 root group metadata
+        root_zarr3_metadata = create_zarr3_root_metadata(zarr3_metadata)
+        root_zarr3_path = os.path.join(output_path, "zarr.json")
+        with open(root_zarr3_path, 'w') as f:
+            json.dump(root_zarr3_metadata, f, indent=2)
+        print(f"Created zarr v3 root metadata: {root_zarr3_path}")
+
+        # 2. Create zarr v2 root metadata (points to multiscale/s0)
+        root_zgroup_path = os.path.join(output_path, ".zgroup")
+        with open(root_zgroup_path, 'w') as f:
+            json.dump(create_zarr2_group_metadata(), f, indent=2)
+        print(f"Created zarr v2 root group: {root_zgroup_path}")
+
+        root_zarr2_attrs = convert_zarr3_to_zarr2_ome_metadata_root(zarr3_metadata)
+        if root_zarr2_attrs:
+            root_zattrs_path = os.path.join(output_path, ".zattrs")
+            with open(root_zattrs_path, 'w') as f:
+                json.dump(root_zarr2_attrs, f, indent=2)
+            print(f"Created zarr v2 root OME metadata: {root_zattrs_path}")
+
+        # 3. Create zarr v2 multiscale metadata (points to s0)
+        multiscale_zgroup_path = os.path.join(multiscale_path, ".zgroup")
+        with open(multiscale_zgroup_path, 'w') as f:
+            json.dump(create_zarr2_group_metadata(), f, indent=2)
+        print(f"Created zarr v2 multiscale group: {multiscale_zgroup_path}")
+
+        multiscale_zarr2_attrs = convert_zarr3_to_zarr2_ome_metadata_multiscale(zarr3_metadata)
+        if multiscale_zarr2_attrs:
+            multiscale_zattrs_path = os.path.join(multiscale_path, ".zattrs")
+            with open(multiscale_zattrs_path, 'w') as f:
+                json.dump(multiscale_zarr2_attrs, f, indent=2)
+            print(f"Created zarr v2 multiscale OME metadata: {multiscale_zattrs_path}")
+
+        # 4. Create zarr v2 array metadata for each scale level (auto-detect chunk encoding)
+        detected_v3_chunks = False  # Track if we have v3 chunk encoding
+
+        for item in os.listdir(multiscale_path):
+            if item.startswith('s') and os.path.isdir(os.path.join(multiscale_path, item)):
+                v3_array_path = os.path.join(multiscale_path, item, "zarr.json")
+                v3_array_dir = os.path.join(multiscale_path, item)
+
+                if os.path.exists(v3_array_path):
+                    # Read v3 array metadata
+                    with open(v3_array_path, 'r') as f:
+                        v3_array_metadata = json.load(f)
+
+                    # Detect chunk encoding
+                    chunk_encoding = v3_array_metadata.get("chunk_key_encoding", {}).get("name", "default")
+                    is_v2_encoding = (chunk_encoding == "v2")
+                    is_v3_encoding = (chunk_encoding == "default")
+
+                    # Track v3 chunk encoding for metadata path correction
+                    if is_v3_encoding:
+                        detected_v3_chunks = True
+
+                    # Convert to v2 array metadata
+                    zarr2_array = create_zarr2_array_metadata(
+                        shape=v3_array_metadata["shape"],
+                        chunk_shape=v3_array_metadata["chunk_grid"]["configuration"]["chunk_shape"],
+                        dtype=v3_array_metadata["data_type"],
+                        codecs=v3_array_metadata["codecs"]
+                    )
+
+                    # Place .zarray file based on chunk encoding (Mark's approach)
+                    if is_v2_encoding:
+                        # Approach 1: v2 chunk encoding - .zarray colocated with zarr.json
+                        zarray_path = os.path.join(v3_array_dir, ".zarray")
+                        approach_name = "v2 chunk encoding (colocated)"
+                    elif is_v3_encoding:
+                        # Approach 2: v3 chunk encoding - .zarray inside c/ directory
+                        c_dir = os.path.join(v3_array_dir, "c")
+                        if os.path.exists(c_dir):
+                            zarray_path = os.path.join(c_dir, ".zarray")
+                            approach_name = "v3 chunk encoding (c/ directory)"
+                        else:
+                            print(f"Warning: v3 chunk encoding detected but no c/ directory found at {c_dir}")
+                            # Fallback to colocated
+                            zarray_path = os.path.join(v3_array_dir, ".zarray")
+                            approach_name = "v3 chunk encoding (fallback colocated)"
+                    else:
+                        print(f"Warning: Unknown chunk encoding '{chunk_encoding}' at {v3_array_path}, using colocated placement")
+                        zarray_path = os.path.join(v3_array_dir, ".zarray")
+                        approach_name = f"unknown encoding '{chunk_encoding}' (colocated)"
+
+                    # Write .zarray file
+                    with open(zarray_path, 'w') as f:
+                        json.dump(zarr2_array, f, indent=2)
+                    print(f"Created zarr v2 array metadata ({approach_name}): {zarray_path}")
+
+        # 5. Fix zarr v2 entry point paths for v3 chunk encoding (Mark's approach)
+        if detected_v3_chunks:
+            print("Detected v3 chunk encoding - fixing zarr v2 entry point paths...")
+
+            # Fix root .zattrs to point to multiscale/s0/c
+            root_zattrs_path = os.path.join(output_path, ".zattrs")
+            if os.path.exists(root_zattrs_path):
+                with open(root_zattrs_path, 'r') as f:
+                    root_attrs = json.load(f)
+
+                # Update paths in multiscales datasets
+                for ms in root_attrs.get("multiscales", []):
+                    for dataset in ms.get("datasets", []):
+                        if dataset["path"].endswith("/s0"):
+                            dataset["path"] = dataset["path"] + "/c"
+
+                with open(root_zattrs_path, 'w') as f:
+                    json.dump(root_attrs, f, indent=2)
+                print(f"Updated root zarr v2 paths for v3 chunks: {root_zattrs_path}")
+
+            # Fix multiscale .zattrs to point to s0/c
+            multiscale_zattrs_path = os.path.join(multiscale_path, ".zattrs")
+            if os.path.exists(multiscale_zattrs_path):
+                with open(multiscale_zattrs_path, 'r') as f:
+                    multiscale_attrs = json.load(f)
+
+                # Update paths in multiscales datasets
+                for ms in multiscale_attrs.get("multiscales", []):
+                    for dataset in ms.get("datasets", []):
+                        if dataset["path"] == "s0":
+                            dataset["path"] = "s0/c"
+
+                with open(multiscale_zattrs_path, 'w') as f:
+                    json.dump(multiscale_attrs, f, indent=2)
+                print(f"Updated multiscale zarr v2 paths for v3 chunks: {multiscale_zattrs_path}")
+
+        print(f"Created dual metadata for {output_path}")
+        print("Zarr v2 entry points:")
+        if detected_v3_chunks:
+            print(f"  - Root: {output_path}|zarr2: (points to multiscale/s0/c)")
+            print(f"  - Multiscale: {output_path}/multiscale|zarr2: (points to s0/c)")
+        else:
+            print(f"  - Root: {output_path}|zarr2: (points to multiscale/s0)")
+            print(f"  - Multiscale: {output_path}/multiscale|zarr2: (points to s0)")
+        return True
+
+    except Exception as e:
+        print(f"Error creating dual zarr metadata: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
 
 
