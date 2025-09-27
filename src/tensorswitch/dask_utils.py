@@ -335,7 +335,7 @@ print(f"Total chunks: {{total_chunks}}")
 success = submit_dask_job(args, total_chunks)
 if success:
     print("=== Dask Wrapper Job Completed Successfully ===")
-    print("NOTE: Any subsequent 'TERM_OWNER: job killed by owner' messages")
+    print("NOTE: Any subsequent TERM_OWNER job killed by owner messages")
     print("in worker logs are NORMAL and indicate proper Dask cleanup")
 else:
     print("=== Dask Wrapper Job Failed ===")
