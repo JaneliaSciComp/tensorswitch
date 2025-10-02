@@ -706,7 +706,10 @@ class SimpleTensorSwitchGUI(param.Parameterized):
         # Create floating AI assistant if available
         self.floating_ai = None
         if AI_ASSISTANT_AVAILABLE:
-            self.floating_ai = create_floating_ai_assistant()
+            self.floating_ai = create_floating_ai_assistant(
+                get_gui_state_callback=self.get_gui_state,
+                set_gui_params_callback=self.set_gui_params
+            )
 
         # Initialize plan confirmation state
         self._plan_confirmed = False
@@ -826,6 +829,57 @@ class SimpleTensorSwitchGUI(param.Parameterized):
         # Show shape parameters only when sharding is enabled
         if hasattr(self, 'shape_params_section'):
             self.shape_params_section.visible = self.use_shard
+
+    def get_gui_state(self):
+        """Get current GUI state for context-aware AI responses (Phase 1)"""
+        state = {
+            'input_path': self.input_widget.value if hasattr(self, 'input_widget') else None,
+            'output_path': self.output_widget.value if hasattr(self, 'output_widget') else None,
+            'workflow_mode': self.workflow_mode if hasattr(self, 'workflow_mode') else None,
+            'task': self.task if hasattr(self, 'task') else None,
+            'detected_info': self.input_analysis if hasattr(self, 'input_analysis') else None,
+            'output_format': self.output_format if hasattr(self, 'output_format') else None,
+            'cores': self.cores if hasattr(self, 'cores') else None,
+            'memory': self.memory if hasattr(self, 'memory') else None,
+            'wall_time': self.wall_time if hasattr(self, 'wall_time') else None,
+            'num_volumes': self.num_volumes if hasattr(self, 'num_volumes') else None,
+            'use_dask': self.use_dask_jobqueue if hasattr(self, 'use_dask_jobqueue') else None,
+            'run_locally': self.run_locally if hasattr(self, 'run_locally') else None,
+        }
+        return state
+
+    def set_gui_params(self, params):
+        """Set GUI parameters from AI suggestions (Phase 2)"""
+        # Check if any cluster-specific parameters are being set
+        cluster_params = {'cores', 'memory', 'wall_time', 'num_volumes', 'use_dask_jobqueue'}
+        has_cluster_params = any(k in params for k in cluster_params)
+
+        # If setting cluster parameters, automatically switch to cluster mode
+        if has_cluster_params and hasattr(self, 'run_locally'):
+            self.run_locally = False  # Uncheck "Run Locally"
+
+        if 'cores' in params and hasattr(self, 'cores'):
+            self.cores = params['cores']
+        if 'memory' in params and hasattr(self, 'memory'):
+            self.memory = params['memory']
+        if 'wall_time' in params and hasattr(self, 'wall_time'):
+            self.wall_time = params['wall_time']
+        if 'num_volumes' in params and hasattr(self, 'num_volumes'):
+            self.num_volumes = params['num_volumes']
+        if 'use_dask_jobqueue' in params and hasattr(self, 'use_dask_jobqueue'):
+            self.use_dask_jobqueue = params['use_dask_jobqueue']
+        if 'output_format' in params and hasattr(self, 'output_format'):
+            self.output_format = params['output_format']
+        if 'max_downsample_level' in params and hasattr(self, 'max_downsample_level'):
+            self.max_downsample_level = params['max_downsample_level']
+
+        # Auto-confirm Step 2 when AI applies parameters
+        self._plan_confirmed = True
+        if hasattr(self, 'confirm_plan_btn'):
+            self.confirm_plan_btn.visible = False
+        if hasattr(self, 'confirm_manual_btn'):
+            self.confirm_manual_btn.visible = False
+        self._update_progressive_disclosure()
 
     def analyze_input_file(self, *args, **kwargs):
         """Analyze input file when path changes"""

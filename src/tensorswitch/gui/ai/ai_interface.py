@@ -13,8 +13,12 @@ from .tensorswitch_assistant import (
 )
 
 
-def create_floating_ai_chat():
-    """Create floating draggable AI chat widget
+def create_floating_ai_chat(get_gui_state_callback=None, set_gui_params_callback=None):
+    """Create floating draggable AI chat widget with interactive parameter setting (Phase 2)
+
+    Args:
+        get_gui_state_callback: Optional function that returns current GUI state as dict
+        set_gui_params_callback: Optional function that sets GUI parameters from dict
 
     Requires OPENAI_API_KEY environment variable to be set before launching GUI
     """
@@ -86,6 +90,7 @@ pixi run python src/tensorswitch/gui/launch_gui.py
     chat_history = []
     is_minimized = False
     ai_enabled = ai_available
+    pending_suggestions = {}  # Store AI parameter suggestions
 
     def handle_chat():
         if not ai_enabled:
@@ -101,8 +106,89 @@ pixi run python src/tensorswitch/gui/launch_gui.py
         update_display(thinking=True)
 
         try:
-            ai_response = get_tensorswitch_help_with_openai(user_message)
+            # Phase 1: Get current GUI state for context-aware responses
+            context_data = None
+            if get_gui_state_callback:
+                try:
+                    context_data = get_gui_state_callback()
+                except Exception as e:
+                    print(f"Warning: Could not get GUI state: {e}")
+
+            # Phase 2: Check if user wants to apply settings
+            wants_to_apply = any(keyword in user_message.lower() for keyword in
+                               ['yes', 'apply', 'apply it', 'apply them', 'do it', 'yes please', 'go ahead', 'sure'])
+
+            # If user confirms and we have pending suggestions
+            if wants_to_apply and pending_suggestions and set_gui_params_callback:
+                try:
+                    set_gui_params_callback(pending_suggestions)
+                    param_list = ", ".join([f"{k}={v}" for k, v in pending_suggestions.items()])
+                    chat_history.append(f"**✅ Applied Settings:** {param_list}")
+                    chat_history.append(f"**🤖 AI:** Settings have been updated in the GUI! Please review them and click 'Run Job' when ready.")
+                    pending_suggestions.clear()
+                    apply_btn.visible = False
+                    update_display()
+                    return
+                except Exception as e:
+                    chat_history.append(f"**❌ Error:** {str(e)}")
+                    update_display()
+                    return
+
+            # Check if user wants parameter suggestions or to change specific values
+            wants_settings = any(keyword in user_message.lower() for keyword in
+                               ['set parameters', 'apply settings', 'configure', 'set optimal', 'fill fields',
+                                'optimal parameters', 'recommended parameters', 'suggest parameters',
+                                'use', 'set', 'change to', 'make it'])
+
+            ai_response = get_tensorswitch_help_with_openai(user_message, context_data=context_data)
             chat_history.append(f"**🤖 AI:** {ai_response}")
+
+            # Phase 2: Extract parameters from user request first, then AI response
+            if wants_settings and context_data and set_gui_params_callback:
+                import re
+                suggested_params = {}
+
+                # Priority 1: Check user's message for explicit requests
+                user_cores = re.search(r'(\d+)\s+cores?|cores?\s*(\d+)', user_message.lower())
+                user_memory = re.search(r'(\d+)\s*gb', user_message.lower())
+                user_format = re.search(r'zarr2|zarr3|n5', user_message.lower())
+
+                if user_cores:
+                    val = user_cores.group(1) or user_cores.group(2)
+                    suggested_params['cores'] = str(val)
+                if user_memory:
+                    suggested_params['memory'] = int(user_memory.group(1))
+                if user_format:
+                    fmt = user_format.group(0)
+                    suggested_params['output_format'] = 'Zarr3' if fmt == 'zarr3' else 'Zarr2' if fmt == 'zarr2' else 'N5'
+
+                # Priority 2: If no explicit user request, parse AI response
+                if not suggested_params:
+                    cores_match = re.search(r'cores?[:\s=]+(\d+)', ai_response.lower())
+                    memory_match = re.search(r'memory[:\s=]+(\d+)\s*gb', ai_response.lower())
+                    time_match = re.search(r'(?:wall.?time|time)[:\s=]+(\d+):(\d+)|(\d+)\s+hours?', ai_response.lower())
+                    volumes_match = re.search(r'volumes?[:\s=]+(\d+)', ai_response.lower())
+
+                    if cores_match:
+                        suggested_params['cores'] = str(cores_match.group(1))
+                    if memory_match:
+                        suggested_params['memory'] = int(memory_match.group(1))
+                    if time_match:
+                        if time_match.group(1) and time_match.group(2):
+                            suggested_params['wall_time'] = f"{time_match.group(1)}:{time_match.group(2)}"
+                        elif time_match.group(3):
+                            suggested_params['wall_time'] = f"{time_match.group(3)}:00"
+                    if volumes_match:
+                        suggested_params['num_volumes'] = int(volumes_match.group(1))
+
+                if suggested_params:
+                    pending_suggestions.clear()
+                    pending_suggestions.update(suggested_params)
+                    param_list = ", ".join([f"{k}={v}" for k, v in suggested_params.items()])
+                    chat_history.append(f"**💡 Recommended:** {param_list}")
+                    chat_history.append(f"**🤖 AI:** Would you like me to apply these settings to the GUI? (Just say 'yes' or 'apply')")
+                    apply_btn.visible = True
+
             update_display()
         except Exception as e:
             chat_history.append(f"**❌ Error:** {str(e)}")
@@ -163,6 +249,30 @@ pixi run python src/tensorswitch/gui/launch_gui.py
     """]
     chat_btn.on_click(lambda event: handle_chat())
 
+    # Apply Settings button (Phase 2)
+    apply_btn = pn.widgets.Button(
+        name="Apply AI Settings",
+        button_type="success",
+        visible=False,
+        width=150,
+        height=35
+    )
+
+    def apply_settings(event):
+        """Apply AI-suggested parameters to GUI"""
+        if pending_suggestions and set_gui_params_callback:
+            try:
+                set_gui_params_callback(pending_suggestions)
+                chat_history.append("**✅ Settings Applied:** Parameters updated in GUI. Please review before running.")
+                apply_btn.visible = False
+                pending_suggestions.clear()
+                update_display()
+            except Exception as e:
+                chat_history.append(f"**❌ Error applying settings:** {str(e)}")
+                update_display()
+
+    apply_btn.on_click(apply_settings)
+
     minimize_btn = pn.widgets.Button(name="➖", button_type="light", width=30, height=25)
     minimize_btn.on_click(toggle_minimize)
 
@@ -182,10 +292,11 @@ pixi run python src/tensorswitch/gui/launch_gui.py
     )
 
 
-    # Create chat section
+    # Create chat section with apply button
     chat_section = pn.Column(
         pn.pane.Markdown("**Chat:**", styles={'font-size': '12px', 'margin': '2px 0'}),
         pn.Row(chat_input, chat_btn, sizing_mode="stretch_width"),
+        apply_btn,  # Phase 2: Apply AI settings button
         sizing_mode="stretch_width"
     )
 
@@ -261,10 +372,13 @@ def create_ai_setup_widget():
     return None
 
 
-def create_floating_ai_assistant():
-    """Create floating AI assistant widget"""
+def create_floating_ai_assistant(get_gui_state_callback=None, set_gui_params_callback=None):
+    """Create floating AI assistant widget with context awareness and parameter setting"""
     if not OPENAI_AVAILABLE:
         return None
 
     ai_config.check_and_enable()  # Check environment variable
-    return create_floating_ai_chat()
+    return create_floating_ai_chat(
+        get_gui_state_callback=get_gui_state_callback,
+        set_gui_params_callback=set_gui_params_callback
+    )
