@@ -15,10 +15,21 @@ def convert(base_path, output_path, number, level, start_idx=0, stop_idx=None, m
     #attr_url = f"{n5_level_path}/attributes.json"
     #attr_data = fetch_http_json(attr_url)
 
-    n5_store = ts.open(n5_store_spec(n5_level_path)).result()
+    # Get number of cores from LSF environment and set concurrency limits
+    num_cores = int(os.getenv("LSB_DJOB_NUMPROC", 1))
+    print(f"Setting tensorstore concurrency limits to {num_cores} cores")
+    context = {
+        "data_copy_concurrency": {"limit": num_cores},
+        "file_io_concurrency": {"limit": num_cores}
+    }
+
+    # Open source store with context
+    n5_input_spec = n5_store_spec(n5_level_path)
+    n5_input_spec['context'] = context
+    n5_store = ts.open(n5_input_spec).result()
 
     #shape, chunk_shape = n5_store.shape, [64, 64, 64]
-    
+
     # Read from original(HTTP) chunk shape but write in specific output chunk shape
     shape, chunk_shape = n5_store.shape, n5_store.chunk_layout.read_chunk.shape
     output_chunk_shape = [64, 64, 64]
@@ -37,7 +48,8 @@ def convert(base_path, output_path, number, level, start_idx=0, stop_idx=None, m
                 "clevel": 2,
                 "shuffle": 0
             }
-        }
+        },
+        'context': context
     }
 
     n5_output_store = create_output_store(n5_output_spec)
