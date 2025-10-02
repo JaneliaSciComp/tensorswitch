@@ -50,6 +50,25 @@ except Exception as e:
     import traceback
     traceback.print_exc()
 
+# Import cost estimator
+COST_ESTIMATOR_AVAILABLE = False
+try:
+    from cost_estimator import (
+        estimate_processing_time,
+        estimate_cluster_cost,
+        get_ai_cost,
+        calculate_total_chunks,
+        format_time
+    )
+    COST_ESTIMATOR_AVAILABLE = True
+    print("GUI: Cost estimator loaded successfully")
+except ImportError as e:
+    print(f"GUI: Cost estimator not available: {e}")
+except Exception as e:
+    print(f"GUI: Cost estimator failed: {e}")
+    import traceback
+    traceback.print_exc()
+
 class SimpleTensorSwitchGUI(param.Parameterized):
     """TensorSwitch GUI for data format conversion"""
     
@@ -1198,6 +1217,61 @@ class SimpleTensorSwitchGUI(param.Parameterized):
         if self.custom_chunk_shape and self.custom_chunk_shape.strip():
             custom_shapes_info += f"\n- **Custom Chunk Shape**: {self.custom_chunk_shape.strip()}"
 
+        # Add cost estimation if available
+        cost_info = ""
+        if COST_ESTIMATOR_AVAILABLE and not self.run_locally:
+            try:
+                # Parse wall time (format: HH:MM or MM)
+                wall_time_str = self.wall_time.strip()
+                if ':' in wall_time_str:
+                    hours, minutes = wall_time_str.split(':')
+                    wall_time_hours = int(hours) + int(minutes) / 60
+                else:
+                    wall_time_hours = int(wall_time_str) / 60  # Assume minutes
+
+                num_cores = int(self.cores)
+                num_volumes = int(self.num_volumes)
+                total_slots = num_cores * num_volumes  # Account for parallel jobs
+
+                # Try to get chunk information from input analysis
+                if hasattr(self, 'input_analysis') and self.input_analysis:
+                    shape = self.input_analysis.get('shape')
+                    # Get chunk shape from custom or defaults
+                    chunk_shape_str = self.custom_chunk_shape.strip() if self.custom_chunk_shape else "64,64,64"
+
+                    if shape and chunk_shape_str:
+                        try:
+                            chunk_shape = tuple(int(x) for x in chunk_shape_str.split(','))
+                            total_chunks = calculate_total_chunks(shape, chunk_shape)
+
+                            # Calculate time per volume (chunks split across volumes)
+                            chunks_per_volume = total_chunks / num_volumes
+                            est_time = estimate_processing_time(int(chunks_per_volume), num_cores)
+
+                            # Calculate costs using total slots (cores × volumes)
+                            est_cost = estimate_cluster_cost(total_slots, est_time)
+                            max_cost = estimate_cluster_cost(total_slots, wall_time_hours)
+                            ai_cost = get_ai_cost()
+
+                            cost_info = f"""
+---
+
+### 💰 Cost & Time Estimate
+
+- **Processing Time**: ~{format_time(est_time)} (per volume, {num_volumes} parallel jobs)
+- **Total Chunks**: {total_chunks:,} ({int(chunks_per_volume):,} per volume)
+- **Total Slots Used**: {total_slots} ({num_cores} cores × {num_volumes} volumes)
+- **Cluster Cost**: ${est_cost:.4f} - ${max_cost:.4f} (Est - Max at {wall_time_hours:.1f}h wall time)
+- **AI Assistant**: ${ai_cost:.2f}/session
+- **TOTAL COST**: ${est_cost + ai_cost:.4f} - ${max_cost + ai_cost:.4f}
+
+---
+"""
+                        except:
+                            pass  # Skip cost estimation if parsing fails
+            except:
+                pass  # Skip cost estimation if any error occurs
+
         preview_text = f"""
 **Job Preview**: 🔍
 
@@ -1213,10 +1287,10 @@ class SimpleTensorSwitchGUI(param.Parameterized):
 - **Wall Time**: {self.wall_time}
 - **Parallel Volumes**: {self.num_volumes}
 - **Memory Limit**: {self.memory_limit}%{custom_shapes_info}
-
+{cost_info}
 Click **🚀 Run Job** to execute this configuration.
         """
-        
+
         self.preview_box.object = preview_text
         self.preview_box.styles = {'background': '#e3f2fd', 'padding': '15px', 'border-radius': '8px', 'border-left': '4px solid #2196f3', 'margin-bottom': '15px'}
 
