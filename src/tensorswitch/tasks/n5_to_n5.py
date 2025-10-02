@@ -43,10 +43,8 @@ def convert(base_path, output_path, number, level, start_idx=0, stop_idx=None, m
             'blockSize': output_chunk_shape, # Write in different chunk shape from source
             'dataType': "uint16",
             'compression': {
-                "type": "blosc",
-                "cname": "zstd",
-                "clevel": 2,
-                "shuffle": 0
+                "type": "zstd",
+                "level": 5
             }
         },
         'context': context

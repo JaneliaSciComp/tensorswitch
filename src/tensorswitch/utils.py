@@ -17,6 +17,29 @@ from ome_types import from_xml
 import xml.etree.ElementTree as ET
 import re
 
+def get_kvstore_spec(path):
+    """
+    Get kvstore specification for TensorStore, supporting both HTTP and local file paths.
+
+    Args:
+        path: File path or HTTP URL
+
+    Returns:
+        dict: kvstore spec with appropriate driver (http or file)
+    """
+    if path.startswith("http"):
+        parsed = urlparse(path)
+        return {
+            'driver': 'http',
+            'base_url': f"{parsed.scheme}://{parsed.netloc}",
+            'path': unquote(parsed.path)
+        }
+    else:
+        return {
+            'driver': 'file',
+            'path': path
+        }
+
 def get_chunk_domains(chunk_shape, array, linear_indices_to_process=None):
     first_chunk_domain = ts.IndexDomain(inclusive_min=array.origin, shape=chunk_shape)
     chunk_number = -(np.array(array.shape) // -np.array(chunk_shape))
@@ -35,24 +58,19 @@ def get_chunk_domains(chunk_shape, array, linear_indices_to_process=None):
         ].intersect(array.domain)
 
 def n5_store_spec(n5_level_path):
-    if n5_level_path.startswith("http"):
-        parsed = urlparse(n5_level_path)
-        return {
-            'driver': 'n5',
-            'kvstore': {
-                'driver': 'http',
-                'base_url': f"{parsed.scheme}://{parsed.netloc}",
-                'path': unquote(parsed.path)
-            }
-        }
-    else:
-        return {
-            'driver': 'n5',
-            'kvstore': {
-                'driver': 'file',
-                'path': n5_level_path
-            }
-        }
+    """
+    Create N5 store specification supporting both HTTP and local file paths.
+
+    Args:
+        n5_level_path: Path to N5 dataset (file path or HTTP URL)
+
+    Returns:
+        dict: N5 store spec for TensorStore
+    """
+    return {
+        'driver': 'n5',
+        'kvstore': get_kvstore_spec(n5_level_path)
+    }
 
 def zarr2_store_spec(zarr_level_path, shape, chunks):
     return {
