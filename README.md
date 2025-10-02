@@ -5,15 +5,19 @@ This package provides a unified entry point for managing N5/Zarr dataset convers
 ## Features
 
 - **Web GUI Interface**: Production-ready web interface for scientists (no programming required)
-- **AI Assistant**: Integrated OpenAI-powered assistant for conversion guidance and parameter optimization
+- **AI Assistant**: Integrated OpenAI-powered assistant with context-aware responses and conversion guidance
+- **Cost Estimation**: Real-time cluster resource cost estimates (AI + cluster billing) before job submission
 - **Command-Line Interface**: Full-featured CLI for automated workflows
 - **Advanced Dask JobQueue**: Hybrid Dask-LSF execution with automatic scaling and error recovery
 - **Smart Workflow System**: Auto-detect input formats and intelligently plan conversions
 - **Enhanced OME-ZARR Metadata**: Automatic preservation of rich metadata from TIFF, ND2, and IMS files
 - **Dual Zarr Format Support**: Create files compatible with both Zarr v2 and v3 tools
+- **HTTP Path Support**: Direct conversion from HTTP-served N5 datasets (e.g., Keller lab data)
 - **Lab Path Integration**: Built-in HHMI lab storage paths (131 labs, 126 projects)
 - **Cluster Integration**: LSF job submission with resource management and real-time monitoring
 - **Multiple Format Support**: Complete Zarr2, Zarr3, N5, TIFF, ND2, and IMS conversions
+- **Optimized N5 Compression**: Native zstd compression for better compatibility and performance
+- **Comprehensive Test Suite**: 31 verified tests covering CLI, GUI, and OME-Zarr workflows
 
 ## Folder Structure
 
@@ -43,6 +47,7 @@ tensorswitch/
 │       └── gui/                          # Web GUI interface
 │           ├── app.py                    # Main GUI application
 │           ├── launch_gui.py             # GUI server launcher
+│           ├── cost_estimator.py         # Cost and time estimation for cluster jobs
 │           ├── README_GUI.md             # GUI documentation
 │           ├── ai/                       # AI assistant system
 │           │   ├── __init__.py
@@ -69,14 +74,17 @@ tensorswitch/
 │   ├── update_metadata.py                # Update OME-Zarr multiscale metadata and add ome_xml
 │   ├── update_metadata_zarr2.py          # Update OME-Zarr multiscale metadata for zarr2 datasets
 │   └── z_to_chunk_index.py               # Print chunk index ranges for resubmit failed or left over jobs
-└── tests
-    ├── test_n5_to_n5.py                       # Test N5 to N5 conversion
-    ├── test_n5_to_zarr2.py                    # Test N5 to Zarr2 conversion
-    ├── test_n5_to_zarr3_downsample_shard.py   # Test N5 to Zarr3 downsampling with shards
-    ├── test_zarr3_to_downsample_noshard_zarr3.py # Test Zarr3 downsampling without shards
-    ├── test_zarr3_to_downsample_shard_zarr3.py   # Test Zarr3 downsampling with shards
-    ├── test_nd2_to_zarr3_middle_chunks.py     # Test ND2 to Zarr3 middle chunk verification
-    └── test_ims_to_zarr3_middle_chunks.py     # Test IMS to Zarr3 middle chunk verification
+└── tests                                   # Comprehensive test suite
+    ├── conftest.py                         # Pytest fixtures and utilities
+    ├── test_data_config.py                 # Real and synthetic data configuration
+    ├── test_http_support.py                # HTTP path handling tests (7 tests)
+    ├── cli/                                # CLI tests (18 tests)
+    │   ├── test_cli_conversions_real.py    # Real data tests with middle chunks (6 tests)
+    │   ├── test_cli_conversions_synthetic.py # All 10 conversion tasks (8 tests)
+    │   └── test_cli_ome_zarr.py            # OME-Zarr metadata validation (4 tests)
+    └── gui/                                # GUI tests (13 tests)
+        ├── test_gui_conversions_synthetic.py # GUI conversion workflows (9 tests)
+        └── test_gui_ome_zarr.py            # GUI OME-Zarr metadata (4 tests)
 
 ```
 

@@ -32,13 +32,15 @@ The GUI helps you convert between different scientific data formats:
 - **Downsampling**: Create multi-resolution pyramids for Zarr2 and Zarr3 datasets
 
 ### Key Features
-- **AI Assistant**: Integrated OpenAI-powered chat for conversion guidance and parameter optimization
+- **AI Assistant**: Integrated OpenAI-powered chat with context-aware responses for conversion guidance
+- **Cost Estimation**: Real-time cluster resource cost estimates before job submission (AI + cluster billing)
 - **Smart Workflow Mode**: Auto-detect input formats and intelligently plan conversions
 - **Manual Mode**: Traditional task selection for advanced users
 - **Lab Path Helper**: Built-in suggestions for 131 HHMI lab storage paths
 - **Project Billing**: Automatic project selection for cluster jobs (126 projects)
 - **Advanced Dask JobQueue**: Hybrid Dask-LSF execution with automatic scaling and error recovery
 - **Dual Format Support**: Create Zarr files compatible with both v2 and v3 tools
+- **HTTP Path Support**: Direct conversion from HTTP-served N5 datasets (e.g., Keller lab data)
 - **Progress Tracking**: Watch conversion progress in real-time
 - **Local or Cluster**: Run jobs locally or submit to LSF cluster
 
@@ -109,6 +111,26 @@ AI: "Use the Lab Path Helper in Step 1:
 - Typical usage: $0.01-0.05 per conversation
 - AI features are optional - full functionality available without AI
 
+## Cost Estimation
+
+Before submitting cluster jobs, the GUI shows you the estimated cost.
+
+**What you'll see:**
+- **Processing Time**: How long the job will take
+- **Cluster Cost**: $0.05 per core per hour (Janelia billing rate)
+- **AI Cost**: ~$0.10 per session
+- **Total Cost Range**: Best case to worst case estimate
+
+**Example:**
+```
+Processing Time: ~1 minute per volume (8 parallel jobs)
+Total Slots: 64 cores (8 cores × 8 volumes)
+Cluster Cost: $0.05 - $6.40
+Total Cost: $0.15 - $6.50
+```
+
+**Tip**: Set wall time close to estimated time to avoid high maximum costs.
+
 ## Current Status
 
 **Production Ready** - The GUI is fully functional and ready to use.
@@ -126,6 +148,7 @@ AI: "Use the Lab Path Helper in Step 1:
   src/tensorswitch/gui/
   ├── app.py                    # Main GUI application (production-ready)
   ├── launch_gui.py             # GUI server launcher
+  ├── cost_estimator.py         # Cost and time estimation
   ├── __init__.py               # Package initialization
   ├── README_GUI.md             # User documentation
   ├── ai/                       # AI assistant system
