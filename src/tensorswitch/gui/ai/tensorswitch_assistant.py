@@ -116,10 +116,10 @@ def get_tensorswitch_help_with_openai(user_question, context_data=None):
         client = OpenAI(api_key=ai_config.get_api_key())
         knowledge = get_tensorswitch_knowledge()
 
-        # Build context string
+        # Add GUI context if available
         context_str = ""
         if context_data:
-            context_str = f"\nCurrent GUI Context: {json.dumps(context_data, indent=2)}"
+            context_str = f"\n\nCurrent GUI state:\n{json.dumps(context_data, indent=2)}"
 
         # System prompt focused only on TensorSwitch with Smart Mode guidance
         system_prompt = f"""You are a TensorSwitch data conversion assistant. Your job is to help scientists use TensorSwitch GUI for converting imaging data efficiently.
@@ -129,6 +129,8 @@ CORE GUIDANCE PRINCIPLES:
 2. When users provide file paths, immediately guide them through the Smart Mode workflow
 3. Smart Mode eliminates the need to manually specify formats or guess parameters
 4. Only suggest Manual Mode for advanced users with specific requirements
+
+IMPORTANT: When user explicitly requests specific parameter values (like "use 4 cores" or "set memory to 32GB"), HONOR their request even if it differs from recommendations. Users know their workflow needs. Provide the values they ask for.
 
 SMART MODE WORKFLOW (Guide users through these steps):
 1. "Enter your file path in the 'Input File/Directory Path' field"
