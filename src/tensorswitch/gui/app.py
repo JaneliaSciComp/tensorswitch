@@ -207,24 +207,24 @@ class SimpleTensorSwitchGUI(param.Parameterized):
         
         # Explanation section
         explanation = pn.pane.Markdown("""
-        <div style="background: #f8f9fa; padding: 40px; border-radius: 15px; margin: 40px 0; text-align: center;">
-        <h2 style="color: #34495e; margin-bottom: 25px;">What is TensorSwitch?</h2>
-        <p style="font-size: 1.1em; line-height: 1.6; color: #2c3e50; margin-bottom: 20px;">
-        TensorSwitch is a high-performance scientific data conversion tool designed for large-scale microscopy and imaging datasets. 
-        It efficiently converts between formats like <strong>TIFF, ND2, IMS, N5, and Zarr</strong> while preserving metadata and enabling parallel processing.
+        <div style="background: #f8f9fa; padding: 30px; border-radius: 15px; margin: 20px 0; text-align: center;">
+        <h2 style="color: #34495e; margin-bottom: 15px;">What is TensorSwitch?</h2>
+        <p style="font-size: 1.1em; line-height: 1.6; color: #2c3e50; margin-bottom: 15px;">
+        Convert scientific data between <strong>TIFF, ND2, IMS, N5, Zarr2, and Zarr3</strong> formats.
+        No programming required.
         </p>
-        <p style="font-size: 1.1em; line-height: 1.6; color: #2c3e50; margin-bottom: 20px;">
-        This GUI makes TensorSwitch accessible to all researchers - no command-line experience required! 
-        Simply specify your input data, choose the desired output format, and let TensorSwitch handle the conversion.
-        </p>
-        <div style="background: #e8f5e8; padding: 20px; border-radius: 8px; margin-top: 30px;">
-        <h3 style="color: #27ae60; margin-bottom: 15px;">✨ Key Features:</h3>
-        <p style="color: #2c3e50;">
-        • Support for 10 conversion tasks • Zarr2 & Zarr3 format support<br>
-        • Local and cluster execution • Dask JobQueue integration<br>
-        • Real-time progress tracking • Automatic OME-Zarr multiscale metadata<br>
-        • Chunked processing for large datasets • LSF job submission
-        </p>
+        <div style="background: #e8f5e8; padding: 15px; border-radius: 8px; margin-top: 15px;">
+        <h3 style="color: #27ae60; margin-bottom: 10px;">Key Features</h3>
+        <ul style="color: #2c3e50; line-height: 1.6; text-align: left; max-width: 600px; margin: 0 auto; padding-left: 20px;">
+        <li><strong>10 Conversion Tasks:</strong> Full support for all format combinations</li>
+        <li><strong>Lab Integration:</strong> 131 HHMI lab paths and 126 project codes</li>
+        <li><strong>Smart Mode:</strong> Auto-detect file formats and plan conversions</li>
+        <li><strong>Flexible Execution:</strong> Run locally or submit to cluster</li>
+        <li><strong>AI Assistant:</strong> Get conversion guidance and parameter suggestions</li>
+        <li><strong>Metadata Preservation:</strong> Automatic OME-Zarr metadata handling</li>
+        <li><strong>Cost Estimation:</strong> See cluster costs before submitting jobs</li>
+        <li><strong>HTTP Support:</strong> Convert from HTTP-served datasets</li>
+        </ul>
         </div>
         </div>
         """)
