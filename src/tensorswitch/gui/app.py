@@ -188,10 +188,6 @@ class SimpleTensorSwitchGUI(param.Parameterized):
         # Set the layout to the main container
         self.layout = self.main_container
 
-        # Force welcome page on every page load/refresh
-        # This ensures users always see the welcome screen when accessing the URL
-        pn.state.onload(lambda: self.show_welcome_page())
-        
     def create_welcome_page(self):
         """Create the welcome/landing page"""
         # Welcome title with switch emoji
@@ -1565,15 +1561,15 @@ def create_simple_app():
     """Create simple test app"""
     pn.extension()
 
-    gui = SimpleTensorSwitchGUI()
+    # Create a function that returns a fresh GUI instance for each session
+    def create_gui_for_session():
+        gui = SimpleTensorSwitchGUI()
+        # Force show welcome page for each new session
+        gui.show_welcome_page()
+        return gui.layout
 
-    # Store gui reference globally so callback can be added later
-    global global_gui
-    global_gui = gui
-
-    # Return just the main GUI layout
-    # AI sidebar will be added to conversion page only
-    return gui.layout
+    # Return the function so Panel creates a new instance per session
+    return create_gui_for_session
 
 if __name__ == "__main__":
     print("Starting simple TensorSwitch GUI test...")
