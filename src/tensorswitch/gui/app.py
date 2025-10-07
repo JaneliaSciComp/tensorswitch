@@ -179,17 +179,18 @@ class SimpleTensorSwitchGUI(param.Parameterized):
         """Create multi-page layout with welcome screen and conversion workflow"""
         # Create main container that will hold different pages
         self.main_container = pn.Column(sizing_mode="stretch_width")
-        
+
         # Create all page layouts
         self.create_welcome_page()
         self.create_conversion_page()
         self.create_progress_page()
-        
+
         # Set the layout to the main container
         self.layout = self.main_container
 
-        # Start with welcome page
-        self.show_welcome_page()
+        # Force welcome page on every page load/refresh
+        # This ensures users always see the welcome screen when accessing the URL
+        pn.state.onload(lambda: self.show_welcome_page())
         
     def create_welcome_page(self):
         """Create the welcome/landing page"""
