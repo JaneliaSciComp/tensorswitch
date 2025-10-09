@@ -8,3 +8,8 @@
 tests/temp
 tests/terminal_history_2025_03_25.txt
 output
+
+# Environment files with secrets (API keys, passwords)
+.env
+.env.*
+*.env
