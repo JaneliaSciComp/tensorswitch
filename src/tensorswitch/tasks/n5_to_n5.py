@@ -34,19 +34,65 @@ def convert(base_path, output_path, number, level, start_idx=0, stop_idx=None, m
     shape, chunk_shape = n5_store.shape, n5_store.chunk_layout.read_chunk.shape
     output_chunk_shape = [64, 64, 64]
 
+    # Try to read source attributes.json to preserve metadata like downsamplingFactors
+    source_attrs = None
+    try:
+        if n5_level_path.startswith("http://") or n5_level_path.startswith("https://"):
+            attr_url = f"{n5_level_path}/attributes.json"
+            source_attrs = fetch_http_json(attr_url)
+            print(f"✓ Fetched attributes from {attr_url}")
+        else:
+            import json
+            attr_path = os.path.join(n5_level_path, "attributes.json")
+            if os.path.exists(attr_path):
+                with open(attr_path, 'r') as f:
+                    source_attrs = json.load(f)
+                print(f"✓ Read attributes from {attr_path}")
+    except Exception as e:
+        print(f"⚠ Could not read source attributes.json: {e}")
+
+    # Build output metadata
+    output_metadata = {
+        'dimensions': shape,
+        'blockSize': output_chunk_shape, # Write in different chunk shape from source
+        'dataType': "uint16",
+        'compression': {
+            "type": "zstd",
+            "level": 5
+        }
+    }
+
+    # Preserve or infer downsamplingFactors
+    if source_attrs and 'downsamplingFactors' in source_attrs:
+        # Use downsamplingFactors from source
+        output_metadata['downsamplingFactors'] = source_attrs['downsamplingFactors']
+        print(f"✓ Preserving downsamplingFactors from source: {source_attrs['downsamplingFactors']}")
+    else:
+        # Infer downsamplingFactors from path (e.g., .../s0/, .../s1/, etc.)
+        # This is specifically for Keller Lab N5 datasets
+        downsampling_map = {
+            's0': [1, 1, 1],
+            's1': [2, 2, 1],
+            's2': [4, 4, 1],
+            's3': [8, 8, 2],
+            's4': [16, 16, 4]
+        }
+
+        # Extract level from path (look for /s0/, /s1/, etc.)
+        import re
+        level_match = re.search(r'/s(\d)(?:/|$)', n5_level_path)
+        if level_match:
+            level_str = f"s{level_match.group(1)}"
+            if level_str in downsampling_map:
+                output_metadata['downsamplingFactors'] = downsampling_map[level_str]
+                print(f"✓ Inferred downsamplingFactors for {level_str}: {downsampling_map[level_str]}")
+        else:
+            print(f"⚠ Could not infer level from path, downsamplingFactors not set")
 
     n5_output_spec = {
         'driver': 'n5',
         'kvstore': {'driver': 'file', 'path': n5_output_path},
-        'metadata': {
-            'dimensions': shape,
-            'blockSize': output_chunk_shape, # Write in different chunk shape from source
-            'dataType': "uint16",
-            'compression': {
-                "type": "zstd",
-                "level": 5
-            }
-        },
+        'metadata': output_metadata,
         'context': context
     }
 
