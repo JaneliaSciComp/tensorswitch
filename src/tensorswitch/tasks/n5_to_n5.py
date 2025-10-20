@@ -2,7 +2,7 @@ import tensorstore as ts
 import os
 import time
 import psutil
-from ..utils import get_chunk_domains, n5_store_spec, create_output_store, commit_tasks, print_processing_info, fetch_http_json, get_total_chunks_from_store
+from ..utils import get_chunk_domains, n5_store_spec, create_output_store, commit_tasks, print_processing_info, fetch_http_json, fetch_remote_json, get_total_chunks_from_store
 
 def convert(base_path, output_path, number, level, start_idx=0, stop_idx=None, memory_limit=50, **kwargs):
     """Convert N5 to N5 format."""
@@ -30,18 +30,20 @@ def convert(base_path, output_path, number, level, start_idx=0, stop_idx=None, m
 
     #shape, chunk_shape = n5_store.shape, [64, 64, 64]
 
-    # Read from original(HTTP) chunk shape but write in specific output chunk shape
+    # Read from original (local/HTTP/GCS/S3) chunk shape but write in specific output chunk shape
     shape, chunk_shape = n5_store.shape, n5_store.chunk_layout.read_chunk.shape
     output_chunk_shape = [64, 64, 64]
 
     # Try to read source attributes.json to preserve metadata like downsamplingFactors
     source_attrs = None
     try:
-        if n5_level_path.startswith("http://") or n5_level_path.startswith("https://"):
+        if n5_level_path.startswith(("http://", "https://", "gs://", "s3://")):
+            # Remote URL (HTTP, HTTPS, GCS, S3)
             attr_url = f"{n5_level_path}/attributes.json"
-            source_attrs = fetch_http_json(attr_url)
+            source_attrs = fetch_remote_json(attr_url)
             print(f"✓ Fetched attributes from {attr_url}")
         else:
+            # Local file path
             import json
             attr_path = os.path.join(n5_level_path, "attributes.json")
             if os.path.exists(attr_path):
