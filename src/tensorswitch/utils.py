@@ -19,22 +19,64 @@ import re
 
 def get_kvstore_spec(path):
     """
-    Get kvstore specification for TensorStore, supporting both HTTP and local file paths.
+    Get kvstore specification for TensorStore, supporting HTTP, GCS, S3, and local file paths.
 
     Args:
-        path: File path or HTTP URL
+        path: File path, HTTP/HTTPS URL, GCS URL (gs://), or S3 URL (s3://)
 
     Returns:
-        dict: kvstore spec with appropriate driver (http or file)
+        dict: kvstore spec with appropriate driver (http, gcs, s3, or file)
+
+    Examples:
+        >>> get_kvstore_spec("http://example.com/data")
+        {'driver': 'http', 'base_url': 'http://example.com', 'path': '/data'}
+
+        >>> get_kvstore_spec("https://s3prfs.int.janelia.org/bucket/path")
+        {'driver': 'http', 'base_url': 'https://s3prfs.int.janelia.org', 'path': '/bucket/path'}
+
+        >>> get_kvstore_spec("gs://bucket-name/path/to/data")
+        {'driver': 'gcs', 'bucket': 'bucket-name', 'path': 'path/to/data'}
+
+        >>> get_kvstore_spec("s3://bucket-name/path/to/data")
+        {'driver': 's3', 'bucket': 'bucket-name', 'path': 'path/to/data'}
+
+        >>> get_kvstore_spec("/local/path/to/data")
+        {'driver': 'file', 'path': '/local/path/to/data'}
     """
-    if path.startswith("http"):
+    if path.startswith("http://") or path.startswith("https://"):
+        # HTTP/HTTPS URL (includes S3 HTTP endpoints like s3prfs.int.janelia.org)
         parsed = urlparse(path)
         return {
             'driver': 'http',
             'base_url': f"{parsed.scheme}://{parsed.netloc}",
             'path': unquote(parsed.path)
         }
+    elif path.startswith("gs://"):
+        # Google Cloud Storage URL
+        # Format: gs://bucket-name/path/to/object
+        path_without_scheme = path[5:]  # Remove 'gs://'
+        parts = path_without_scheme.split('/', 1)
+        bucket = parts[0]
+        object_path = parts[1] if len(parts) > 1 else ''
+        return {
+            'driver': 'gcs',
+            'bucket': bucket,
+            'path': object_path
+        }
+    elif path.startswith("s3://"):
+        # AWS S3 URL (protocol format, less common but supported)
+        # Format: s3://bucket-name/path/to/object
+        path_without_scheme = path[4:]  # Remove 's3://'
+        parts = path_without_scheme.split('/', 1)
+        bucket = parts[0]
+        object_path = parts[1] if len(parts) > 1 else ''
+        return {
+            'driver': 's3',
+            'bucket': bucket,
+            'path': object_path
+        }
     else:
+        # Local file path
         return {
             'driver': 'file',
             'path': path
@@ -59,13 +101,19 @@ def get_chunk_domains(chunk_shape, array, linear_indices_to_process=None):
 
 def n5_store_spec(n5_level_path):
     """
-    Create N5 store specification supporting both HTTP and local file paths.
+    Create N5 store specification supporting HTTP, GCS, S3, and local file paths.
 
     Args:
-        n5_level_path: Path to N5 dataset (file path or HTTP URL)
+        n5_level_path: Path to N5 dataset (local path, HTTP/HTTPS URL, gs:// URL, or s3:// URL)
 
     Returns:
         dict: N5 store spec for TensorStore
+
+    Examples:
+        >>> n5_store_spec("/local/path/to/n5")
+        >>> n5_store_spec("http://example.com/n5")
+        >>> n5_store_spec("gs://bucket-name/path/to/n5")
+        >>> n5_store_spec("s3://bucket-name/path/to/n5")
     """
     return {
         'driver': 'n5',
@@ -214,10 +262,57 @@ def get_shape_and_chunks(store):
     return store.shape, store.chunk_layout.read_chunk.shape
 
 def fetch_http_json(url):
+    """
+    Fetch JSON from HTTP/HTTPS URL.
+
+    For GCS URLs (gs://), use TensorStore to read the file instead.
+
+    Args:
+        url: HTTP/HTTPS URL to JSON file
+
+    Returns:
+        dict: Parsed JSON content
+    """
     response = requests.get(url)
     if response.status_code != 200:
         raise RuntimeError(f"Failed to fetch JSON from {url}")
     return response.json()
+
+
+def fetch_remote_json(url):
+    """
+    Fetch JSON from remote sources (HTTP, HTTPS, or GCS).
+
+    Args:
+        url: URL to JSON file (http://, https://, or gs://)
+
+    Returns:
+        dict: Parsed JSON content
+
+    Examples:
+        >>> fetch_remote_json("http://example.com/data/attributes.json")
+        >>> fetch_remote_json("gs://bucket-name/path/to/attributes.json")
+    """
+    if url.startswith("gs://"):
+        # For GCS, use TensorStore to read the file
+        import json as json_module
+        kvstore_spec = get_kvstore_spec(url)
+
+        try:
+            # Open as a simple key-value store and read the JSON
+            store = ts.open({
+                'driver': 'json',
+                'kvstore': kvstore_spec
+            }).result()
+            return store.read().result()
+        except:
+            # Fallback: read as raw bytes and parse
+            kvstore = ts.KvStore.open(kvstore_spec).result()
+            content_bytes = kvstore.read().result().value
+            return json_module.loads(content_bytes.decode('utf-8'))
+    else:
+        # For HTTP/HTTPS, use requests
+        return fetch_http_json(url)
 
 
 def build_job_name(task, level, volume_idx):
@@ -286,21 +381,31 @@ def get_input_driver(input_path):
     return input_driver
 
 def get_zarr_store_spec(path):
+    """
+    Get TensorStore spec for Zarr/N5 stores, supporting local paths and remote URLs.
+
+    Args:
+        path: Path to dataset (local path, HTTP/HTTPS URL, gs:// URL, or s3:// URL) or dict spec
+
+    Returns:
+        dict: TensorStore spec with appropriate driver and kvstore
+    """
     if isinstance(path, dict):
         return path
-    
-    # If HTTP path, assume N5 driver directly
-    if isinstance(path, str) and path.startswith("http"):
+
+    # If remote path (HTTP, GCS, S3), assume N5 driver directly
+    if isinstance(path, str) and (path.startswith("http://") or path.startswith("https://") or
+                                   path.startswith("gs://") or path.startswith("s3://")):
         return {
             'driver': 'n5',
-            'kvstore': {'driver': 'http', 'base_url': path}
+            'kvstore': get_kvstore_spec(path)
         }
-        
+
     input_driver = get_input_driver(path)
 
     if input_driver == "tiff":
         raise ValueError(f"Cannot build TensorStore spec for TIFF folder: {path}")
-        
+
     zarr_store_spec = {
         'driver': input_driver,
         'kvstore': {'driver': 'file', 'path': path}

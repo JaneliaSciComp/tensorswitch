@@ -12,7 +12,7 @@ This package provides a unified entry point for managing N5/Zarr dataset convers
 - **Smart Workflow System**: Auto-detect input formats and intelligently plan conversions
 - **Enhanced OME-ZARR Metadata**: Automatic preservation of rich metadata from TIFF, ND2, and IMS files
 - **Dual Zarr Format Support**: Create files compatible with both Zarr v2 and v3 tools
-- **HTTP Path Support**: Direct conversion from HTTP-served N5 datasets (e.g., Keller lab data)
+- **Remote Data Support**: Direct conversion from HTTP, Google Cloud Storage (GCS), and S3-served datasets
 - **Lab Path Integration**: Built-in HHMI lab storage paths (131 labs, 126 projects)
 - **Cluster Integration**: LSF job submission with resource management and real-time monitoring
 - **Multiple Format Support**: Complete Zarr2, Zarr3, N5, TIFF, ND2, and IMS conversions
@@ -415,6 +415,34 @@ python contrib/update_metadata.py /path/to/output.zarr
 #### Resubmit Failed Chunks
 Use `re_submit_jobs.ipynb` to debug chunk failures and resubmit specific chunk ranges using `z_to_chunk_index.py`.
 
+### 7. Remote Data Support
+
+Process N5/Zarr data directly from remote sources without downloading.
+
+**Supported sources:**
+- HTTP/HTTPS URLs (e.g., Keller lab servers)
+- Google Cloud Storage (`gs://` URLs)
+- AWS S3 (`s3://` URLs)
+
+**Setup for Google Cloud Storage:**
+```bash
+gcloud auth application-default login
+```
+
+**Example - Convert from Google Cloud:**
+```bash
+python -m tensorswitch --task n5_to_zarr2 \
+  --base_path "gs://bucket-name/path/to/data.n5/s0" \
+  --output_path /local/output.zarr \
+  --level 0
+```
+
+**Inspect remote data:**
+```bash
+pixi run python inspect_gcs_neuroglancer.py gs://bucket-name/path/to/data
+```
+
+Benefits: No download required, saves storage space, faster start.
 
 ---
 
