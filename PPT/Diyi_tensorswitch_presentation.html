@@ -1,0 +1,1667 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TensorSwitch - From Scattered Scripts to Unified Tool</title>
+
+    <!-- Impress.js CSS -->
+    <link rel="stylesheet" href="css/impress.css">
+    <link rel="stylesheet" href="css/presentation-style.css">
+</head>
+<body class="impress-not-supported">
+
+<!-- Fallback message removed - not needed for modern browsers -->
+
+<!-- Main presentation container -->
+<div id="impress">
+
+    <!-- ======================= TITLE SLIDE ======================= -->
+    <div id="title" class="step" data-x="0" data-y="0" data-scale="4">
+        <h1>TensorSwitch</h1>
+        <h2>Data Format Conversion</h2>
+        <p class="subtitle">Scientific Data Format Conversion at Scale</p>
+
+        <div style="margin-top: 30px; font-size: 1.1em;">
+            <p style="margin: 10px 0;">
+                🌐 <a href="http://tensorswitch.int.janelia.org/" target="_blank" style="color: #3498db; text-decoration: none;">tensorswitch.int.janelia.org</a>
+            </p>
+            <p style="margin: 10px 0;">
+                📦 <a href="https://github.com/JaneliaSciComp/tensorswitch/tree/develop" target="_blank" style="color: #3498db; text-decoration: none;">github.com/JaneliaSciComp/tensorswitch/tree/develop</a>
+            </p>
+        </div>
+
+        <!-- Placeholder for TensorSwitch logo -->
+        <!-- <img src="images_videos/tensorswitch_logo.png" alt="TensorSwitch Logo" class="logo"> -->
+
+        <div class="notes">
+            <h3>Title Slide</h3>
+            <p>Hello everyone, I'm Diyi Chen. And today, I'll be sharing with you TensorSwitch - a tool that started from handling scattered conversion requests from different labs and evolved into a unified software that tries to make scientific data format conversion much easier.</p>
+
+            <p>TensorSwitch is live at tensorswitch.int.janelia.org, and the code is on GitHub under JaneliaSciComp/tensorswitch, develop branch.</p>
+
+            <p>In this presentation, I'll walk you through the journey of how TensorSwitch came to be.</p>
+        </div>
+    </div>
+
+    <!-- ======================= JOURNEY BOX ======================= -->
+    <div id="journey-box" class="step timeline-card" data-x="0" data-y="1500" data-z="0" data-scale="2">
+        <h2>The TensorSwitch Journey</h2>
+        <p style="font-size: 1.3em; margin: 30px 0; text-align: center;">From scattered lab requests to production-ready tool</p>
+        <p class="hint" style="margin-top: 20px; margin-bottom: 20px; font-size: 1.2em;">
+            1. Origin → 2. Development → 3. Personal Tool → 4. GUI → 5. AI → 6. Future Improvements & Validations
+        </p>
+        <p class="hint" style="font-size: 1em;">Navigate → to move through phases, ↓ to dive into details</p>
+
+        <div class="notes">
+            <h3>Journey Overview</h3>
+            <p>Here's the journey of TensorSwitch in six major phases.</p>
+            <ul>
+                <li>We will start with understanding the origin - why was this needed in the first place.</li>
+                <li>Then moved through development where we tackled the technical challenges.</li>
+                <li>Evolved it into a personal productivity tool.</li>
+                <li>Created a GUI so scientists could use it directly.</li>
+                <li>Added AI capabilities for guidance.</li>
+                <li>And finally, future improvements and validations - where we are now and where we're heading.</li>
+            </ul>
+        </div>
+    </div>
+
+    <!-- ======================= PHASE 1: ORIGIN ======================= -->
+    <!-- Timeline Point -->
+    <div id="phase1-timeline" class="step timeline-card" data-x="-3500" data-y="3000" data-z="1000" data-scale="1">
+        <h2>Phase 1: Origin</h2>
+        <p class="phase-subtitle">What is TensorSwitch? Where did it come from?</p>
+        <ul class="key-points">
+            <li>Individual lab requests for format conversions</li>
+            <li>TensorStore package: the foundation</li>
+            <li>Recognizing a common need</li>
+        </ul>
+        <p class="dive-hint">↓ Dive deeper into the origin story</p>
+
+        <div class="notes">
+            <h3>Phase 1: Origin</h3>
+            <p>The story begins with individual requests for data format conversions from different labs.</p>
+            <p>Each request was unique, but there was clearly a pattern emerging.</p>
+            <p>Let's dive into the details of how this all started.</p>
+        </div>
+    </div>
+
+    <!-- Deep Dive: Lab Requests -->
+    <div id="phase1-deep1" class="step deep-dive" data-x="-3500" data-y="2800" data-z="-1500" data-scale="1.2">
+        <h3>The Catalyst: Lab Requests</h3>
+        <div class="lab-requests">
+            <div class="request-card">
+                <h4>MengWang Lab</h4>
+                <p class="problem">Problem: Broken Zarr2 files</p>
+                <p class="solution">→ Fixed Zarr2 + Zarr3 conversion</p>
+            </div>
+            <div class="request-card">
+                <h4>Keller Lab</h4>
+                <p class="problem">Problem: N5 data from remote server</p>
+                <p class="solution">→ HTTP download + rechunk to Janelia storage</p>
+            </div>
+            <div class="request-card">
+                <h4>Moe & LICONN</h4>
+                <p class="problem">Problem: ND2 and IMS microscopy files</p>
+                <p class="solution">→ Convert to Zarr3 with metadata preservation</p>
+            </div>
+        </div>
+
+        <!-- Placeholder for lab request timeline graphic -->
+        <!-- <img src="images_videos/lab_requests_timeline.png" alt="Lab Requests Timeline" class="timeline-graphic"> -->
+
+        <div class="notes">
+            <h3>Lab Requests</h3>
+            <p>Different lab requests came from different needs:</p>
+            <ul>
+                <li>MengWang - had broken Zarr2 files that needed fixing and upgrading to Zarr3 format, which showed us format handling needed to be robust</li>
+                <li>Keller lab - needed to download huge N5 datasets from their HTTP server and rechunk for local analysis, which required network transfer support</li>
+                <li>Moe's tavakoli and LICONN - working with ND2 and IMS microscopy formats with rich ome-zarr metadata like acquisition parameters and channel info that needed preservation</li>
+            </ul>
+            <p>Looking at these requests, I noticed a pattern - different formats, different sources, but the same fundamental need: reliable conversion that preserves what matters.</p>
+            <p>That's when I realized this needed to be a unified tool, not just one-off scripts. So we created TensorSwitch to unify all these conversions.</p>
+        </div>
+    </div>
+
+    <!-- Deep Dive: Name & Foundation -->
+    <div id="phase1-deep2" class="step deep-dive" data-x="-3500" data-y="4200" data-z="-1500" data-scale="1.2">
+        <h3>The Name: <span class="highlight">Tensor</span><span class="highlight">Switch</span></h3>
+
+        <div style="display: flex; align-items: center; justify-content: center; gap: 30px; margin: 30px 0;">
+            <div style="text-align: center;">
+                <img src="images_videos/tensorstore icon.jpg" alt="TensorStore" style="height: 100px; margin-bottom: 10px;">
+                <h4 style="margin: 10px 0;"><span class="highlight">Tensor</span>Store</h4>
+                <p style="font-size: 0.9em; color: #555;">Google's Library</p>
+            </div>
+            <div style="font-size: 3em; color: #3498db; font-weight: bold;">+</div>
+            <div style="text-align: center;">
+                <div style="height: 100px; display: flex; align-items: center; justify-content: center; margin-bottom: 10px;">
+                    <span style="font-size: 4em; color: #3498db;">⇄</span>
+                </div>
+                <h4 style="margin: 10px 0;"><span class="highlight">Switch</span></h4>
+                <p style="font-size: 0.9em; color: #555;">Conversion</p>
+            </div>
+            <div style="font-size: 3em; color: #3498db; font-weight: bold;">=</div>
+            <div style="text-align: center;">
+                <div style="height: 100px; display: flex; align-items: center; justify-content: center; margin-bottom: 10px;">
+                    <span style="font-size: 3em; font-weight: bold; color: #2c3e50;"><span class="highlight">Tensor</span><span class="highlight">Switch</span></span>
+                </div>
+                <p style="font-size: 0.9em; color: #555;">Our Tool</p>
+            </div>
+        </div>
+
+        <div class="content-split" style="margin-top: 40px;">
+            <div class="content-left">
+                <h4>Foundation: TensorStore</h4>
+                <div style="display: flex; align-items: center; gap: 15px; margin: 20px 0;">
+                    <img src="images_videos/zarr icon.webp" alt="Zarr" style="height: 60px;">
+                    <div>
+                        <p style="margin: 5px 0;">Efficient Zarr2/Zarr3 operations</p>
+                        <p style="margin: 5px 0;">Chunk-based I/O optimization</p>
+                        <p style="margin: 5px 0;">Multidimensional array handling</p>
+                    </div>
+                </div>
+            </div>
+            <div class="content-right">
+                <h4>What We Switch</h4>
+                <ul>
+                    <li>Formats: N5 ↔ Zarr2 ↔ Zarr3</li>
+                    <li>Resolutions: Downsampling pyramids</li>
+                    <li>Structures: Rechunking optimization</li>
+                </ul>
+            </div>
+        </div>
+
+        <div class="notes">
+            <h3>The Name: TensorSwitch</h3>
+            <p>The name TensorSwitch combines two concepts - Tensor from TensorStore, and Switch for conversion.</p>
+            <p>TensorStore is Google's library that we use as the foundation. It's very powerful for handling multidimensional array data, which is exactly what scientific imaging data is. Such as:</p>
+            <ul>
+                <li>Efficient reading and writing of Zarr formats</li>
+                <li>Smart chunk-based operations that don't load entire datasets into memory</li>
+                <li>Solid performance for large-scale data</li>
+            </ul>
+            <p>The Switch part is what we need such as:</p>
+            <ul>
+                <li>Switch between formats like N5 and Zarr</li>
+                <li>Switch resolutions by creating multiscale pyramids</li>
+                <li>Switch data structures through rechunking</li>
+            </ul>
+            <p>Think of TensorStore as a powerful engine, and TensorSwitch as the vehicle we built around that engine to actually take us where we need to go with the data.</p>
+        </div>
+    </div>
+
+    <!-- ======================= PHASE 2: DEVELOPMENT ======================= -->
+    <!-- Timeline Point -->
+    <div id="phase2-timeline" class="step timeline-card" data-x="-2000" data-y="3000" data-z="1000" data-scale="1">
+        <h2>Phase 2: Development</h2>
+        <p class="phase-subtitle">Building the Technical Foundation</p>
+        <ul class="key-points">
+            <li>Understanding format differences</li>
+            <li>Implementing 10 conversion tasks</li>
+            <li>Metadata preservation challenges</li>
+        </ul>
+        <p class="dive-hint">↓ Explore the technical details</p>
+
+        <div class="notes">
+            <h3>Phase 2: Development</h3>
+            <p>With clear user needs identified, we entered the development phase. This is where we had to deeply understand the technical differences between formats and build robust conversion pipelines.</p>
+            <p>The main challenges were:</p>
+            <ul>
+                <li>Understanding what makes each format unique</li>
+                <li>Implementing reliable conversions for all 10 task combinations we identified</li>
+                <li>Preserving scientific metadata through the conversion process</li>
+            </ul>
+            <p>Let's look at - what makes these formats different and why conversion isn't just copying data.</p>
+        </div>
+    </div>
+
+    <!-- Deep Dive: Format Differences -->
+    <div id="phase2-deep1" class="step deep-dive" data-x="-2000" data-y="2800" data-z="-1500" data-scale="0.8">
+        <h3>Understanding Data Formats</h3>
+        <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 15px;">
+            <div class="format-card">
+                <h4>N5</h4>
+                <p class="tech-detail">Chunked n-dimensional tensors</p>
+                <p class="tech-detail">Parallel read/write support</p>
+                <p class="use-case">→ BigDataViewer/Fiji ecosystem</p>
+                <div style="margin-top: 10px; padding: 10px; background: #e3f2fd; border-radius: 4px; font-size: 0.85em;">
+                    <strong>Origin:</strong> Saalfeld Lab/BigDataViewer<br>
+                    <strong>Structure:</strong> One file per chunk<br>
+                    <strong>Key Feature:</strong> Parallel read/write, flexible backends<br>
+                    <strong>Best for:</strong> Fiji/BigDataViewer workflows
+                </div>
+            </div>
+            <div class="format-card">
+                <h4>Zarr2</h4>
+                <p class="tech-detail">Python-friendly, community standard</p>
+                <p class="use-case">→ Broad tool compatibility</p>
+                <div style="margin-top: 10px; padding: 10px; background: #e3f2fd; border-radius: 4px; font-size: 0.85em;">
+                    <strong>Origin:</strong> Python community<br>
+                    <strong>Structure:</strong> One file per chunk<br>
+                    <strong>Key Feature:</strong> Wide codec support<br>
+                    <strong>Best for:</strong> Python workflows
+                </div>
+            </div>
+            <div class="format-card">
+                <h4>Zarr3</h4>
+                <p class="tech-detail">Sharding support, faster access</p>
+                <p class="use-case">→ Best for large datasets</p>
+                <div style="margin-top: 10px; padding: 10px; background: #e3f2fd; border-radius: 4px; font-size: 0.85em;">
+                    <strong>Origin:</strong> Modern Zarr evolution<br>
+                    <strong>Structure:</strong> Sharding (multiple chunks per file)<br>
+                    <strong>Key Feature:</strong> Advanced codec pipeline<br>
+                    <strong>Best for:</strong> Large datasets, cloud storage
+                </div>
+            </div>
+            <div class="format-card">
+                <h4>ND2 (Nikon)</h4>
+                <p class="tech-detail">OME-XML metadata, calibration</p>
+                <p class="use-case">→ Microscopy standard</p>
+                <div style="margin-top: 10px; padding: 10px; background: #e3f2fd; border-radius: 4px; font-size: 0.85em;">
+                    <strong>Origin:</strong> Nikon microscopy<br>
+                    <strong>Structure:</strong> Proprietary binary<br>
+                    <strong>Key Feature:</strong> Rich acquisition metadata<br>
+                    <strong>Need to convert:</strong> For analysis workflows
+                </div>
+            </div>
+            <div class="format-card">
+                <h4>IMS (Imaris)</h4>
+                <p class="tech-detail">3D/4D/5D support, rich metadata</p>
+                <p class="use-case">→ Proprietary but feature-rich</p>
+                <div style="margin-top: 10px; padding: 10px; background: #e3f2fd; border-radius: 4px; font-size: 0.85em;">
+                    <strong>Origin:</strong> Imaris/Bitplane<br>
+                    <strong>Structure:</strong> HDF5-based<br>
+                    <strong>Key Feature:</strong> Built-in pyramids<br>
+                    <strong>Best for:</strong> Imaris users
+                </div>
+            </div>
+            <div class="format-card">
+                <h4>TIFF</h4>
+                <p class="tech-detail">Universal, limited metadata</p>
+                <p class="use-case">→ Interchange format</p>
+                <div style="margin-top: 10px; padding: 10px; background: #e3f2fd; border-radius: 4px; font-size: 0.85em;">
+                    <strong>Origin:</strong> Universal standard<br>
+                    <strong>Structure:</strong> Single/multi-page files<br>
+                    <strong>Limitation:</strong> File size constraints<br>
+                    <strong>Need to convert:</strong> For chunked access
+                </div>
+            </div>
+        </div>
+
+        <div class="notes">
+            <h3>Understanding Data Formats (2-3 minutes)</h3>
+            <p><strong>Why so many formats?</strong></p>
+            <ul>
+                <li>Each format emerged from different communities to solve specific problems</li>
+                <li>Can't just standardize on one - each has unique strengths</li>
+            </ul>
+
+            <p><strong>N5 - Not HDF5, came from Saalfeld Lab at Janelia:</strong></p>
+            <ul>
+                <li>Built for BigDataViewer, needed efficient parallel read/write</li>
+                <li>HDF5 had locking issues that made parallel writing slow</li>
+                <li>So N5 solved this by storing one file per chunk</li>
+                <li>Great for Fiji and BigDataViewer, which is Java-based</li>
+            </ul>
+
+            <p><strong>Zarr2 - Python-friendly alternative:</strong></p>
+            <ul>
+                <li>Since python scientific community needed seamless NumPy, dask, xarray, napari integration</li>
+                <li>So it became the community standard</li>
+                <li>Wide codec support and excellent compression options</li>
+            </ul>
+
+            <p><strong>Zarr3 - developed from zarr2:</strong></p>
+            <ul>
+                <li>Big innovation is sharding - grouping multiple chunks into single files</li>
+                <li>Solves the millions-of-tiny-files problem that kills filesystem performance</li>
+                <li>Expensive on cloud storage without sharding</li>
+                <li>Gives more flexible codec pipeline for advanced compression</li>
+            </ul>
+
+            <p><strong>IMS - Imaris format:</strong></p>
+            <ul>
+                <li>Used for visualization of complex 3D, 4D, even 5D datasets</li>
+                <li>HDF5-based internally with built-in pyramids</li>
+                <li>Challenge is - it needs Imaris or compatible tools</li>
+                <li>Converting to Zarr means any tool can read your data, not just Imaris</li>
+            </ul>
+
+            <p><strong>ND2 - Nikon microscopy format:</strong></p>
+            <ul>
+                <li>Acquisition from Nikon microscopes produces ND2 files</li>
+                <li>Rich metadata: acquisition parameters, channels, Z-stacks, time series, calibration</li>
+                <li>Embedded in proprietary binary format</li>
+                <li>Need to extract and translate to work with open-source tools</li>
+            </ul>
+
+            <p><strong>TIFF - Universal interchange format:</strong></p>
+            <ul>
+                <li>Everyone can read TIFF - widely supported</li>
+                <li>But limited: no native chunking, no pyramids, limited metadata</li>
+                <li>Fine for small images, problematic for 100GB (gigabytes) datasets</li>
+            </ul>
+
+        </div>
+    </div>
+
+    <!-- Deep Dive: Technical Details & Metadata -->
+    <div id="phase2-deep2" class="step deep-dive" data-x="-2000" data-y="4200" data-z="-1500" data-scale="1.2">
+        <h3>Format Metadata Structures</h3>
+        <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 15px; margin-bottom: 15px;">
+            <div class="format-card">
+                <h4>N5</h4>
+                <div style="text-align: left; margin-top: 8px; padding: 8px; background: #f5f5f5; border-radius: 4px; font-size: 0.75em; font-family: monospace;">
+                    <strong>attributes.json:</strong>
+                    <div>{</div>
+                    <div>&nbsp;&nbsp;"dimensions": [100,200],</div>
+                    <div>&nbsp;&nbsp;"blockSize": [64,64],</div>
+                    <div>&nbsp;&nbsp;"dataType": "uint16"</div>
+                    <div>}</div>
+                </div>
+                <p style="margin-top: 8px; font-size: 0.8em;">One file per chunk for parallel I/O</p>
+            </div>
+            <div class="format-card">
+                <h4>Zarr2</h4>
+                <div style="text-align: left; margin-top: 8px; padding: 8px; background: #f5f5f5; border-radius: 4px; font-size: 0.75em; font-family: monospace;">
+                    <strong>.zarray:</strong>
+                    <div>{</div>
+                    <div>&nbsp;&nbsp;"zarr_format": 2,</div>
+                    <div>&nbsp;&nbsp;"shape": [100,200],</div>
+                    <div>&nbsp;&nbsp;"chunks": [64,64],</div>
+                    <div>&nbsp;&nbsp;"dtype": "&lt;u2"</div>
+                    <div>}</div>
+                </div>
+                <p style="margin-top: 8px; font-size: 0.8em;">NumPy-style dtype notation</p>
+            </div>
+            <div class="format-card">
+                <h4>Zarr3</h4>
+                <div style="text-align: left; margin-top: 8px; padding: 8px; background: #f5f5f5; border-radius: 4px; font-size: 0.75em; font-family: monospace;">
+                    <strong>zarr.json:</strong>
+                    <div>{</div>
+                    <div>&nbsp;&nbsp;"chunk_grid": {</div>
+                    <div>&nbsp;&nbsp;&nbsp;&nbsp;"chunk_shape": [64,64]</div>
+                    <div>&nbsp;&nbsp;},</div>
+                    <div>&nbsp;&nbsp;"codecs": [...]</div>
+                    <div>}</div>
+                </div>
+                <p style="margin-top: 8px; font-size: 0.8em;">Sharding codec groups chunks</p>
+            </div>
+            <div class="format-card">
+                <h4>ND2 (Nikon)</h4>
+                <div style="text-align: left; margin-top: 8px; padding: 8px; background: #f5f5f5; border-radius: 4px; font-size: 0.75em;">
+                    <strong>Embedded OME-XML:</strong>
+                    <div>• Channels</div>
+                    <div>• Z-stacks</div>
+                    <div>• Time series</div>
+                    <div>• Pixel calibration</div>
+                </div>
+                <p style="margin-top: 8px; font-size: 0.8em;">Rich acquisition metadata</p>
+            </div>
+            <div class="format-card">
+                <h4>IMS (Imaris)</h4>
+                <div style="text-align: left; margin-top: 8px; padding: 8px; background: #f5f5f5; border-radius: 4px; font-size: 0.75em; font-family: monospace;">
+                    <strong>HDF5 Structure:</strong>
+                    <div>/DataSet/</div>
+                    <div>&nbsp;&nbsp;ResolutionLevel 0/</div>
+                    <div>&nbsp;&nbsp;&nbsp;&nbsp;TimePoint 0/</div>
+                    <div>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;Channel 0/Data</div>
+                </div>
+                <p style="margin-top: 8px; font-size: 0.8em;">Built-in pyramid structure</p>
+            </div>
+            <div class="format-card">
+                <h4>TIFF</h4>
+                <div style="text-align: left; margin-top: 8px; padding: 8px; background: #f5f5f5; border-radius: 4px; font-size: 0.75em; font-family: monospace;">
+                    <strong>IFD Tags:</strong>
+                    <div>• Width, Height</div>
+                    <div>• BitsPerSample</div>
+                    <div>• Compression</div>
+                </div>
+                <p style="margin-top: 8px; font-size: 0.8em;">Limited metadata vs modern formats</p>
+            </div>
+        </div>
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 15px; margin-top: 15px;">
+            <div style="padding: 12px; background: white; border-radius: 8px;">
+                <h4 style="font-size: 1em; margin-bottom: 8px;">Why Chunks and Shards Matter</h4>
+                <p style="margin: 4px 0; font-size: 0.8em;"><strong>Chunks:</strong> Small pieces of array data (e.g., 128×128×64 voxels) that can be read/written independently without loading entire dataset</p>
+                <p style="margin: 4px 0; font-size: 0.8em;"><strong>Shards (Zarr3):</strong> Group multiple chunks into single files, reducing filesystem overhead for millions of chunks</p>
+                <p style="margin: 4px 0; font-size: 0.8em;"><strong>Multiscale Pyramids:</strong> Store same data at different resolutions (s0=full, s1=half, s2=quarter) for efficient visualization at any zoom level</p>
+            </div>
+            <div style="padding: 12px; background: white; border-radius: 8px; text-align: center;">
+                <h4 style="font-size: 1em; margin-bottom: 8px;">Sharding Concept</h4>
+                <img src="images_videos/sharding.png" alt="Sharding Concept" class="diagram" style="max-width: 100%; height: auto;">
+            </div>
+            <div style="padding: 12px; background: white; border-radius: 8px; text-align: center;">
+                <h4 style="font-size: 1em; margin-bottom: 8px;">Sharding Example</h4>
+                <img src="images_videos/ShardingExample.png" alt="Sharding Example" class="diagram" style="max-width: 100%; height: auto;">
+            </div>
+        </div>
+
+        <div class="notes">
+            <h3>Format Metadata Structures (2-3 minutes)</h3>
+            <ul>
+                <li>Now let's look at how these formats actually store their metadata</li>
+                <li>This is the technical heart of what makes conversion challenging</li>
+            </ul>
+
+            <p><strong>N5 metadata structure:</strong></p>
+            <ul>
+                <li>Uses attributes.json with simple fields: dimensions, blockSize, dataType</li>
+                <li>Each chunk is a separate file - makes parallel read/write really efficient</li>
+                <li>Dozens of processes can write different chunks simultaneously without conflicts</li>
+            </ul>
+
+            <p><strong>Zarr2 metadata structure:</strong></p>
+            <ul>
+                <li>Uses .zarray with zarr_format identifier set to 2</li>
+                <li>shape instead of dimensions, chunks instead of blockSize</li>
+                <li>dtype in NumPy notation like less-than-u2 for little-endian unsigned 16-bit</li>
+                <li>This NumPy integration is why Zarr2 became so popular in Python data science</li>
+            </ul>
+
+            <p><strong>Zarr3 metadata structure:</strong></p>
+            <ul>
+                <li>Modernized everything with zarr.json</li>
+                <li>Has chunk_grid structure and codecs array</li>
+                <li>Sharding codec is the key innovation - such as group 8×8×8 chunks into one shard file</li>
+                <li>Reduces millions of files to thousands - huge for cloud storage and filesystem performance</li>
+            </ul>
+
+            <p><strong>ND2 metadata structure:</strong></p>
+            <ul>
+                <li>Embeds OME-XML metadata inside binary file</li>
+                <li>Includes channel information, Z-stack details, time series, pixel calibration</li>
+                <li>All rich acquisition data from microscope in Nikon's proprietary format</li>
+                <li>TensorSwitch will extract and translate this to OME-Zarr structure, which we will discuss later</li>
+            </ul>
+
+            <p><strong>IMS metadata structure:</strong></p>
+            <ul>
+                <li>Uses HDF5 internally with specific hierarchy: DataSet, ResolutionLevel, TimePoint, Channel, Data</li>
+                <li>Already has pyramids built in</li>
+                <li>Need Imaris or compatible tools to read</li>
+            </ul>
+
+            <p><strong>TIFF metadata structure:</strong></p>
+            <ul>
+                <li>Just has IFD tags in header: Width, Height, BitsPerSample, Compression</li>
+                <li>Very limited compared to modern formats</li>
+                <li>No native support for chunking or multi-resolution pyramids</li>
+            </ul>
+
+            <p><strong>Chunking is:</strong></p>
+            <ul>
+                <li>The fundamental concept across all formats</li>
+                <li>Such as instead of loading 100GB dataset into memory, break into small pieces like 128×128×64 voxels</li>
+                <li>Each chunk might be 10MB(megabytes) - load one, process it, write it out, move to next</li>
+                <li>Makes huge datasets processable on normal computers</li>
+                <li>Enables parallel processing on clusters</li>
+            </ul>
+
+            <p><strong>Sharding on the other hand:</strong></p>
+            <ul>
+                <li>Solves the too-many-files problem</li>
+                <li>1TB(terabyte) dataset with 1MB(megabytes) chunks = million files - and filesystems hate this</li>
+                <li>Cloud storage charges per request - which is expensive</li>
+                <li>Zarr3 sharding groups chunks such as: 512 chunks per shard file</li>
+                <li>2000 files instead of million, but can still access individual chunks efficiently via internal index</li>
+            </ul>
+
+            <p><strong>Multiscale pyramids is:</strong></p>
+            <ul>
+                <li>For visualization efficiency</li>
+                <li>Store same data at multiple resolutions: s0 full, s1 half, s2 quarter, etc</li>
+                <li>When zooming out in Neuroglancer, loads s2 instead of downsampling s0 on the fly</li>
+                <li>Much faster viewing experience</li>
+                <li>TensorSwitch creates these pyramids automatically</li>
+            </ul>
+
+        </div>
+    </div>
+
+    <!-- ======================= PHASE 3: PERSONAL TOOL ======================= -->
+    <!-- Timeline Point -->
+    <div id="phase3-timeline" class="step timeline-card" data-x="-500" data-y="3000" data-z="1000" data-scale="1">
+        <h2>Phase 3: Personal Tool</h2>
+        <p class="phase-subtitle">Organizing for Efficiency</p>
+        <ul class="key-points">
+            <li>Replacing ad-hoc scripts</li>
+            <li>Consistent interface across tasks</li>
+            <li>Command-line efficiency gains</li>
+        </ul>
+        <p class="dive-hint">↓ See how organization improved workflow</p>
+
+        <div class="notes">
+            <h3>Phase 3 Timeline Card (30 seconds)</h3>
+            <p>At this stage, TensorSwitch became my primary tool for handling conversion requests.</p>
+            <ul>
+                <li>Instead of writing new scripts for each lab request, I had one unified command-line interface</li>
+                <li>This replaced the scattered ad-hoc scripts I'd been maintaining</li>
+            </ul>
+
+            <p>The organizational benefits were significant.</p>
+            <ul>
+                <li>Consistent interface across all conversion tasks</li>
+                <li>Could handle multiple requests per day instead of one</li>
+            </ul>
+
+            <p>Let me show you what the command-line interface offered.</p>
+        </div>
+    </div>
+
+    <!-- Deep Dive: CLI Workflow -->
+    <div id="phase3-deep1" class="step deep-dive" data-x="-500" data-y="2800" data-z="-1500" data-scale="1.2">
+        <h3>The Command-Line Interface</h3>
+
+        <!-- 10 Tasks Overview -->
+        <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 20px; border-radius: 8px; margin-bottom: 20px;">
+            <h4 style="margin-top: 0; color: white;">10 Conversion Tasks, One Unified Interface</h4>
+            <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; font-size: 0.85em;">
+                <div style="background: rgba(255,255,255,0.15); padding: 10px; border-radius: 4px;">
+                    <strong>Base Conversions (8 tasks)</strong><br>
+                    ND2/IMS/TIFF → Zarr2/Zarr3<br>
+                    N5 → Zarr2 or N5
+                </div>
+                <div style="background: rgba(255,255,255,0.15); padding: 10px; border-radius: 4px;">
+                    <strong>Downsampling (2 tasks)</strong><br>
+                    Zarr2 → multi-resolution pyramid<br>
+                    Zarr3 → sharded pyramid levels
+                </div>
+            </div>
+        </div>
+
+        <!-- Benefits Grid -->
+        <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 15px;">
+            <div style="background: #e8f5e9; padding: 15px; border-radius: 8px; border-left: 4px solid #4caf50;">
+                <h4 style="margin-top: 0; color: #2e7d32;">✓ Unified Interface</h4>
+                <ul style="margin: 5px 0; padding-left: 20px; line-height: 1.8;">
+                    <li>Same flags across all 10 tasks</li>
+                    <li>Clear, consistent parameter names</li>
+                    <li>No remembering different scripts</li>
+                </ul>
+            </div>
+            <div style="background: #e3f2fd; padding: 15px; border-radius: 8px; border-left: 4px solid #2196f3;">
+                <h4 style="margin-top: 0; color: #1565c0;">✓ Flexible Execution</h4>
+                <ul style="margin: 5px 0; padding-left: 20px; line-height: 1.8;">
+                    <li>Run locally for quick tests</li>
+                    <li>Submit to cluster for production</li>
+                    <li>Similar command, just add --submit</li>
+                </ul>
+            </div>
+            <div style="background: #fff3e0; padding: 15px; border-radius: 8px; border-left: 4px solid #ff9800;">
+                <h4 style="margin-top: 0; color: #e65100;">✓ Automatic Features</h4>
+                <ul style="margin: 5px 0; padding-left: 20px; line-height: 1.8;">
+                    <li>OME-Zarr metadata generation</li>
+                    <li>Chunk calculation and splitting</li>
+                    <li>LSF job submission handling</li>
+                </ul>
+            </div>
+        </div>
+
+        <!-- Placeholder for CLI demo screenshot or video -->
+        <!-- <video controls src="images_videos/cli_demo.mp4" class="demo-video"></video> -->
+
+        <div class="notes">
+            <h3>Personal Tool Deep Dive: CLI Power (2-3 minutes)</h3>
+            <p>TensorSwitch covered 10 different conversion tasks at this point.</p>
+            <ul>
+                <li>8 base conversion tasks - ND2, IMS, TIFF to Zarr2 or Zarr3, plus N5 to Zarr2 and N5 to N5</li>
+                <li>2 downsampling tasks - one for Zarr2, one for Zarr3 with sharding</li>
+                <li>All through one unified command-line interface</li>
+            </ul>
+
+            <p>The unified interface brought consistency.</p>
+            <ul>
+                <li>Similar command structure for all 10 tasks</li>
+                <li>Same flags and parameter names</li>
+                <li>No need to remember different script names</li>
+            </ul>
+
+            <p>You could run locally or on the cluster.</p>
+            <ul>
+                <li>For quick tests, run locally for instant feedback</li>
+                <li>For large files, submit to cluster with appropriate resources</li>
+                <li>Similar command, just add --submit flag and cluster parameters</li>
+            </ul>
+
+            <p>Several features automated manual work.</p>
+            <ul>
+                <li>OME-Zarr metadata generation - no manual XML writing needed</li>
+                <li>Automatic chunk calculation from input file</li>
+                <li>Job splitting and LSF submission handled automatically</li>
+            </ul>
+
+            <p>Let me show you how I used this in a real case.</p>
+        </div>
+    </div>
+
+    <!-- Deep Dive: Code Organization & Real Workflow -->
+    <div id="phase3-deep2" class="step deep-dive" data-x="-500" data-y="4200" data-z="-1500" data-scale="1.2">
+        <h3>Behind the Scenes: The Expert Knowledge Required</h3>
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 20px;">
+            <!-- Left: Folder Structure -->
+            <div style="background: white; padding: 15px; border-radius: 8px;">
+                <h4 style="margin-top: 0;">Structure</h4>
+                <div style="font-family: monospace; font-size: 0.75em; line-height: 1.5; background: #f5f5f5; padding: 10px; border-radius: 4px;">
+                    tensorswitch/<br>
+                    ├── <span style="color: #27ae60;">__main__.py</span> <span style="color: #888;"># Dispatcher</span><br>
+                    ├── <span style="color: #3498db;">utils.py</span> <span style="color: #888;"># Common utilities</span><br>
+                    ├── <span style="color: #3498db;">dask_utils.py</span> <span style="color: #888;"># Cluster integration</span><br>
+                    └── tasks/<br>
+                    &nbsp;&nbsp;&nbsp;&nbsp;├── nd2_to_zarr3_s0.py<br>
+                    &nbsp;&nbsp;&nbsp;&nbsp;├── nd2_to_zarr2_s0.py<br>
+                    &nbsp;&nbsp;&nbsp;&nbsp;├── ims_to_zarr3_s0.py<br>
+                    &nbsp;&nbsp;&nbsp;&nbsp;├── ims_to_zarr2_s0.py<br>
+                    &nbsp;&nbsp;&nbsp;&nbsp;├── tiff_to_zarr3_s0.py<br>
+                    &nbsp;&nbsp;&nbsp;&nbsp;├── tiff_to_zarr2_s0.py<br>
+                    &nbsp;&nbsp;&nbsp;&nbsp;├── n5_to_zarr2.py<br>
+                    &nbsp;&nbsp;&nbsp;&nbsp;├── n5_to_n5.py<br>
+                    &nbsp;&nbsp;&nbsp;&nbsp;├── downsample_zarr2.py<br>
+                    &nbsp;&nbsp;&nbsp;&nbsp;└── downsample_shard_zarr3.py
+                </div>
+            </div>
+
+            <!-- Right: Key Components -->
+            <div style="background: white; padding: 15px; border-radius: 8px;">
+                <h4 style="margin-top: 0;">Component Roles</h4>
+                <div style="font-size: 0.85em;">
+                    <p style="margin: 8px 0;"><strong style="color: #27ae60;">__main__.py</strong><br>Entry point, task routing, CLI argument parsing</p>
+                    <p style="margin: 8px 0;"><strong style="color: #3498db;">utils.py</strong><br>OME-Zarr metadata generation, format detection helpers</p>
+                    <p style="margin: 8px 0;"><strong style="color: #3498db;">dask_utils.py</strong><br>LSF/Dask JobQueue integration, cluster job submission</p>
+                    <p style="margin: 8px 0;"><strong style="color: #e74c3c;">tasks/*.py</strong><br>Individual conversion implementations, each handling one specific task</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Real Workflow Example -->
+        <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 20px; border-radius: 8px; margin-top: 15px;">
+            <h4 style="margin-top: 0; color: white;">Example: LICONN Lab → WebKnossos Upload</h4>
+            <div style="display: flex; gap: 10px; align-items: center; margin: 10px 0;">
+                <div style="background: rgba(255,255,255,0.2); padding: 8px 12px; border-radius: 4px; flex: 1; font-size: 0.85em;">
+                    <strong>📂 Input:</strong> /groups/liconn/liconn/FlyLICONN/Webknossos_internal<br>
+                    <strong>📋 Formats:</strong> ND2 + IMS files (multiple volumes)
+                </div>
+                <div style="font-size: 2em;">→</div>
+                <div style="background: rgba(255,255,255,0.2); padding: 8px 12px; border-radius: 4px; flex: 1; font-size: 0.85em;">
+                    <strong>📁 Output:</strong> /groups/liconn/liconn/data_internal/FlyLICONN_zarr_converted<br>
+                    <strong>🎯 Target:</strong> Zarr3 with sharding for WebKnossos
+                </div>
+            </div>
+        </div>
+
+        <!-- Decision Flow -->
+        <div style="margin-top: 15px;">
+            <h4>Decision Pipeline (What I Had to Figure Out)</h4>
+            <div style="display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; font-size: 0.75em;">
+                <div style="background: #e3f2fd; padding: 10px; border-radius: 4px; border-left: 4px solid #2196f3;">
+                    <strong>1. Locate Files</strong><br>
+                    Check input path<br>
+                    List all ND2/IMS files
+                </div>
+                <div style="background: #f3e5f5; padding: 10px; border-radius: 4px; border-left: 4px solid #9c27b0;">
+                    <strong>2. Detect Formats</strong><br>
+                    Extension check<br>
+                    ND2 + IMS confirmed
+                </div>
+                <div style="background: #fff3e0; padding: 10px; border-radius: 4px; border-left: 4px solid #ff9800;">
+                    <strong>3. Choose Output</strong><br>
+                    Zarr3 for WebKnossos<br>
+                    Enable sharding for storage
+                </div>
+                <div style="background: #e8f5e9; padding: 10px; border-radius: 4px; border-left: 4px solid #4caf50;">
+                    <strong>4. Select Tasks</strong><br>
+                    nd2_to_zarr3_s0<br>
+                    ims_to_zarr3_s0<br>
+                    downsample_shard_zarr3
+                </div>
+                <div style="background: #fce4ec; padding: 10px; border-radius: 4px; border-left: 4px solid #e91e63;">
+                    <strong>5. Submit Jobs</strong><br>
+                    2 cores each<br>
+                    8 parallel volumes<br>
+                    Project: liconn
+                </div>
+            </div>
+        </div>
+
+        <!-- CLI Commands Used -->
+        <div style="margin-top: 15px; background: #2c3e50; color: #ecf0f1; padding: 12px; border-radius: 4px; font-family: monospace; font-size: 0.7em;">
+            <div style="color: #888;"># Step 1: Convert ND2 files to Zarr3 s0</div>
+            python -m tensorswitch --task nd2_to_zarr3_s0 \<br>
+            &nbsp;&nbsp;--base_path /groups/liconn/liconn/FlyLICONN/Webknossos_internal/file.nd2 \<br>
+            &nbsp;&nbsp;--output_path /groups/liconn/liconn/data_internal/FlyLICONN_zarr_converted/file.zarr \<br>
+            &nbsp;&nbsp;--cores 2 --num_volumes 8 --project liconn --submit<br>
+            <br>
+            <div style="color: #888;"># Step 2: Downsample to s1, s2, s3 (pyramid levels)</div>
+            python -m tensorswitch --task downsample_shard_zarr3 \<br>
+            &nbsp;&nbsp;--base_path /groups/liconn/liconn/data_internal/FlyLICONN_zarr_converted/file.zarr/s0 \<br>
+            &nbsp;&nbsp;--cores 2 --num_volumes 8 --project liconn --submit
+        </div>
+
+        <div class="notes">
+            <h3>Code Organization & Workflow (3-4 minutes)</h3>
+            <p>This structure shows how things organized.</p>
+            <ul>
+                <li>Each task is its own module - easier to maintain and fix bugs</li>
+                <li>Common functions like metadata generation in utils.py</li>
+                <li>Cluster integration isolated in dask_utils.py</li>
+            </ul>
+
+            <p>Here's a real example from the LICONN lab.</p>
+            <ul>
+                <li>The request was - need microscopy data prepared for WebKnossos visualization</li>
+            </ul>
+
+            <p>The decision steps I worked through:</p>
+            <ul>
+                <li>Step 1: Find the files and check what formats we have</li>
+                <li>Step 2: In this case confirmed was mix of ND2 and IMS files from different microscopes</li>
+                <li>Step 3: Choose Zarr3 for WebKnossos, enable sharding to save storage</li>
+                <li>Step 4: Pick the right tasks - nd2_to_zarr3_s0, ims_to_zarr3_s0, then downsample_shard_zarr3</li>
+                <li>Step 5: Configure cluster - 2 cores per job, 8 parallel volumes to split the work, liconn project billing</li>
+            </ul>
+
+            <p>Why two steps - conversion then downsampling.</p>
+            <ul>
+                <li>First convert to Zarr3 s0 - the full resolution layer</li>
+                <li>Then create s1, s2, s3, s4 pyramid levels for multi-resolution viewing</li>
+                <li>This keeps downsampling reusable for any Zarr3 file</li>
+            </ul>
+
+            <p>The commands shown are what I actually ran.</p>
+            <ul>
+                <li>Notice the --submit flag for cluster submission</li>
+                <li>8 parallel volumes means the chunks get split across 8 cluster jobs running at the same time</li>
+                <li>All this decision-making was manual</li>
+            </ul>
+
+            <p>Thus, it might need some expertise such as:</p>
+            <ul>
+                <li>Format knowledge - knowing to use Zarr3 with sharding for storage efficiency</li>
+                <li>Path knowledge - where to store data for server access</li>
+                <li>Resource knowledge - how many cores and parallel jobs to use</li>
+                <li>Task knowledge - which scripts to run in what order</li>
+                <li>Cluster knowledge - job submission and billing</li>
+            </ul>
+        </div>
+    </div>
+
+    <!-- ======================= PHASE 4: GUI BORN ======================= -->
+    <!-- Timeline Point -->
+    <div id="phase4-timeline" class="step timeline-card" data-x="1000" data-y="3000" data-z="1000" data-scale="1">
+        <h2>Phase 4: GUI</h2>
+        <p class="phase-subtitle">Empowering Scientists</p>
+        <ul class="key-points">
+            <li>Web-based interface for everyone</li>
+            <li>Smart Mode: auto-detection</li>
+            <li>Manual Mode: full control</li>
+            <li>Lab paths integration</li>
+        </ul>
+        <p class="dive-hint">↓ Explore the GUI features</p>
+
+        <p style="position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); font-size: 0.6em; color: #fff; text-align: center;">
+            <a href="http://tensorswitch.int.janelia.org/" target="_blank" style="color: #fff; text-decoration: none;">tensorswitch.int.janelia.org</a>
+        </p>
+
+        <div class="notes">
+            <h3>Phase 4 Timeline Card (1 minute)</h3>
+            <p>After the command line interface was working, I realized we could make it more convenient.</p>
+            <ul>
+                <li>Scientists might know less about data formats</li>
+                <li>Some scientists want to convert small datasets themselves</li>
+                <li>A web-based GUI would make TensorSwitch accessible to everyone</li>
+            </ul>
+
+            <p>The GUI has some key features.</p>
+            <ul>
+                <li>Smart Mode automatically detects the format</li>
+                <li>Manual Mode gives full control</li>
+                <li>Lab paths integration makes navigation easy</li>
+            </ul>
+
+            <p>Let me walk through how it works.</p>
+        </div>
+    </div>
+
+    <!-- Deep Dive 1: Welcome & Overview -->
+    <div id="phase4-deep1" class="step deep-dive" data-x="1000" data-y="2000" data-z="-1500" data-scale="1">
+        <h3>Welcome & Overview</h3>
+        <div class="screenshot-grid">
+            <img src="images_videos/gui welcome page.png" alt="Welcome Page" class="screenshot">
+            <img src="images_videos/simple 3 steps.png" alt="Simple 3 Steps" class="screenshot">
+        </div>
+
+        <p style="position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); font-size: 0.6em; color: #999; text-align: center;">
+            <a href="http://tensorswitch.int.janelia.org/" target="_blank" style="color: #3498db; text-decoration: none;">tensorswitch.int.janelia.org</a>
+        </p>
+
+        <div class="notes">
+            <h3>Welcome & Overview</h3>
+            <p>The GUI starts with a simple welcome page with brief introduction of what is TensorSwitch and what it does.</p>
+            <ul>
+                <li>Move on to the conversion page, which shows only 3-step workflow</li>
+                <li>Users see what to expect before they start</li>
+                <li>Keeps things simple and straightforward</li>
+            </ul>
+        </div>
+    </div>
+
+    <!-- Deep Dive 2: Step 1 - Input/Output Paths -->
+    <div id="phase4-deep2" class="step deep-dive" data-x="1000" data-y="2600" data-z="-1500" data-scale="1">
+        <h3>Step 1: Specify Input and Output Paths</h3>
+        <div class="screenshot-grid">
+            <img src="images_videos/Step 1 Specify Input and Output Paths.png" alt="Step 1" class="screenshot">
+            <img src="images_videos/step1 input output path with path helper.png" alt="Step 1 with Path Helper" class="screenshot">
+        </div>
+
+        <p style="position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); font-size: 0.6em; color: #999; text-align: center;">
+            <a href="http://tensorswitch.int.janelia.org/" target="_blank" style="color: #3498db; text-decoration: none;">tensorswitch.int.janelia.org</a>
+        </p>
+
+        <div class="notes">
+            <h3>Step 1: Input and Output Paths</h3>
+            <p>First step is telling TensorSwitch where the data is and where it should go.</p>
+            <ul>
+                <li>Left screenshot shows basic path input</li>
+                <li>Right screenshot shows the path helper for lab storage navigation</li>
+                <li>Users can browse using the helper or type paths directly</li>
+            </ul>
+        </div>
+    </div>
+
+    <!-- Deep Dive 3: Step 2 - Conversion Strategy -->
+    <div id="phase4-deep3" class="step deep-dive" data-x="1000" data-y="3300" data-z="-1500" data-scale="1">
+        <h3>Step 2: Configure Conversion Strategy</h3>
+        <div class="screenshot-grid single">
+            <img src="images_videos/Step 2 Configure Conversion Strategy.png" alt="Step 2 Strategy" class="screenshot">
+        </div>
+
+        <p style="position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); font-size: 0.6em; color: #999; text-align: center;">
+            <a href="http://tensorswitch.int.janelia.org/" target="_blank" style="color: #3498db; text-decoration: none;">tensorswitch.int.janelia.org</a>
+        </p>
+
+        <div class="notes">
+            <h3>Step 2: Conversion Strategy</h3>
+            <p>Step 2 is where choose between Smart Mode and Manual Mode.</p>
+            <ul>
+                <li>Smart Mode automatically detects the format based on input file path</li>
+                <li>Manual Mode gives the full control on select the specific task</li>
+                <li>Most users will use Smart Mode</li>
+            </ul>
+        </div>
+    </div>
+
+    <!-- Deep Dive 4: Step 2A-B - Smart Mode -->
+    <div id="phase4-deep4" class="step deep-dive" data-x="1000" data-y="4000" data-z="-1500" data-scale="1">
+        <h3>Step 2A-B: Smart Mode Detection & Configuration</h3>
+        <div class="screenshot-grid">
+            <img src="images_videos/Step 2A Smart Format Detection (Smart Mode Only).png" alt="Step 2A Detection" class="screenshot">
+            <img src="images_videos/Step 2B Configure Output Format (Smart Mode Only).png" alt="Step 2B Configure" class="screenshot">
+        </div>
+
+        <p style="position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); font-size: 0.6em; color: #999; text-align: center;">
+            <a href="http://tensorswitch.int.janelia.org/" target="_blank" style="color: #3498db; text-decoration: none;">tensorswitch.int.janelia.org</a>
+        </p>
+
+        <div class="notes">
+            <h3>Smart Mode Auto-Detection</h3>
+            <p>Smart Mode has two parts.</p>
+            <ul>
+                <li>Step 2A detects the input format automatically</li>
+                <li>Reads file metadata and structure to identify the format</li>
+                <li>Shows detected format, file size, and dimensions</li>
+                <li>Step 2B lets user configure output format</li>
+                <li>Choose output format and downsampling levels</li>
+                <li>Shows conversion plan preview so user know what will happen</li>
+            </ul>
+        </div>
+    </div>
+
+    <!-- Deep Dive 5: Step 2C - Manual Mode -->
+    <div id="phase4-deep5" class="step deep-dive" data-x="1000" data-y="5000" data-z="-1500" data-scale="1">
+        <h3>Step 2C: Manual Task Selection</h3>
+        <div class="screenshot-grid small">
+            <img src="images_videos/Step 2C Manual Task Selection (Manual Mode Only).png" alt="Manual Task Selection" class="screenshot">
+        </div>
+
+        <p style="position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); font-size: 0.6em; color: #999; text-align: center;">
+            <a href="http://tensorswitch.int.janelia.org/" target="_blank" style="color: #3498db; text-decoration: none;">tensorswitch.int.janelia.org</a>
+        </p>
+
+        <div class="notes">
+            <h3>Manual Mode Task Selection</h3>
+            <p>Manual Mode is for users who know exactly what task they need.</p>
+            <ul>
+                <li>Choose the specific conversion task from the dropdown</li>
+                <li>That's it - no auto-detection, just direct task selection</li>
+            </ul>
+        </div>
+    </div>
+
+    <!-- Deep Dive 6: Step 3 - Execution Configuration -->
+    <div id="phase4-deep6" class="step deep-dive" data-x="1000" data-y="6200" data-z="-1500" data-scale="1">
+        <h3>Step 3: Configure Execution & Run</h3>
+        <div class="screenshot-grid">
+            <img src="images_videos/Step 3 Configure Execution & Run.png" alt="Step 3 Configure" class="screenshot">
+            <img src="images_videos/Step 3 Cluster Submission Options.png" alt="Step 3 Cluster" class="screenshot">
+        </div>
+
+        <p style="position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); font-size: 0.6em; color: #999; text-align: center;">
+            <a href="http://tensorswitch.int.janelia.org/" target="_blank" style="color: #3498db; text-decoration: none;">tensorswitch.int.janelia.org</a>
+        </p>
+
+        <div class="notes">
+            <h3>Step 3: Execution Configuration</h3>
+            <p>Step 3 is where user configure how the conversion runs.</p>
+            <ul>
+                <li>User could Run locally on the machine</li>
+                <li>Or uncheck the box to Run on cluster with LSF or Dask</li>
+                <li>Both options let user set shard (for Zarr3), OME-Zarr structure, and memory limits - memory limits control how much RAM the process can use, preventing out-of-memory crashes</li>
+                <li>Cluster adds settings like: which lab to charge, cores, wall time, num_volume</li>
+                <li>Advanced option includes: Dask JobQueue for distributed processing - Dask JobQueue spreads chunks across multiple cluster jobs dynamically, while LSF submits fixed number of jobs upfront</li>
+            </ul>
+        </div>
+    </div>
+
+    <!-- Deep Dive 7: Job Preview & Submission -->
+    <div id="phase4-deep7" class="step deep-dive" data-x="1000" data-y="7400" data-z="-1500" data-scale="1">
+        <h3>Job Preview & Successful Submission</h3>
+        <div class="screenshot-grid large">
+            <img src="images_videos/Job Preview.png" alt="Job Preview" class="screenshot">
+            <img src="images_videos/Cluster Jobs Submitted Successfully!.png" alt="Jobs Submitted" class="screenshot">
+        </div>
+
+        <p style="position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); font-size: 0.6em; color: #999; text-align: center;">
+            <a href="http://tensorswitch.int.janelia.org/" target="_blank" style="color: #3498db; text-decoration: none;">tensorswitch.int.janelia.org</a>
+        </p>
+
+        <div class="notes">
+            <h3>Job Preview and Submission</h3>
+            <p>Before user submit, the GUI shows a preview of everything.</p>
+            <ul>
+                <li>Job preview with cost estimates and processing time, here the estimated cost is the max cost of setted wall time plus number of cores and num_volumes, but I need to investigate a bit more on this</li>
+                <li>Review all the parameters one more time</li>
+                <li>Click submit when ready</li>
+                <li>Confirmation that jobs submitted successfully to the cluster</li>
+            </ul>
+        </div>
+    </div>
+
+    <!-- ======================= PHASE 5: AI POWER ======================= -->
+    <!-- Timeline Point -->
+    <div id="phase5-timeline" class="step timeline-card" data-x="2500" data-y="3000" data-z="1000" data-scale="1">
+        <h2>Phase 5: AI Power</h2>
+        <p class="phase-subtitle">Intelligent Assistance</p>
+        <ul class="key-points">
+            <li>OpenAI-powered chat assistant</li>
+            <li>Context-aware responses</li>
+            <li>Parameter recommendations</li>
+            <li>Troubleshooting help</li>
+        </ul>
+        <p class="dive-hint">↓ See AI capabilities in action</p>
+
+        <p style="position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); font-size: 0.6em; color: #fff; text-align: center;">
+            <a href="http://tensorswitch.int.janelia.org/" target="_blank" style="color: #fff; text-decoration: none;">tensorswitch.int.janelia.org</a>
+        </p>
+
+        <div class="notes">
+            <h3>Phase 5 Timeline Card (30 seconds)</h3>
+            <p>Even with Smart Mode and the GUI, users might still have questions.</p>
+            <ul>
+                <li>What does this parameter mean?</li>
+                <li>Why should I use Zarr3 vs Zarr2?</li>
+                <li>How many cores should I use?</li>
+                <li>Therefore, I added an AI assistant to answer these questions in real-time</li>
+            </ul>
+
+            <p>The AI assistant is OpenAI-powered.</p>
+            <ul>
+                <li>Knows everything about TensorSwitch</li>
+                <li>Understands context of what the user is doing in the GUI</li>
+                <li>Provides recommendations specific to the data</li>
+            </ul>
+
+            <p>Let me show what the AI can do.</p>
+        </div>
+    </div>
+
+    <!-- Deep Dive 1: AI Assistant Interface + Intro -->
+    <div id="phase5-deep1" class="step deep-dive" data-x="2500" data-y="2000" data-z="-1500" data-scale="0.8">
+        <h3>AI Assistant Interface</h3>
+
+        <!-- Two-column layout: Screenshot left, Content right -->
+        <div style="display: grid; grid-template-columns: 45% 55%; gap: 20px; margin-top: 20px;">
+            <!-- Left: Screenshot -->
+            <div>
+                <img src="images_videos/AI Assistant.png" alt="AI Assistant Chat Interface" style="width: 100%; border-radius: 10px; box-shadow: 0 4px 15px rgba(0,0,0,0.15);">
+            </div>
+
+            <!-- Right: Content -->
+            <div style="display: flex; flex-direction: column; gap: 15px;">
+                <!-- Why We Need AI -->
+                <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 15px; border-radius: 8px;">
+                    <h4 style="color: white; margin: 0 0 10px 0; font-size: 1.1em;">Why AI Assistant?</h4>
+                    <p style="font-size: 0.95em; line-height: 1.6; margin: 0;">Even with Smart Mode and GUI, users still had questions about parameters, format choices, and resource settings. AI provides instant, context-aware answers without leaving the interface.</p>
+                </div>
+
+                <!-- What AI Can Do -->
+                <div style="background: white; padding: 15px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1);">
+                    <h4 style="color: #3498db; margin: 0 0 10px 0; font-size: 1.1em;">What AI Can Do</h4>
+                    <ul style="font-size: 0.85em; line-height: 1.6; margin: 0; padding-left: 20px;">
+                        <li>🎯 Format detection guidance</li>
+                        <li>⚙️ Parameter optimization</li>
+                        <li>📁 Lab path assistance</li>
+                        <li>🔄 Workflow recommendations</li>
+                        <li>🚀 Conversion advice</li>
+                        <li>❓ Real-time support</li>
+                        <li>🤖 Apply settings to GUI (Phase 2)</li>
+                    </ul>
+                </div>
+
+                <!-- User Benefits -->
+                <div style="background: white; padding: 15px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1);">
+                    <h4 style="color: #27ae60; margin: 0 0 10px 0; font-size: 1.1em;">User Benefits</h4>
+                    <ul style="font-size: 0.85em; line-height: 1.6; margin: 0; padding-left: 20px;">
+                        <li>✓ Faster learning curve</li>
+                        <li>✓ Fewer configuration mistakes</li>
+                        <li>✓ Better resource utilization</li>
+                        <li>✓ Immediate answers</li>
+                        <li>✓ Reduced support burden</li>
+                        <li>✓ Cost & Privacy: ~$0.10/session</li>
+                        <li>✓ Optional feature</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+
+        <p style="position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); font-size: 0.6em; color: #999; text-align: center;">
+            <a href="http://tensorswitch.int.janelia.org/" target="_blank" style="color: #3498db; text-decoration: none;">tensorswitch.int.janelia.org</a>
+        </p>
+
+        <div class="notes">
+            <h3>AI Assistant Interface (2 minutes)</h3>
+            <p>Why we added AI assistant.</p>
+            <ul>
+                <li>Even with Smart Mode and GUI, users might still have questions</li>
+                <li>Questions about parameters, format choices, resource settings</li>
+                <li>AI provides instant, context-aware answers without leaving the interface</li>
+            </ul>
+
+            <p>What AI can do are:</p>
+            <ul>
+                <li>Format detection guidance</li>
+                <li>Parameter optimization</li>
+                <li>Lab path assistance</li>
+                <li>Workflow recommendations</li>
+                <li>Conversion advice</li>
+                <li>Real-time support</li>
+                <li>Apply settings to GUI - this is Phase 2 automation</li>
+            </ul>
+
+            <p>User benefits.</p>
+            <ul>
+                <li>Faster learning curve</li>
+                <li>Fewer configuration mistakes</li>
+                <li>Better resource utilization</li>
+                <li>Immediate answers</li>
+                <li>Reduced support burden</li>
+                <li>Cost is about $0.10 per session conservatively, often $0.002-$0.005</li>
+                <li>It's an optional feature</li>
+            </ul>
+        </div>
+    </div>
+
+    <!-- Deep Dive 2: Real Example - Set Optimal Parameters -->
+    <div id="phase5-deep2" class="step deep-dive" data-x="2500" data-y="3000" data-z="-1500" data-scale="0.8">
+        <h3>AI Example: Setting Optimal Parameters</h3>
+        <div class="screenshot-grid single">
+            <img src="images_videos/ai set optimal parameters for my file.png" alt="AI Set Optimal Parameters" class="screenshot">
+        </div>
+
+        <p style="position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); font-size: 0.6em; color: #999; text-align: center;">
+            <a href="http://tensorswitch.int.janelia.org/" target="_blank" style="color: #3498db; text-decoration: none;">tensorswitch.int.janelia.org</a>
+        </p>
+
+        <div class="notes">
+            <h3>AI Example: Setting Optimal Parameters (1 minute)</h3>
+            <p>Here is a real example of how AI helped with parameter optimization.</p>
+            <ul>
+                <li>User asks AI to set optimal parameters for the file</li>
+                <li>AI analyzes the file characteristics based on the smart format detection</li>
+                <li>Provides specific recommendations tailored to this file</li>
+            </ul>
+
+            <p>Why this matters.</p>
+            <ul>
+                <li>Removes guesswork from parameter selection</li>
+                <li>Based on actual file size and format</li>
+                <li>Prevents costly mistakes before they happen</li>
+                <li>No need to leave GUI to search documentation</li>
+            </ul>
+        </div>
+    </div>
+
+    <!-- Deep Dive 3: Asking AI to Optimize Core Count -->
+    <div id="phase5-deep3" class="step deep-dive" data-x="2500" data-y="4000" data-z="-1500" data-scale="0.8">
+        <h3>AI Automation: Step 1 - Ask for Help</h3>
+        <p style="font-size: 1.2em; margin-bottom: 20px;">User asks AI to optimize core count</p>
+        <div class="screenshot-grid single">
+            <img src="images_videos/ai use 4 cores instead 1.png" alt="Asking AI to use 4 cores" class="screenshot">
+        </div>
+
+        <p style="position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); font-size: 0.6em; color: #999; text-align: center;">
+            <a href="http://tensorswitch.int.janelia.org/" target="_blank" style="color: #3498db; text-decoration: none;">tensorswitch.int.janelia.org</a>
+        </p>
+
+        <div class="notes">
+            <h3>AI Automation: Step 1 - Ask for Help (1 minute)</h3>
+            <p>This shows the first step of AI automation.</p>
+            <ul>
+                <li>Since the recommended core and default core is set to 2 cores</li>
+                <li>So I asked AI to optimize core count to 4 cores</li>
+                <li>AI analyzes the file size and the conversion task</li>
+                <li>AI determines that 4 cores would be better than the current setting</li>
+                <li>AI respects the user's decision, with 4 cores even though it was not recommended initially</li>
+            </ul>
+        </div>
+    </div>
+
+    <!-- Deep Dive 4: AI Offers to Apply Changes -->
+    <div id="phase5-deep4" class="step deep-dive" data-x="2500" data-y="5600" data-z="-1500" data-scale="0.8">
+        <h3>AI Automation: Step 2 - Apply Changes</h3>
+        <p style="font-size: 1.0em; margin-bottom: 15px;">AI asks if we want it to apply the changes. We can type "yes" or click the button. Then the form updates automatically.</p>
+
+        <div style="display: grid; grid-template-columns: 50% 50%; gap: 20px; margin-top: 20px;">
+            <!-- Left: Two screenshots stacked -->
+            <div style="display: flex; flex-direction: column; gap: 15px;">
+                <img src="images_videos/ai use 4 cores instead 2.png" alt="AI offers to help - type yes" style="width: 100%; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.15);">
+                <img src="images_videos/ai use 4 cores instead 3 button applied.png" alt="Click button to apply" style="width: 100%; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.15);">
+            </div>
+
+            <!-- Right: Final result screenshot -->
+            <div style="display: flex; align-items: center; justify-content: center;">
+                <img src="images_videos/ai use 4 cores instead 4 button changed to 4 cores.png" alt="Form changed to 4 cores" style="width: 100%; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.15);">
+            </div>
+        </div>
+
+        <p style="position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); font-size: 0.6em; color: #999; text-align: center;">
+            <a href="http://tensorswitch.int.janelia.org/" target="_blank" style="color: #3498db; text-decoration: none;">tensorswitch.int.janelia.org</a>
+        </p>
+
+        <div class="notes">
+            <h3>AI Automation: Step 2 - Apply Changes (2 minutes)</h3>
+            <p>This slide shows the complete AI automation workflow.</p>
+
+            <p>After I tell AI that I want to use 4 cores, AI asks if I want it to apply the changes for me.</p>
+            <ul>
+                <li>AI doesn't just recommend - AI asks if I want the changes applied by AI</li>
+                <li>Two options to confirm</li>
+            </ul>
+
+            <p>Two ways to confirm.</p>
+            <ul>
+                <li>Type "yes" in the chat - conversational approach</li>
+                <li>Click the button - one-click convenience</li>
+                <li>Both options work equally well</li>
+            </ul>
+
+            <p>The result.</p>
+            <ul>
+                <li>Users could click the button to apply</li>
+                <li>Form immediately updates to 4 cores</li>
+                <li>User can see the change happen in real time</li>
+                <li>User can still manually adjust if needed</li>
+                <li>This is Phase 2 AI automation in action</li>
+            </ul>
+
+            <p>Cost and privacy.</p>
+            <ul>
+                <li>Conservative estimate: $0.10 per session</li>
+                <li>Actual cost: often $0.002-$0.005 (gpt-4o-mini is efficient)</li>
+                <li>Only conversation and GUI state sent to OpenAI, no actual data</li>
+                <li>Optional feature - full functionality without AI</li>
+            </ul>
+        </div>
+    </div>
+
+    <!-- Deep Dive 5: AI Pipeline Structure & Logic -->
+    <div id="phase5-deep5" class="step deep-dive" data-x="2500" data-y="6800" data-z="-1500" data-scale="0.9">
+        <h3>AI Pipeline Structure & Logic</h3>
+        <p style="font-size: 1.1em; margin-bottom: 20px;">How we built the AI assistant to be helpful and accurate</p>
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-top: 20px;">
+            <!-- Left Column: Pipeline Flow with Code -->
+            <div>
+                <h4 style="color: #3498db; margin-bottom: 15px;">AI Pipeline Flow</h4>
+                <div style="display: flex; flex-direction: column; gap: 10px;">
+                    <!-- Stage 1 -->
+                    <div>
+                        <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 8px 12px; border-radius: 6px 6px 0 0; font-size: 0.85em; font-weight: bold;">
+                            Stage 1: User Query
+                        </div>
+                        <div style="background: rgba(102, 126, 234, 0.1); padding: 8px 12px; font-size: 0.75em; line-height: 1.4;">
+                            <span style="font-size: 0.9em;">"How many cores should I use?"</span>
+                        </div>
+                        <div style="background: #2c3e50; color: #ecf0f1; padding: 8px; border-radius: 0 0 6px 6px; font-family: monospace; font-size: 0.65em; line-height: 1.4;">
+<span style="color: #95a5a6;"># User asks a question</span>
+<span style="color: #f8f8f2;">user_question = </span><span style="color: #e6db74;">"How many cores should I use?"</span>
+                        </div>
+                    </div>
+
+                    <div style="text-align: center; font-size: 1.2em; color: #999;">↓</div>
+
+                    <!-- Stage 2 -->
+                    <div>
+                        <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 8px 12px; border-radius: 6px 6px 0 0; font-size: 0.85em; font-weight: bold;">
+                            Stage 2: Context Gathering
+                        </div>
+                        <div style="background: rgba(102, 126, 234, 0.1); padding: 8px 12px; font-size: 0.75em; line-height: 1.4;">
+                            <span style="font-size: 0.85em;">• Current GUI state (file size, format)<br>
+                            • TensorSwitch knowledge base<br>
+                            • System parameters</span>
+                        </div>
+                        <div style="background: #2c3e50; color: #ecf0f1; padding: 8px; border-radius: 0 0 6px 6px; font-family: monospace; font-size: 0.65em; line-height: 1.4;">
+<span style="color: #95a5a6;"># Gather current GUI state</span>
+<span style="color: #f8f8f2;">context = {</span>
+    <span style="color: #e6db74;">"input_file"</span>: <span style="color: #f8f8f2;">gui_state.input_path,</span>
+    <span style="color: #e6db74;">"file_size"</span>: <span style="color: #f8f8f2;">gui_state.file_size,</span>
+    <span style="color: #e6db74;">"current_cores"</span>: <span style="color: #f8f8f2;">gui_state.cores</span>
+<span style="color: #f8f8f2;">}</span>
+                        </div>
+                    </div>
+
+                    <div style="text-align: center; font-size: 1.2em; color: #999;">↓</div>
+
+                    <!-- Stage 3 -->
+                    <div>
+                        <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 8px 12px; border-radius: 6px 6px 0 0; font-size: 0.85em; font-weight: bold;">
+                            Stage 3: AI Processing (GPT-4o-mini)
+                        </div>
+                        <div style="background: rgba(102, 126, 234, 0.1); padding: 8px 12px; font-size: 0.75em; line-height: 1.4;">
+                            <span style="font-size: 0.85em;">• System prompt restrictions<br>
+                            • TensorSwitch-specific knowledge<br>
+                            • Parameter constraints</span>
+                        </div>
+                        <div style="background: #2c3e50; color: #ecf0f1; padding: 8px; border-radius: 0 0 6px 6px; font-family: monospace; font-size: 0.65em; line-height: 1.4;">
+<span style="color: #95a5a6;"># Send to OpenAI with context</span>
+<span style="color: #f8f8f2;">response = openai.chat.completions.create(</span>
+    <span style="color: #f8f8f2;">model=</span><span style="color: #e6db74;">"gpt-4o-mini"</span><span style="color: #f8f8f2;">,</span>
+    <span style="color: #f8f8f2;">messages=[</span>
+        <span style="color: #f8f8f2;">{</span><span style="color: #e6db74;">"role"</span>: <span style="color: #e6db74;">"system"</span>, <span style="color: #e6db74;">"content"</span>: <span style="color: #f8f8f2;">system_prompt},</span>
+        <span style="color: #f8f8f2;">{</span><span style="color: #e6db74;">"role"</span>: <span style="color: #e6db74;">"user"</span>, <span style="color: #e6db74;">"content"</span>: <span style="color: #f92672;">f</span><span style="color: #e6db74;">"Context: </span><span style="color: #f92672;">{</span><span style="color: #f8f8f2;">context</span><span style="color: #f92672;">}</span><span style="color: #e6db74;">. Q: </span><span style="color: #f92672;">{</span><span style="color: #f8f8f2;">user_question</span><span style="color: #f92672;">}</span><span style="color: #e6db74;">"</span><span style="color: #f8f8f2;">}</span>
+    <span style="color: #f8f8f2;">]</span>
+<span style="color: #f8f8f2;">)</span>
+                        </div>
+                    </div>
+
+                    <div style="text-align: center; font-size: 1.2em; color: #999;">↓</div>
+
+                    <!-- Stage 4 -->
+                    <div>
+                        <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 8px 12px; border-radius: 6px 6px 0 0; font-size: 0.85em; font-weight: bold;">
+                            Stage 4: Response & Actions
+                        </div>
+                        <div style="background: rgba(102, 126, 234, 0.1); padding: 8px 12px; font-size: 0.75em; line-height: 1.4;">
+                            <span style="font-size: 0.85em;">• Explanation + Recommendation<br>
+                            • Optional: Apply to GUI</span>
+                        </div>
+                        <div style="background: #2c3e50; color: #ecf0f1; padding: 8px; border-radius: 0 0 6px 6px; font-family: monospace; font-size: 0.65em; line-height: 1.4;">
+<span style="color: #95a5a6;"># Get response and apply actions</span>
+<span style="color: #f8f8f2;">ai_response = response.choices[</span><span style="color: #ae81ff;">0</span><span style="color: #f8f8f2;">].message.content</span>
+
+<span style="color: #95a5a6;"># Optional: Apply recommended settings</span>
+<span style="color: #66d9ef;">if</span> <span style="color: #e6db74;">"set_cores:"</span> <span style="color: #66d9ef;">in</span> <span style="color: #f8f8f2;">ai_response:</span>
+    <span style="color: #f8f8f2;">gui_state.apply_setting(</span><span style="color: #e6db74;">"cores"</span><span style="color: #f8f8f2;">, recommended_value)</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Right Column: System Prompt & Restrictions -->
+            <div>
+                <h4 style="color: #27ae60; margin-bottom: 15px;">How We Restrict AI's Answers</h4>
+                <div style="background: white; padding: 15px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); margin-bottom: 15px;">
+                    <h5 style="color: #2c3e50; margin: 0 0 10px 0;">System Prompt Example</h5>
+                    <div style="background: #2c3e50; color: #ecf0f1; padding: 12px; border-radius: 4px; font-family: monospace; font-size: 0.75em; line-height: 1.5;">
+                        system_prompt = """<br>
+                        You are TensorSwitch AI Assistant.<br>
+                        <br>
+                        <strong style="color: #e74c3c;">RESTRICTIONS:</strong><br>
+                        - Only answer about TensorSwitch<br>
+                        - Don't make up features<br>
+                        - Always check current GUI state<br>
+                        - Recommend optimal parameters<br>
+                        - Explain technical terms simply<br>
+                        <br>
+                        <strong style="color: #3498db;">KNOWLEDGE:</strong><br>
+                        - 10 conversion tasks<br>
+                        - Zarr2/Zarr3/N5 formats<br>
+                        - Cluster parameters (cores, memory)<br>
+                        - OME-Zarr metadata structure<br>
+                        """
+                    </div>
+                </div>
+
+                <div style="background: white; padding: 15px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1);">
+                    <h5 style="color: #2c3e50; margin: 0 0 10px 0;">Context Injection Example</h5>
+                    <div style="background: #2c3e50; color: #ecf0f1; padding: 12px; border-radius: 4px; font-family: monospace; font-size: 0.75em; line-height: 1.5;">
+                        context = {<br>
+                        &nbsp;&nbsp;"input_file": "data.nd2",<br>
+                        &nbsp;&nbsp;"file_size": "5.7GB",<br>
+                        &nbsp;&nbsp;"current_cores": 2,<br>
+                        &nbsp;&nbsp;"output_format": "zarr3",<br>
+                        &nbsp;&nbsp;"mode": "smart"<br>
+                        }<br>
+                        <br>
+                        <span style="color: #95a5a6;"># AI sees full context</span><br>
+                        query = f"Given: {context}, {user_question}"
+                    </div>
+                </div>
+
+                <div style="margin-top: 15px; padding: 12px; background: #e8f5e9; border-radius: 6px; border-left: 4px solid #4caf50;">
+                    <strong style="color: #2e7d32;">Key Design Principle:</strong>
+                    <p style="margin: 5px 0 0 0; font-size: 0.85em; line-height: 1.5;">
+                        AI is scoped to TensorSwitch only. Can't help with unrelated topics. Always has access to current GUI state so recommendations are context-aware and accurate.
+                    </p>
+                </div>
+            </div>
+        </div>
+
+        <p style="position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); font-size: 0.6em; color: #999; text-align: center;">
+            <a href="http://tensorswitch.int.janelia.org/" target="_blank" style="color: #3498db; text-decoration: none;">tensorswitch.int.janelia.org</a>
+        </p>
+
+        <div class="notes">
+            <h3>AI Pipeline Structure & Logic (3 minutes)</h3>
+            <p>This slide shows the complete AI architecture with both conceptual flow and actual code implementation.</p>
+
+            <p>Left column shows the 4-stage AI pipeline flow.</p>
+            <ul>
+                <li>Stage 1: User query - when user asks a question like "How many cores should I use?", we capture it as a string variable</li>
+                <li>Stage 2: Context gathering - we collect current GUI state (file path, file size, current cores setting) into a context dictionary using the gui_state object</li>
+                <li>Stage 3: AI processing - we make the OpenAI API call using openai.chat.completions.create, passing both the system prompt and the user message with context injected via f-string formatting</li>
+                <li>Stage 4: Response and actions - we parse AI's response, extract recommendations, and use conditional logic to apply settings back to the GUI if requested</li>
+            </ul>
+
+            <p>Right side shows how we control AI behavior.</p>
+            <ul>
+                <li>System prompt example shows actual prompt text we send to OpenAI</li>
+                <li>RESTRICTIONS section: only TensorSwitch topics, no hallucination, always check GUI state, recommend optimal parameters, explain simply</li>
+                <li>KNOWLEDGE section: 10 conversion tasks, format differences (Zarr2/Zarr3/N5), cluster parameters, OME-Zarr metadata</li>
+                <li>Context injection example shows how we format the context dictionary and combine it with user question</li>
+            </ul>
+
+            <p>Key design principle is that:</p>
+            <ul>
+                <li>AI scoped strictly to TensorSwitch - can't help with unrelated topics</li>
+                <li>Always has current GUI state so recommendations are context-aware and accurate</li>
+                <li>This makes AI genuinely useful instead of generic chatbot</li>
+            </ul>
+        </div>
+    </div>
+
+
+    <!-- ======================= PHASE 6: VALIDATION & FUTURE ======================= -->
+    <!-- Timeline Point -->
+    <div id="phase6-timeline" class="step timeline-card" data-x="4000" data-y="3000" data-z="1000" data-scale="1">
+        <h2>Phase 6: Validation & Future</h2>
+        <p class="phase-subtitle">Where We Are & Where We're Going</p>
+        <ul class="key-points">
+            <li>Core features tested and working</li>
+            <li>More comprehensive testing needed</li>
+            <li>Future: More formats, better AI, enhanced features</li>
+        </ul>
+        <p class="dive-hint">↓ See current status and future plans</p>
+
+        <div class="notes">
+            <h3>Phase 6 Timeline Card (30 seconds)</h3>
+            <p>Phase 6 is where we are now and where we're heading next.</p>
+
+            <p>Current status.</p>
+            <ul>
+                <li>Core features tested and working</li>
+                <li>Basic conversions are functional</li>
+                <li>Deployed at tensorswitch.int.janelia.org - open to try</li>
+            </ul>
+
+            <p>What's ahead.</p>
+            <ul>
+                <li>More comprehensive testing needed across all features</li>
+                <li>Future improvements: more formats, better AI, enhanced features</li>
+            </ul>
+        </div>
+    </div>
+
+    <!-- Deep Dive 1: Current Status -->
+    <div id="phase6-deep1" class="step deep-dive" data-x="4000" data-y="2800" data-z="-1500" data-scale="1.2">
+        <h3>Current Status: Production & Testing</h3>
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 30px;">
+            <!-- Left: What's Working -->
+            <div>
+                <h4 style="color: #27ae60; margin-bottom: 15px;">✅ What's Working</h4>
+                <div style="background: #e8f5e9; padding: 20px; border-radius: 8px; border-left: 4px solid #4caf50;">
+                    <ul style="font-size: 0.95em; line-height: 1.8; margin: 0;">
+                        <li><strong>Some tests passing</strong> - Basic conversions validated</li>
+                        <li><strong>Core conversion tasks</strong> working with sample data</li>
+                        <li><strong>OME-Zarr metadata</strong> generation functional</li>
+                        <li><strong>Deployed on VM</strong> - tensorswitch.int.janelia.org</li>
+                        <li><strong>Open to try</strong> - Welcome feedback and testing</li>
+                    </ul>
+                </div>
+
+                <div style="margin-top: 20px; background: white; padding: 15px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1);">
+                    <h5 style="margin: 0 0 10px 0; color: #2c3e50;">Real Data Tested</h5>
+                    <ul style="font-size: 0.85em; line-height: 1.6; margin: 0;">
+                        <li>ND2: 5.7GB files</li>
+                        <li>IMS: 3.8GB files</li>
+                        <li>TIFF: 961MB stacks</li>
+                    </ul>
+                </div>
+            </div>
+
+            <!-- Right: What Needs Work -->
+            <div>
+                <h4 style="color: #ff9800; margin-bottom: 15px;">⏳ What Needs More Work</h4>
+                <div style="background: #fff3e0; padding: 20px; border-radius: 8px; border-left: 4px solid #ff9800;">
+                    <ul style="font-size: 0.95em; line-height: 1.8; margin: 0;">
+                        <li><strong>Cluster submission</strong> - LSF/Dask testing</li>
+                        <li><strong>Edge cases</strong> - Large files, unusual dimensions</li>
+                        <li><strong>Comprehensive testing</strong> - All feature combinations</li>
+                        <li><strong>AI fixes</strong> - Some buttons don't apply correctly</li>
+                    </ul>
+                </div>
+
+                <div style="margin-top: 20px; background: #e3f2fd; padding: 15px; border-radius: 8px; border-left: 4px solid #2196f3;">
+                    <p style="margin: 0; font-size: 0.9em; line-height: 1.6;"><strong>Bottom line:</strong> Core conversions work well. GUI features and edge cases need more testing.</p>
+                </div>
+            </div>
+        </div>
+
+        <div class="notes">
+            <h3>Current Status (2 minutes)</h3>
+            <p>Currently:</p>
+            <ul>
+                <li>Some tests have passed - basic conversions are functional</li>
+                <li>Core tasks working with sample data: ND2, IMS, TIFF files</li>
+                <li>OME-Zarr metadata generation is functional</li>
+                <li>Deployed at tensorswitch.int.janelia.org - open to try</li>
+            </ul>
+
+            <p>Real data we tested with.</p>
+            <ul>
+                <li>ND2: 5.7GB files</li>
+                <li>IMS: 3.8GB files</li>
+                <li>TIFF: 961MB stacks</li>
+                <li>Used middle chunks for realistic validation without processing entire huge files</li>
+            </ul>
+
+            <p>What needs to be done in the next stage is:</p>
+            <ul>
+                <li>Cluster submission with LSF and Dask needs testing</li>
+                <li>Edge cases - very large files, unusual dimensions</li>
+                <li>Comprehensive testing of all feature combinations</li>
+                <li>AI button fixes - some don't apply correctly yet</li>
+            </ul>
+
+            <p>Bottom line.</p>
+            <ul>
+                <li>Core conversions work well</li>
+                <li>GUI features and edge cases need more testing</li>
+                <li>Getting there but not fully validated yet</li>
+            </ul>
+        </div>
+    </div>
+
+    <!-- Deep Dive 2: Future Plans -->
+    <div id="phase6-deep2" class="step deep-dive" data-x="4000" data-y="4200" data-z="-1500" data-scale="1">
+        <h3>Future Improvements</h3>
+
+        <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 20px;">
+            <div class="plan-item">
+                <h4>📊 More Formats & Testing</h4>
+                <ul style="font-size: 0.9em; line-height: 1.6;">
+                    <li>HDF5, CZI, LIF support</li>
+                    <li>Comprehensive edge case testing</li>
+                    <li>All feature combinations validated</li>
+                </ul>
+            </div>
+
+            <div class="plan-item">
+                <h4>🤖 Enhanced AI</h4>
+                <ul style="font-size: 0.9em; line-height: 1.6;">
+                    <li>Fix button application issues</li>
+                    <li>Learn from successful conversions</li>
+                    <li>Smarter parameter recommendations</li>
+                </ul>
+            </div>
+
+            <div class="plan-item">
+                <h4>🎨 Better UX</h4>
+                <ul style="font-size: 0.9em; line-height: 1.6;">
+                    <li>FileSelector widget for visual browsing</li>
+                    <li>Batch file operations</li>
+                    <li>Improved error messages</li>
+                </ul>
+            </div>
+
+            <div class="plan-item">
+                <h4>📈 Analytics & Security</h4>
+                <ul style="font-size: 0.9em; line-height: 1.6;">
+                    <li>Performance tracking and history</li>
+                    <li>Figure out cluster charge system more accurately</li>
+                    <li>Okta authentication gateway</li>
+                    <li>Introduce to more users for validation</li>
+                </ul>
+            </div>
+        </div>
+
+        <div style="margin-top: 30px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 25px; border-radius: 10px; text-align: center;">
+            <p style="margin: 0; font-size: 1.1em; line-height: 1.6;">💬 <strong>Open for suggestions and feedback!</strong></p>
+        </div>
+
+        <div class="notes">
+            <h3>Future Plans (2 minutes)</h3>
+            <p>Four main areas of improvement.</p>
+            <ul>
+                <li>More formats and testing - HDF5, CZI, LIF support, edge cases, comprehensive validation</li>
+                <li>Enhanced AI - fix button application issues, learn from conversions, smarter recommendations</li>
+                <li>Better UX - FileSelector widget for visual browsing, batch operations, improved error messages</li>
+                <li>Analytics and security - performance tracking, figure out cluster charge system more accurately, Okta authentication</li>
+            </ul>
+
+            <p>Why these priorities.</p>
+            <ul>
+                <li>More formats - scientists use many different formats beyond what we support now</li>
+                <li>Enhanced AI - current AI is helpful but some features don't work perfectly yet</li>
+                <li>Better UX - make it easier to use with visual file browsing and batch operations</li>
+                <li>Analytics and security - track usage, understand cluster costs better, add proper authentication</li>
+            </ul>
+
+            <p>Open for suggestions and feedback.</p>
+            <ul>
+                <li>This roadmap is flexible</li>
+                <li>Looking for input from the team</li>
+                <li>What features would be most useful?</li>
+                <li>What should we prioritize?</li>
+            </ul>
+        </div>
+    </div>
+
+    <!-- ======================= THANK YOU SLIDE ======================= -->
+    <div id="thank-you" class="step" data-x="5500" data-y="3000" data-z="1000" data-scale="1.5" data-rotate-z="90">
+        <h2 style="text-align: center; margin-bottom: 50px; font-size: 2.2em; color: #2c3e50;">Thanks to</h2>
+        <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 40px 60px; max-width: 1100px; margin: 0 auto;">
+            <div>
+                <h4 style="margin: 0 0 8px 0; font-size: 1.2em; font-weight: bold; color: #2c3e50;">Mark Kittisopikul</h4>
+                <p style="margin: 0; font-size: 0.9em; color: #666; line-height: 1.4;">Mentorship and guidance throughout the entire journey</p>
+            </div>
+
+            <div>
+                <h4 style="margin: 0 0 8px 0; font-size: 1.2em; font-weight: bold; color: #2c3e50;">Stephan Preibisch</h4>
+                <p style="margin: 0; font-size: 0.9em; color: #666; line-height: 1.4;">Determined the final TensorSwitch name</p>
+            </div>
+
+            <div>
+                <h4 style="margin: 0 0 8px 0; font-size: 1.2em; font-weight: bold; color: #2c3e50;">Konrad Rokicki</h4>
+                <p style="margin: 0; font-size: 0.9em; color: #666; line-height: 1.4;">Suggested user validation approach</p>
+            </div>
+
+            <div>
+                <h4 style="margin: 0 0 8px 0; font-size: 1.2em; font-weight: bold; color: #2c3e50;">Nathan Soules</h4>
+                <p style="margin: 0; font-size: 0.9em; color: #666; line-height: 1.4;">Set up the VM infrastructure</p>
+            </div>
+
+            <div>
+                <h4 style="margin: 0 0 8px 0; font-size: 1.2em; font-weight: bold; color: #2c3e50;">William Katz</h4>
+                <p style="margin: 0; font-size: 0.9em; color: #666; line-height: 1.4;">Suggested Okta authentication</p>
+            </div>
+
+            <div>
+                <h4 style="margin: 0 0 8px 0; font-size: 1.2em; font-weight: bold; color: #2c3e50;">Allison Truhlar</h4>
+                <p style="margin: 0; font-size: 0.9em; color: #666; line-height: 1.4;">Integration suggestions</p>
+            </div>
+        </div>
+
+        <div class="notes">
+            <h3>Thank You Slide (1 minute)</h3>
+            <p>I want to thank the people who made TensorSwitch possible.</p>
+
+            <ul>
+                <li>Mark Kittisopikul - my mentor who guided me throughout the entire journey from introducing file format to any VM setup</li>
+                <li>Stephan Preibisch - determined the final TensorSwitch name from our list of candidates</li>
+                <li>Konrad Rokicki - suggested showing the GUI to more users to validate edge cases</li>
+                <li>Nathan Soules - set up the VM infrastructure that hosts TensorSwitch</li>
+                <li>William Katz - suggested implementing Okta authentication for security</li>
+                <li>Allison Truhlar - provided integration suggestions for FileGlancer collaboration</li>
+            </ul>
+
+            <p>Thank you all for your contributions!</p>
+        </div>
+    </div>
+
+    <!-- Return to overview -->
+    <div id="overview" class="step" data-x="1500" data-y="3000" data-z="-5000" data-scale="10"></div>
+
+</div>
+
+<!-- Impress.js core -->
+<script src="js/impress.js"></script>
+<script>impress().init();</script>
+
+<!-- Speaker console (press 'P' to open) -->
+<link rel="stylesheet" href="css/impressConsole.css">
+<script src="js/impressConsole.js"></script>
+<script>
+    // Initialize impress and console
+    impress().init();
+    impressConsole().init();
+    // Optional: auto-open console - comment out if you want manual opening with 'P' key
+    // impressConsole().open();
+</script>
+
+</body>
+</html>
