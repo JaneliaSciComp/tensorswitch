@@ -251,7 +251,7 @@ def main():
                 return
 
         if args.task == "n5_to_n5":
-            n5_to_n5.convert(args.base_path, args.output_path, args.num_volumes, args.level, args.start_idx, args.stop_idx, args.memory_limit)
+            n5_to_n5.convert(args.base_path, args.output_path, args.num_volumes, args.level, args.start_idx, args.stop_idx, args.memory_limit, custom_chunk_shape)
         elif args.task == "n5_to_zarr2":
             n5_to_zarr2.convert(args.base_path, args.output_path, args.level, args.start_idx, args.stop_idx, args.memory_limit)
         elif args.task == "downsample_shard_zarr3":
