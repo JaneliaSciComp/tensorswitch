@@ -4,8 +4,8 @@ import time
 import psutil
 from ..utils import get_chunk_domains, n5_store_spec, create_output_store, commit_tasks, print_processing_info, fetch_http_json, fetch_remote_json, get_total_chunks_from_store
 
-def convert(base_path, output_path, number, level, start_idx=0, stop_idx=None, memory_limit=50, **kwargs):
-    """Convert N5 to N5 format."""
+def convert(base_path, output_path, number, level, start_idx=0, stop_idx=None, memory_limit=50, custom_chunk_shape=None, **kwargs):
+    """Convert N5 to N5 format with optional custom chunk shape."""
     #n5_level_path = f"{base_path}/setup{number}/s{level}"
     #n5_output_path = f"{output_path}/setup{number}/s{level}"
     n5_level_path = f"{base_path}"
@@ -32,7 +32,9 @@ def convert(base_path, output_path, number, level, start_idx=0, stop_idx=None, m
 
     # Read from original (local/HTTP/GCS/S3) chunk shape but write in specific output chunk shape
     shape, chunk_shape = n5_store.shape, n5_store.chunk_layout.read_chunk.shape
-    output_chunk_shape = [64, 64, 64]
+    # Use custom chunk shape if provided, otherwise default to [64, 64, 64]
+    output_chunk_shape = custom_chunk_shape if custom_chunk_shape else [64, 64, 64]
+    print(f"Output chunk shape: {output_chunk_shape}")
 
     # Try to read source attributes.json to preserve metadata like downsamplingFactors
     source_attrs = None
