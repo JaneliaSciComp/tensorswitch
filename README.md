@@ -312,6 +312,15 @@ python -m tensorswitch --task nd2_to_zarr3_s0 \
 | `--project` | Billing project (required) | None |
 | `--use_dask_jobqueue` | Use Dask scheduling | False |
 
+#### Advanced Parameters
+
+| Parameter | Description | Example |
+|-----------|-------------|---------|
+| `--custom_chunk_shape` | Custom chunk size for output (comma-separated) | 128,128,128 |
+| `--custom_shard_shape` | Custom shard size for Zarr v3 (comma-separated) | 256,256,256 |
+| `--memory_limit` | Memory limit in GB per job | 50 |
+| `--dual_zarr_approach` | Create dual v2/v3 compatible format | v2_chunks, v3_chunks, none |
+
 ### 6. Example Commands
 
 #### Convert N5 to Zarr V2 locally
@@ -332,6 +341,21 @@ python -m tensorswitch --task downsample_shard_zarr3 --base_path /path/to/zarr/s
 #### Submit N5 to Zarr jobs to cluster
 ```bash
 python -m tensorswitch --task n5_to_zarr2 --base_path /path/to/n5 --output_path /path/to/zarr2 --submit --project your_project_name
+```
+
+#### Convert N5 to N5 with custom chunk size (rechunking)
+```bash
+# Transfer and rechunk N5 from remote HTTP server to local storage
+python -m tensorswitch --task n5_to_n5 \
+  --base_path "http://remote-server/dataset.n5/setup0/timepoint0/s0" \
+  --output_path "/local/storage/dataset.n5/setup0/timepoint0/s0" \
+  --custom_chunk_shape 128,128,128 \
+  --level 0 \
+  --memory_limit 50 \
+  --num_volumes 1 \
+  --cores 8 \
+  --submit \
+  --project your_project_name
 ```
 
 #### Convert TIFF to Zarr v2 s0 with automatic OME metadata
