@@ -35,6 +35,7 @@ tensorswitch/
 │       │   ├── downsample_shard_zarr3.py # Downsample using shards
 │       │   ├── downsample_zarr2.py       # Downsample existing Zarr V2 datasets
 │       │   ├── n5_to_n5.py               # N5 to N5 conversion logic
+|       |   ├── precomputed_to_n5.py      # Neuroglancer Precomputed to N5 
 │       │   ├── n5_to_zarr2.py            # N5 to Zarr V2 conversion logic
 │       │   ├── tiff_to_zarr2_s0.py       # TIFF to Zarr V2 level s0 with OME-Zarr metadata
 │       │   ├── tiff_to_zarr3_s0.py       # TIFF to Zarr V3 level s0 with OME-Zarr metadata
@@ -171,6 +172,7 @@ python -m tensorswitch --task downsample_shard_zarr3 \
 | `nd2_to_zarr3_s0`        | Convert ND2 file to Zarr V3 (s0) with OME-Zarr metadata |
 | `ims_to_zarr2_s0`        | Convert IMS file to Zarr V2 (s0) with OME-Zarr metadata |
 | `ims_to_zarr3_s0`        | Convert IMS file to Zarr V3 (s0) with OME-Zarr metadata |
+| `precomputed_to_n5`      | Convert Neuroglancer Precomputed to N5 format |
 
 All s0 conversion tasks create multiscale-compatible Zarr structures with proper OME-Zarr metadata and correct dimension ordering.
 
@@ -408,6 +410,27 @@ python -m tensorswitch --task ims_to_zarr3_s0 \
   --project your_project_name \
   --submit
 ```
+
+#### Convert Neuroglancer Precomputed to N5 (local or from GCS)
+```bash
+# Local conversion - single scale
+python -m tensorswitch --task precomputed_to_n5 \
+  --base_path /path/to/precomputed_data \
+  --output_path /path/to/output.n5/ch0tp0/s0 \
+  --level 0
+
+# From Google Cloud Storage - submit to cluster
+python -m tensorswitch --task precomputed_to_n5 \
+  --base_path "gs://bucket-name/path/to/data" \
+  --output_path /local/output.n5/ch0tp0/s0 \
+  --level 0 \
+  --num_volumes 8 \
+  --cores 4 \
+  --project your_project_name \
+  --submit
+```
+
+**Note**: After converting all scales (s0-s8), create root `attributes.json` to match BigStitcher/BigDataViewer structure.
 
 #### Create Complete Multiscale OME-Zarr Dataset
 

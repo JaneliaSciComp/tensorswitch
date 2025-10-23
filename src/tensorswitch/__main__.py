@@ -17,7 +17,7 @@ from .utils import (get_total_chunks, downsample_spec, zarr3_store_spec, get_chu
                     load_tiff_stack, load_nd2_stack, load_ims_stack, update_ome_metadata_if_needed)
 from .tasks import (downsample_shard_zarr3, n5_to_n5, n5_to_zarr2, tiff_to_zarr3_s0,
                     nd2_to_zarr3_s0, ims_to_zarr3_s0, nd2_to_zarr2_s0, ims_to_zarr2_s0,
-                    tiff_to_zarr2_s0, downsample_zarr2)
+                    tiff_to_zarr2_s0, downsample_zarr2, precomputed_to_n5)
 from .dask_utils import submit_dask_job, submit_dask_wrapper_job
 
 # Set umask to allow group write access
@@ -90,6 +90,28 @@ def get_total_chunks_for_task(args, use_v2_encoding=True):
         )
         temp_store = ts.open(store_spec, create=True, delete_existing=True).result()
         total_chunks = get_total_chunks_from_store(temp_store)
+
+    elif args.task == "precomputed_to_n5":
+        # Import precomputed-specific utilities
+        from .utils import fetch_precomputed_info, precomputed_store_spec
+
+        # Fetch Precomputed metadata
+        info = fetch_precomputed_info(args.base_path)
+        scale = info['scales'][args.level]
+
+        # Open Precomputed scale to get actual shape
+        store = ts.open(precomputed_store_spec(args.base_path, scale['key'])).result()
+
+        # Calculate chunks based on requested chunk size (default 128^3)
+        chunk_shape_3d = custom_chunk_shape if custom_chunk_shape else [128, 128, 128]
+
+        # Precomputed is 4D [X, Y, Z, C], adjust chunk shape to match
+        if len(store.shape) == 4:
+            chunk_shape = chunk_shape_3d + [1]  # Add channel dimension
+        else:
+            chunk_shape = chunk_shape_3d
+
+        total_chunks = get_total_chunks_from_store(store, chunk_shape=chunk_shape)
 
     else:
         if args.downsample and args.level > 0:
@@ -185,7 +207,7 @@ def submit_job(args, use_v2_encoding=True):
 
 def main():
     parser = argparse.ArgumentParser(description="Unified Pipeline Manager")
-    parser.add_argument("--task", required=True, choices=["n5_to_zarr2", "n5_to_n5", "downsample_shard_zarr3", "tiff_to_zarr3_s0", "nd2_to_zarr3_s0", "ims_to_zarr3_s0", "nd2_to_zarr2_s0", "ims_to_zarr2_s0", "tiff_to_zarr2_s0", "downsample_zarr2"])
+    parser.add_argument("--task", required=True, choices=["n5_to_zarr2", "n5_to_n5", "downsample_shard_zarr3", "tiff_to_zarr3_s0", "nd2_to_zarr3_s0", "ims_to_zarr3_s0", "nd2_to_zarr2_s0", "ims_to_zarr2_s0", "tiff_to_zarr2_s0", "downsample_zarr2", "precomputed_to_n5"])
     parser.add_argument("--base_path", required=True, help="Input dataset path")
     parser.add_argument("--output_path", required=True, help="Output dataset path (only needed for conversions)")
     parser.add_argument("--level", type=int, default=0, help="Levels to process")
@@ -270,6 +292,8 @@ def main():
             tiff_to_zarr2_s0.process(args.base_path, args.output_path, args.memory_limit, args.start_idx, args.stop_idx, bool(args.use_ome_structure))
         elif args.task == "downsample_zarr2":
             downsample_zarr2.process(args.base_path, args.output_path, args.level, args.start_idx, args.stop_idx, bool(args.downsample), args.memory_limit, custom_chunk_shape)
+        elif args.task == "precomputed_to_n5":
+            precomputed_to_n5.convert(args.base_path, args.output_path, args.level, args.start_idx, args.stop_idx, args.memory_limit, custom_chunk_shape)
         else:
             raise ValueError(f"Unsupported task: {args.task}")
         
