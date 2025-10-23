@@ -320,9 +320,9 @@ def build_job_name(task, level, volume_idx):
 
 def get_input_driver(input_path):
     """
-    Detect whether input is TIFF, N5, Zarr2, Zarr3, or ND2
+    Detect whether input is TIFF, N5, Zarr2, Zarr3, ND2, IMS, or Neuroglancer Precomputed
 
-    Checks if there is a attributes.json, .zarray, zarr.json, .tiff/.tif, or .nd2 files
+    Checks if there is a attributes.json, .zarray, zarr.json, info, .tiff/.tif, .nd2, or .ims files
     """
 
     if not os.path.exists(input_path):
@@ -347,6 +347,7 @@ def get_input_driver(input_path):
     n5_path = os.path.join(input_path, "attributes.json")
     zarr2_path = os.path.join(input_path, ".zarray")
     zarr3_path = os.path.join(input_path, "zarr.json")
+    precomputed_path = os.path.join(input_path, "info")
 
     if os.path.exists(n5_path):
         input_driver = "n5"
@@ -354,6 +355,8 @@ def get_input_driver(input_path):
         input_driver = "zarr"
     elif os.path.exists(zarr3_path):
         input_driver = "zarr3"
+    elif os.path.exists(precomputed_path):
+        input_driver = "precomputed"
     else:
         # Check for .tiff or .tif files in directory
         tiff_files = [
@@ -376,7 +379,8 @@ def get_input_driver(input_path):
         {n5_path} does not exist.
         {zarr2_path} does not exist.
         {zarr3_path} does not exist.
-        And no TIFF or ND2 files found in folder.
+        {precomputed_path} does not exist.
+        And no TIFF, ND2, or IMS files found in folder.
         """)
     return input_driver
 
@@ -1480,5 +1484,211 @@ def write_dual_zarr_metadata(output_path, source_file):
         import traceback
         traceback.print_exc()
         return False
+
+
+# ============================================================================
+# Neuroglancer Precomputed to N5 Conversion Functions
+# ============================================================================
+
+def precomputed_store_spec(precomputed_path, scale_key):
+    """
+    Create TensorStore spec for Neuroglancer Precomputed format.
+
+    Args:
+        precomputed_path: Base path to precomputed dataset (local, HTTP, GCS, S3)
+        scale_key: Scale identifier from info.json (e.g., "10.0x10.0x25.0")
+
+    Returns:
+        dict: TensorStore spec for neuroglancer_precomputed driver
+
+    Examples:
+        >>> spec = precomputed_store_spec("gs://bucket/dataset", "10.0x10.0x25.0")
+        >>> store = ts.open(spec).result()
+
+        >>> spec = precomputed_store_spec("/local/path/data", "20.0x20.0x25.0")
+        >>> store = ts.open(spec).result()
+    """
+    return {
+        'driver': 'neuroglancer_precomputed',
+        'kvstore': get_kvstore_spec(precomputed_path),
+        'scale_metadata': {'key': scale_key},
+        'open': True
+    }
+
+
+def n5_output_spec_with_compression(n5_path, shape, dtype,
+                                     chunk_shape=None,
+                                     compression_level=3,
+                                     downsample_factors=None):
+    """
+    Create N5 output specification with zstd compression.
+
+    Args:
+        n5_path: Output N5 path (e.g., /path/to/dataset.n5/ch0tp0/s0)
+        shape: Array dimensions [X, Y, Z]
+        dtype: Data type string ('uint8', 'uint16', 'uint64', etc.)
+        chunk_shape: Block size (default [128, 128, 128])
+        compression_level: zstd compression level (default 3)
+        downsample_factors: Downsampling relative to s0 (e.g., [2,2,1] for s1)
+                           None for s0 (full resolution)
+
+    Returns:
+        dict: TensorStore N5 spec with proper attributes.json format
+
+    Examples:
+        >>> spec = n5_output_spec_with_compression(
+        ...     "/path/to/data.n5/ch0tp0/s0",
+        ...     [47000, 13000, 1000],
+        ...     'uint8'
+        ... )
+
+        >>> spec = n5_output_spec_with_compression(
+        ...     "/path/to/data.n5/ch0tp0/s1",
+        ...     [23500, 6500, 1000],
+        ...     'uint8',
+        ...     downsample_factors=[2, 2, 1]
+        ... )
+    """
+    if chunk_shape is None:
+        chunk_shape = [128, 128, 128]
+
+    # Map numpy/tensorstore dtype to N5 data type string
+    dtype_map = {
+        'uint8': 'uint8', 'uint16': 'uint16', 'uint32': 'uint32', 'uint64': 'uint64',
+        'int8': 'int8', 'int16': 'int16', 'int32': 'int32', 'int64': 'int64',
+        'float32': 'float32', 'float64': 'float64'
+    }
+
+    n5_dtype = dtype_map.get(str(dtype), str(dtype))
+
+    metadata = {
+        'dimensions': list(shape),
+        'dataType': n5_dtype,
+        'blockSize': list(chunk_shape),
+        'compression': {'type': 'zstd', 'level': compression_level}
+    }
+
+    # Add downsamplingFactors for all scales (s0: [1,1,1], s1: [2,2,1], etc.)
+    if downsample_factors is not None:
+        metadata['downsamplingFactors'] = list(downsample_factors)
+
+    return {
+        'driver': 'n5',
+        'kvstore': {'driver': 'file', 'path': n5_path},
+        'metadata': metadata,
+        'create': True,
+        'delete_existing': False
+    }
+
+
+def fetch_precomputed_info(precomputed_path):
+    """
+    Fetch and parse Neuroglancer Precomputed info JSON.
+    Supports GCS (gs://), HTTP/HTTPS, and local file paths.
+
+    Args:
+        precomputed_path: Base path to precomputed dataset
+
+    Returns:
+        dict: Parsed info metadata containing scales, data_type, etc.
+
+    Examples:
+        >>> info = fetch_precomputed_info("gs://liconn-public/ExPID124/image")
+        >>> print(info['scales'][0]['resolution'])  # [10.0, 10.0, 25.0]
+
+        >>> info = fetch_precomputed_info("/local/path/to/data")
+        >>> print(info['data_type'])  # 'uint8'
+    """
+    if precomputed_path.startswith('gs://') or precomputed_path.startswith('s3://'):
+        # Use TensorStore KvStore for GCS/S3
+        kvstore_spec = get_kvstore_spec(precomputed_path)
+        kvstore = ts.KvStore.open(kvstore_spec).result()
+        info_data = kvstore.read('info').result().value
+        return json.loads(info_data)
+    elif precomputed_path.startswith('http'):
+        # HTTP fetch
+        info_url = precomputed_path.rstrip('/') + '/info'
+        response = requests.get(info_url)
+        response.raise_for_status()
+        return response.json()
+    else:
+        # Local file (may be gzipped)
+        info_path = os.path.join(precomputed_path, 'info')
+
+        # Try gzip first, then plain text
+        try:
+            import gzip
+            with gzip.open(info_path, 'rt') as f:
+                return json.load(f)
+        except:
+            with open(info_path, 'r') as f:
+                return json.load(f)
+
+
+def ensure_precomputed_info_decompressed(precomputed_path):
+    """
+    Ensure the Neuroglancer Precomputed info file is decompressed.
+    TensorStore requires uncompressed JSON for local file paths.
+
+    Args:
+        precomputed_path: Base path to precomputed dataset (local path only)
+
+    Returns:
+        None (decompresses info file in-place if needed)
+    """
+    if precomputed_path.startswith('gs://') or precomputed_path.startswith('s3://') or precomputed_path.startswith('http'):
+        # Remote paths don't need decompression
+        return
+
+    info_path = os.path.join(precomputed_path, 'info')
+
+    # Check if file is gzipped
+    try:
+        import gzip
+        with gzip.open(info_path, 'rt') as f:
+            info_data = f.read()
+
+        # File is gzipped - decompress it
+        print(f"  Decompressing gzipped info file: {info_path}")
+        with open(info_path, 'w') as f:
+            f.write(info_data)
+        print(f"  ✓ Info file decompressed")
+    except:
+        # File is already plain text or doesn't exist
+        pass
+
+
+def calculate_downsample_factors(scale_idx, precomputed_info):
+    """
+    Calculate N5-style downsampling factors for a given scale.
+
+    Args:
+        scale_idx: Index of scale in info.json (0=highest resolution)
+        precomputed_info: Parsed info.json dictionary
+
+    Returns:
+        list: Downsampling factors [X, Y, Z] relative to s0
+              Returns [1, 1, 1] for s0 (full resolution)
+
+    Examples:
+        For ExPID124 image with resolutions:
+        - s0: [10, 10, 25] nm → [1, 1, 1] (full resolution)
+        - s1: [20, 20, 25] nm → [2, 2, 1]
+        - s2: [40, 40, 50] nm → [4, 4, 2]
+        - s3: [80, 80, 100] nm → [8, 8, 4]
+    """
+    if scale_idx == 0:
+        return [1, 1, 1]  # Full resolution
+
+    scales = precomputed_info['scales']
+    s0_resolution = np.array(scales[0]['resolution'])
+    current_resolution = np.array(scales[scale_idx]['resolution'])
+
+    # Calculate integer downsampling factors
+    factors = [
+        int(round(current_resolution[i] / s0_resolution[i]))
+        for i in range(3)
+    ]
+    return factors
 
 
