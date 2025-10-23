@@ -22,13 +22,20 @@
         <h2>Data Format Conversion</h2>
         <p class="subtitle">Scientific Data Format Conversion at Scale</p>
 
-        <div style="margin-top: 30px; font-size: 1.1em;">
-            <p style="margin: 10px 0;">
-                🌐 <a href="http://tensorswitch.int.janelia.org/" target="_blank" style="color: #3498db; text-decoration: none;">tensorswitch.int.janelia.org</a>
-            </p>
-            <p style="margin: 10px 0;">
-                📦 <a href="https://github.com/JaneliaSciComp/tensorswitch/tree/develop" target="_blank" style="color: #3498db; text-decoration: none;">github.com/JaneliaSciComp/tensorswitch/tree/develop</a>
-            </p>
+        <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-top: 30px; gap: 40px;">
+            <div style="font-size: 1.1em;">
+                <p style="margin: 10px 0;">
+                    🌐 <a href="http://tensorswitch.int.janelia.org/" target="_blank" style="color: #3498db; text-decoration: none;">tensorswitch.int.janelia.org</a>
+                </p>
+                <p style="margin: 10px 0;">
+                    📦 <a href="https://github.com/JaneliaSciComp/tensorswitch/tree/develop" target="_blank" style="color: #3498db; text-decoration: none;">github.com/JaneliaSciComp/tensorswitch/tree/develop</a>
+                </p>
+            </div>
+
+            <div style="font-size: 1.2em; text-align: right;">
+                <p><strong>Diyi Chen</strong></p>
+                <p style="font-size: 0.9em; margin-top: 5px;">Informatics Analyst</p>
+            </div>
         </div>
 
         <!-- Placeholder for TensorSwitch logo -->
@@ -36,9 +43,9 @@
 
         <div class="notes">
             <h3>Title Slide</h3>
-            <p>Hello everyone, I'm Diyi Chen. And today, I'll be sharing with you TensorSwitch - a tool that started from handling scattered conversion requests from different labs and evolved into a unified software that tries to make scientific data format conversion much easier.</p>
+            <p>Hello everyone, I'm Diyi Chen. And today, I'll be sharing with you TensorSwitch - which is a tool that converts scientific data between different formats.</p>
 
-            <p>TensorSwitch is live at tensorswitch.int.janelia.org, and the code is on GitHub under JaneliaSciComp/tensorswitch, develop branch.</p>
+            <p>Here are the links for tensorswitch.int.janelia.org, and the code is on GitHub under JaneliaSciComp/tensorswitch, develop branch.</p>
 
             <p>In this presentation, I'll walk you through the journey of how TensorSwitch came to be.</p>
         </div>
@@ -57,12 +64,12 @@
             <h3>Journey Overview</h3>
             <p>Here's the journey of TensorSwitch in six major phases.</p>
             <ul>
-                <li>We will start with understanding the origin - why was this needed in the first place.</li>
-                <li>Then moved through development where we tackled the technical challenges.</li>
-                <li>Evolved it into a personal productivity tool.</li>
-                <li>Created a GUI so scientists could use it directly.</li>
-                <li>Added AI capabilities for guidance.</li>
-                <li>And finally, future improvements and validations - where we are now and where we're heading.</li>
+                <li>We will start with understanding why we need this in the first place.</li>
+                <li>How we solved the technical challenges.</li>
+                <li>Which evolved it into something I used for my own productivity.</li>
+                <li>Then to creation of a GUI so scientists could use it directly.</li>
+                <li>With AI assistant for guidance.</li>
+                <li>And finally, to future improvements and validations.</li>
             </ul>
         </div>
     </div>
@@ -82,8 +89,10 @@
         <div class="notes">
             <h3>Phase 1: Origin</h3>
             <p>The story begins with individual requests for data format conversions from different labs.</p>
+
             <p>Each request was unique, but there was clearly a pattern emerging.</p>
-            <p>Let's dive into the details of how this all started.</p>
+
+            <p>Let's see how this all started.</p>
         </div>
     </div>
 
@@ -115,12 +124,14 @@
             <h3>Lab Requests</h3>
             <p>Different lab requests came from different needs:</p>
             <ul>
-                <li>MengWang - had broken Zarr2 files that needed fixing and upgrading to Zarr3 format, which showed us format handling needed to be robust</li>
-                <li>Keller lab - needed to download huge N5 datasets from their HTTP server and rechunk for local analysis, which required network transfer support</li>
-                <li>Moe's tavakoli and LICONN - working with ND2 and IMS microscopy formats with rich ome-zarr metadata like acquisition parameters and channel info that needed preservation</li>
+                <li>MengWang Lab - had broken Zarr2 files that needed fixing and converting to Zarr3, which showed us format handling needed to be robust</li>
+                <li>Keller lab - needed to download huge N5 datasets from their HTTP server and rechunk them locally, which requires network transfer support</li>
+                <li>Moe's Lab - needed to convert Nikon and Imaris microscopy files to zarr3 with rich ome-zarr metadata</li>
             </ul>
-            <p>Looking at these requests, I noticed a pattern - different formats, different sources, but the same fundamental need: reliable conversion that preserves what matters.</p>
-            <p>That's when I realized this needed to be a unified tool, not just one-off scripts. So we created TensorSwitch to unify all these conversions.</p>
+
+            <p>Looking at these requests, I noticed that different formats, different sources, but the same need: which is reliable conversion that preserves what matters.</p>
+
+            <p>That's when I realized we need a unified tool, not one-off scripts. So we created TensorSwitch.</p>
         </div>
     </div>
 
@@ -167,7 +178,7 @@
                 <h4>What We Switch</h4>
                 <ul>
                     <li>Formats: N5 ↔ Zarr2 ↔ Zarr3</li>
-                    <li>Resolutions: Downsampling pyramids</li>
+                    <li>Resolutions: Downsampling resolution levels</li>
                     <li>Structures: Rechunking optimization</li>
                 </ul>
             </div>
@@ -175,20 +186,23 @@
 
         <div class="notes">
             <h3>The Name: TensorSwitch</h3>
-            <p>The name TensorSwitch combines two concepts - Tensor from TensorStore, and Switch for conversion.</p>
-            <p>TensorStore is Google's library that we use as the foundation. It's very powerful for handling multidimensional array data, which is exactly what scientific imaging data is. Such as:</p>
+            <p>The name TensorSwitch combines two parts - Tensor from TensorStore, and Switch for conversion.</p>
+
+            <p>TensorStore is Google's library for handling multidimensional arrays, which could do:</p>
             <ul>
-                <li>Efficient reading and writing of Zarr formats</li>
-                <li>Smart chunk-based operations that don't load entire datasets into memory</li>
-                <li>Solid performance for large-scale data</li>
+                <li>Efficient Zarr Reading and writing</li>
+                <li>Chunk-based operations without loading everything into memory</li>
+                <li>Good performance for large datasets</li>
             </ul>
-            <p>The Switch part is what we need such as:</p>
+
+            <p>Switch part means we could:</p>
             <ul>
-                <li>Switch between formats like N5 and Zarr</li>
-                <li>Switch resolutions by creating multiscale pyramids</li>
-                <li>Switch data structures through rechunking</li>
+                <li>Switch between formats - N5 to Zarr, Zarr2 to Zarr3</li>
+                <li>Switch resolutions - creating multiscale resolution levels</li>
+                <li>Switch structures - rechunking data</li>
             </ul>
-            <p>Think of TensorStore as a powerful engine, and TensorSwitch as the vehicle we built around that engine to actually take us where we need to go with the data.</p>
+
+            <p>If TensorStore is the engine, TensorSwitch is what we built to use it.</p>
         </div>
     </div>
 
@@ -206,14 +220,9 @@
 
         <div class="notes">
             <h3>Phase 2: Development</h3>
-            <p>With clear user needs identified, we entered the development phase. This is where we had to deeply understand the technical differences between formats and build robust conversion pipelines.</p>
-            <p>The main challenges were:</p>
-            <ul>
-                <li>Understanding what makes each format unique</li>
-                <li>Implementing reliable conversions for all 10 task combinations we identified</li>
-                <li>Preserving scientific metadata through the conversion process</li>
-            </ul>
-            <p>Let's look at - what makes these formats different and why conversion isn't just copying data.</p>
+            <p>With clear user needs, we entered development phase.</p>
+
+            <p>Let's see what makes these formats different.</p>
         </div>
     </div>
 
@@ -239,14 +248,14 @@
                 <p class="use-case">→ Broad tool compatibility</p>
                 <div style="margin-top: 10px; padding: 10px; background: #e3f2fd; border-radius: 4px; font-size: 0.85em;">
                     <strong>Origin:</strong> Python community<br>
-                    <strong>Structure:</strong> One file per chunk<br>
+                    <strong>Structure:</strong> One file per chunk (no sharding)<br>
                     <strong>Key Feature:</strong> Wide codec support<br>
                     <strong>Best for:</strong> Python workflows
                 </div>
             </div>
             <div class="format-card">
                 <h4>Zarr3</h4>
-                <p class="tech-detail">Sharding support, faster access</p>
+                <p class="tech-detail">Adds sharding - major improvement</p>
                 <p class="use-case">→ Best for large datasets</p>
                 <div style="margin-top: 10px; padding: 10px; background: #e3f2fd; border-radius: 4px; font-size: 0.85em;">
                     <strong>Origin:</strong> Modern Zarr evolution<br>
@@ -258,7 +267,7 @@
             <div class="format-card">
                 <h4>ND2 (Nikon)</h4>
                 <p class="tech-detail">OME-XML metadata, calibration</p>
-                <p class="use-case">→ Microscopy standard</p>
+                <p class="use-case">→ Proprietary microscope format</p>
                 <div style="margin-top: 10px; padding: 10px; background: #e3f2fd; border-radius: 4px; font-size: 0.85em;">
                     <strong>Origin:</strong> Nikon microscopy<br>
                     <strong>Structure:</strong> Proprietary binary<br>
@@ -273,75 +282,70 @@
                 <div style="margin-top: 10px; padding: 10px; background: #e3f2fd; border-radius: 4px; font-size: 0.85em;">
                     <strong>Origin:</strong> Imaris/Bitplane<br>
                     <strong>Structure:</strong> HDF5-based<br>
-                    <strong>Key Feature:</strong> Built-in pyramids<br>
+                    <strong>Key Feature:</strong> Built-in resolution levels<br>
                     <strong>Best for:</strong> Imaris users
                 </div>
             </div>
             <div class="format-card">
-                <h4>TIFF</h4>
+                <h4>TIFF (Tagged Image File Format)</h4>
                 <p class="tech-detail">Universal, limited metadata</p>
                 <p class="use-case">→ Interchange format</p>
                 <div style="margin-top: 10px; padding: 10px; background: #e3f2fd; border-radius: 4px; font-size: 0.85em;">
                     <strong>Origin:</strong> Universal standard<br>
                     <strong>Structure:</strong> Single/multi-page files<br>
-                    <strong>Limitation:</strong> File size constraints<br>
-                    <strong>Need to convert:</strong> For chunked access
+                    <strong>Chunking:</strong> 2D tiles supported; 3D+ via extensions<br>
+                    <strong>Need to convert:</strong> For modern chunked access
                 </div>
             </div>
         </div>
 
         <div class="notes">
-            <h3>Understanding Data Formats (2-3 minutes)</h3>
-            <p><strong>Why so many formats?</strong></p>
-            <ul>
-                <li>Each format emerged from different communities to solve specific problems</li>
-                <li>Can't just standardize on one - each has unique strengths</li>
-            </ul>
+            <h3>Understanding Data Formats</h3>
+            <p>Why so many formats?</p>
+            <p>Each format emerged from different communities to solve specific problems</p>
 
             <p><strong>N5 - Not HDF5, came from Saalfeld Lab at Janelia:</strong></p>
             <ul>
                 <li>Built for BigDataViewer, needed efficient parallel read/write</li>
                 <li>HDF5 had locking issues that made parallel writing slow</li>
                 <li>So N5 solved this by storing one file per chunk</li>
-                <li>Great for Fiji and BigDataViewer, which is Java-based</li>
             </ul>
 
             <p><strong>Zarr2 - Python-friendly alternative:</strong></p>
             <ul>
-                <li>Since python scientific community needed seamless NumPy, dask, xarray, napari integration</li>
+                <li>Since python community needed NumPy, dask integration</li>
                 <li>So it became the community standard</li>
-                <li>Wide codec support and excellent compression options</li>
+                <li>It has wide codec support and excellent compression options</li>
+                <li>But limited to: one file per chunk</li>
             </ul>
 
-            <p><strong>Zarr3 - developed from zarr2:</strong></p>
+            <p><strong>Zarr3:</strong></p>
             <ul>
-                <li>Big innovation is sharding - grouping multiple chunks into single files</li>
-                <li>Solves the millions-of-tiny-files problem that kills filesystem performance</li>
-                <li>Expensive on cloud storage without sharding</li>
-                <li>Gives more flexible codec pipeline for advanced compression</li>
+                <li>Adds sharding on top of zarr2</li>
+                <li>which groups multiple chunks into single files</li>
+                <li>Solves the millions-of-tiny-files problem</li>
+                <li>Without sharding, large datasets create millions of files - which can be expensive on cloud storage and slow on filesystems</li>
             </ul>
 
             <p><strong>IMS - Imaris format:</strong></p>
             <ul>
-                <li>Used for visualization of complex 3D, 4D, even 5D datasets</li>
-                <li>HDF5-based internally with built-in pyramids</li>
-                <li>Challenge is - it needs Imaris or compatible tools</li>
-                <li>Converting to Zarr means any tool can read your data, not just Imaris</li>
+                <li>Used for complex 3D/4D/5D data visualization</li>
+                <li>It's HDF5-based internally with built-in resolution levels</li>
+                <li>It needs Imaris - converting to Zarr to opens it up</li>
             </ul>
 
-            <p><strong>ND2 - Nikon microscopy format:</strong></p>
+            <p><strong>ND2 - Nikon microscope format:</strong></p>
             <ul>
-                <li>Acquisition from Nikon microscopes produces ND2 files</li>
-                <li>Rich metadata: acquisition parameters, channels, Z-stacks, time series, calibration</li>
-                <li>Embedded in proprietary binary format</li>
-                <li>Need to extract and translate to work with open-source tools</li>
+                <li>Direct output from Nikon microscopes</li>
+                <li>Rich metadata: acquisition parameters, channels</li>
+                <li>Proprietary binary format - need to extract for open-source tools</li>
             </ul>
 
-            <p><strong>TIFF - Universal interchange format:</strong></p>
+            <p><strong>TIFF (Tagged Image File Format) - Universal interchange format:</strong></p>
             <ul>
+                <li>Tagged Image File Format means metadata organized as tags in the Image File Directory (IFD) header</li>
                 <li>Everyone can read TIFF - widely supported</li>
-                <li>But limited: no native chunking, no pyramids, limited metadata</li>
-                <li>Fine for small images, problematic for 100GB (gigabytes) datasets</li>
+                <li>Standard TIFF supports chunking for 2 dimensions for tiles, there are TIFF extensions that allow for 3 or more dimensions</li>
             </ul>
 
         </div>
@@ -374,7 +378,7 @@
                     <div>&nbsp;&nbsp;"dtype": "&lt;u2"</div>
                     <div>}</div>
                 </div>
-                <p style="margin-top: 8px; font-size: 0.8em;">NumPy-style dtype notation</p>
+                <p style="margin-top: 8px; font-size: 0.8em;">NumPy-style dtype notation<br>Separate files: .zarray, .zgroup, .zattrs<br>No sharding support</p>
             </div>
             <div class="format-card">
                 <h4>Zarr3</h4>
@@ -384,10 +388,10 @@
                     <div>&nbsp;&nbsp;"chunk_grid": {</div>
                     <div>&nbsp;&nbsp;&nbsp;&nbsp;"chunk_shape": [64,64]</div>
                     <div>&nbsp;&nbsp;},</div>
-                    <div>&nbsp;&nbsp;"codecs": [...]</div>
+                    <div>&nbsp;&nbsp;"codecs": [<span style="color: #d32f2f; font-weight: bold;">"sharding_indexed"</span>, ...]</div>
                     <div>}</div>
                 </div>
-                <p style="margin-top: 8px; font-size: 0.8em;">Sharding codec groups chunks</p>
+                <p style="margin-top: 8px; font-size: 0.8em;">Zarr v3 sharding codec groups chunks<br>Single zarr.json for everything</p>
             </div>
             <div class="format-card">
                 <h4>ND2 (Nikon)</h4>
@@ -409,116 +413,261 @@
                     <div>&nbsp;&nbsp;&nbsp;&nbsp;TimePoint 0/</div>
                     <div>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;Channel 0/Data</div>
                 </div>
-                <p style="margin-top: 8px; font-size: 0.8em;">Built-in pyramid structure</p>
+                <p style="margin-top: 8px; font-size: 0.8em;">Built-in multiscale structure</p>
             </div>
             <div class="format-card">
                 <h4>TIFF</h4>
                 <div style="text-align: left; margin-top: 8px; padding: 8px; background: #f5f5f5; border-radius: 4px; font-size: 0.75em; font-family: monospace;">
-                    <strong>IFD Tags:</strong>
+                    <strong>IFD Tags (Image File Directory):</strong>
                     <div>• Width, Height</div>
                     <div>• BitsPerSample</div>
                     <div>• Compression</div>
+                    <div>• TileWidth, TileHeight</div>
+                    <div>• ImageDescription</div>
                 </div>
-                <p style="margin-top: 8px; font-size: 0.8em;">Limited metadata vs modern formats</p>
-            </div>
-        </div>
-
-        <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 15px; margin-top: 15px;">
-            <div style="padding: 12px; background: white; border-radius: 8px;">
-                <h4 style="font-size: 1em; margin-bottom: 8px;">Why Chunks and Shards Matter</h4>
-                <p style="margin: 4px 0; font-size: 0.8em;"><strong>Chunks:</strong> Small pieces of array data (e.g., 128×128×64 voxels) that can be read/written independently without loading entire dataset</p>
-                <p style="margin: 4px 0; font-size: 0.8em;"><strong>Shards (Zarr3):</strong> Group multiple chunks into single files, reducing filesystem overhead for millions of chunks</p>
-                <p style="margin: 4px 0; font-size: 0.8em;"><strong>Multiscale Pyramids:</strong> Store same data at different resolutions (s0=full, s1=half, s2=quarter) for efficient visualization at any zoom level</p>
-            </div>
-            <div style="padding: 12px; background: white; border-radius: 8px; text-align: center;">
-                <h4 style="font-size: 1em; margin-bottom: 8px;">Sharding Concept</h4>
-                <img src="images_videos/sharding.png" alt="Sharding Concept" class="diagram" style="max-width: 100%; height: auto;">
-            </div>
-            <div style="padding: 12px; background: white; border-radius: 8px; text-align: center;">
-                <h4 style="font-size: 1em; margin-bottom: 8px;">Sharding Example</h4>
-                <img src="images_videos/ShardingExample.png" alt="Sharding Example" class="diagram" style="max-width: 100%; height: auto;">
+                <p style="margin-top: 8px; font-size: 0.8em;">Just header tags, limited metadata</p>
             </div>
         </div>
 
         <div class="notes">
-            <h3>Format Metadata Structures (2-3 minutes)</h3>
-            <ul>
-                <li>Now let's look at how these formats actually store their metadata</li>
-                <li>This is the technical heart of what makes conversion challenging</li>
-            </ul>
+            <h3>Format Metadata Structures</h3>
+            <p>Let's see how these formats store their metadata.</p>
 
-            <p><strong>N5 metadata structure:</strong></p>
+            <p><strong>N5:</strong></p>
             <ul>
-                <li>Uses attributes.json with simple fields: dimensions, blockSize, dataType</li>
+                <li>Uses attributes.json with: dimensions, blockSize, dataType</li>
                 <li>Each chunk is a separate file - makes parallel read/write really efficient</li>
-                <li>Dozens of processes can write different chunks simultaneously without conflicts</li>
             </ul>
 
-            <p><strong>Zarr2 metadata structure:</strong></p>
+            <p><strong>Zarr2:</strong></p>
             <ul>
-                <li>Uses .zarray with zarr_format identifier set to 2</li>
-                <li>shape instead of dimensions, chunks instead of blockSize</li>
-                <li>dtype in NumPy notation like less-than-u2 for little-endian unsigned 16-bit</li>
-                <li>This NumPy integration is why Zarr2 became so popular in Python data science</li>
+                <li>Uses separate files for metadata: .zarray for array structure, .zgroup for group hierarchy, .zattrs for attributes</li>
+                <li>Uses shape instead of dimensions, chunks instead of blockSize</li>
+                <li>The NumPy integration is why Zarr2 became so popular in Python data science <span style="font-size: 0.8em; color: #888;">(dtype notation like less-than-u2 for little-endian unsigned 16-bit)</span></li>
+                <li>Each chunk is a separate file in Zarr2</li>
             </ul>
 
-            <p><strong>Zarr3 metadata structure:</strong></p>
+            <p><strong>Zarr3:</strong></p>
             <ul>
-                <li>Modernized everything with zarr.json</li>
-                <li>Has chunk_grid structure and codecs array</li>
-                <li>Sharding codec is the key innovation - such as group 8×8×8 chunks into one shard file</li>
-                <li>Reduces millions of files to thousands - huge for cloud storage and filesystem performance</li>
+                <li>Unified everything into a single zarr.json file</li>
+                <li>Has sharding codec - which groups chunks together into one shard file</li>
+                <li>Reduces millions of files to thousands -> good for large datasets</li>
             </ul>
 
-            <p><strong>ND2 metadata structure:</strong></p>
+            <p><strong>ND2:</strong></p>
             <ul>
-                <li>Embeds OME-XML metadata inside binary file</li>
-                <li>Includes channel information, Z-stack details, time series, pixel calibration</li>
-                <li>All rich acquisition data from microscope in Nikon's proprietary format</li>
-                <li>TensorSwitch will extract and translate this to OME-Zarr structure, which we will discuss later</li>
+                <li>Has Python library extracts OME-XML from Nikon's proprietary format</li>
+                <li>Includes channel information, Z-stack details, etc</li>
             </ul>
 
-            <p><strong>IMS metadata structure:</strong></p>
+            <p><strong>IMS:</strong></p>
             <ul>
-                <li>Uses HDF5 internally with specific hierarchy: DataSet, ResolutionLevel, TimePoint, Channel, Data</li>
-                <li>Already has pyramids built in</li>
-                <li>Need Imaris or compatible tools to read</li>
+                <li>has HDF5 hierarchy: DataSet, ResolutionLevel, TimePoint, Channel</li>
+                <li>with built-in resolution levels</li>
             </ul>
 
-            <p><strong>TIFF metadata structure:</strong></p>
+            <p><strong>TIFF:</strong></p>
             <ul>
-                <li>Just has IFD tags in header: Width, Height, BitsPerSample, Compression</li>
-                <li>Very limited compared to modern formats</li>
-                <li>No native support for chunking or multi-resolution pyramids</li>
+                <li>has IFD tags (Image File Directory) in header: Width, Height, Compression, TileWidth, TileHeight, ImageDescription</li>
+                <li>Very simple compared to modern formats, but universally supported</li>
             </ul>
 
-            <p><strong>Chunking is:</strong></p>
+        </div>
+    </div>
+
+    <!-- Deep Dive: OME Formats -->
+    <div id="phase2-deep3" class="step deep-dive" data-x="-2000" data-y="5600" data-z="-1500" data-scale="1.2">
+        <h3>Understanding OME Standards</h3>
+        <p style="font-size: 1em; margin: 10px 0 20px 0; color: #2c3e50;"><strong>OME = Open Microscopy Environment</strong> - A set of standards for microscopy data</p>
+
+        <div style="display: grid; grid-template-columns: 1fr; gap: 20px; margin: 20px 0;">
+            <!-- OME-XML -->
+            <div style="background: #e3f2fd; padding: 20px; border-radius: 8px; border-left: 4px solid #2196f3;">
+                <h4 style="margin-top: 0; color: #1976d2;">1. OME-XML</h4>
+                <p style="margin: 10px 0; font-size: 0.95em;"><strong>What it is:</strong> XML-based metadata standard for microscopy</p>
+                <p style="margin: 10px 0; font-size: 0.95em;"><strong>Purpose:</strong> Describes image dimensions, channels, pixel sizes, time points, acquisition parameters</p>
+                <p style="margin: 10px 0; font-size: 0.95em;"><strong>Stored in:</strong> ImageDescription tag → points to subresolutions</p>
+            </div>
+
+            <!-- OME-TIFF -->
+            <div style="background: #f3e5f5; padding: 20px; border-radius: 8px; border-left: 4px solid #9c27b0;">
+                <h4 style="margin-top: 0; color: #7b1fa2;">2. OME-TIFF</h4>
+                <p style="margin: 10px 0; font-size: 0.95em;"><strong>What it is:</strong> TIFF files with embedded OME-XML metadata</p>
+                <p style="margin: 10px 0; font-size: 0.95em;"><strong>Purpose:</strong> Standard TIFF + rich microscopy metadata in ImageDescription tag</p>
+                <p style="margin: 10px 0; font-size: 0.95em;"><strong>Subresolutions:</strong> Stored as separate IFDs (Image File Directories) within the TIFF file</p>
+                <p style="margin: 10px 0; font-size: 0.95em;"><strong>Use case:</strong> Widely supported format for microscopy data exchange</p>
+            </div>
+
+            <!-- OME-ZARR (OME-NGFF) -->
+            <div style="background: #e8f5e9; padding: 20px; border-radius: 8px; border-left: 4px solid #4caf50;">
+                <h4 style="margin-top: 0; color: #388e3c;">3. OME-ZARR (aka OME-NGFF - Next Generation File Format)</h4>
+                <p style="margin: 10px 0; font-size: 0.95em;"><strong>What it is:</strong> Zarr-based format with OME metadata for cloud-native microscopy</p>
+                <p style="margin: 10px 0; font-size: 0.95em;"><strong>Version history:</strong></p>
+                <ul style="margin: 10px 0 10px 20px; font-size: 0.9em;">
+                    <li><strong>v0.4:</strong> Zarr2 format, multiscale metadata in .zattrs file</li>
+                    <li><strong>v0.5:</strong> Zarr3 format, multiscale metadata in zarr.json → attributes/ome <span style="color: #388e3c;">(current)</span></li>
+                    <li><strong>v0.6:</strong> Zarr3 with coordinate transformations (developed by John Bogovic) <span style="color: #666;">(future)</span></li>
+                </ul>
+                <p style="margin: 10px 0; font-size: 0.95em;"><strong>Why needed:</strong> Chunked access + multiscale levels + cloud storage optimization</p>
+            </div>
+        </div>
+
+        <div class="notes">
+            <h3>Understanding OME Standards</h3>
+            <p>OME (Open Microscopy Environment) standards define how we store and describe microscopy data.</p>
+            <p>There are three related standards for microscopy data.</p>
+            <p>OME-XML is the core metadata standard. OME-TIFF put that into TIFF files, and OME-ZARR is the modern evolution using Zarr instead of TIFF for cloud and chunking benefits</p>
+
+            <span style="font-size: 0.8em; color: #888;">
+                <p><strong>OME-XML:</strong></p>
+                <ul>
+                    <li>is the core metadata standard that describes everything about a microscopy image</li>
+                    <li>Stored in the ImageDescription tag</li>
+                    <li>Point to subresolutions for multiscale viewing</li>
+                </ul>
+
+                <p><strong>OME-TIFF:</strong></p>
+                <ul>
+                    <li>Takes standard TIFF format and embeds OME-XML in the ImageDescription tag</li>
+                    <li>Subresolutions are stored as separate IFDs (Image File Directories) within the same TIFF file</li>
+                    <li>This gives you the universal compatibility of TIFF plus rich microscopy metadata</li>
+                    <li>Widely used for data exchange between institutions</li>
+                </ul>
+
+                <p><strong>OME-ZARR (OME-NGFF):</strong></p>
+                <ul>
+                    <li>OME-NGFF stands for OME Next Generation File Format</li>
+                    <li>Built on Zarr for chunked access and cloud storage</li>
+                    <li>Version 0.4 used Zarr2 with multiscale metadata in .zattrs file</li>
+                    <li>Version 0.5 (current) uses Zarr3 with metadata in zarr.json under attributes/ome</li>
+                    <li>Version 0.6 (future) will add coordinate transformations, being developed by John Bogovic</li>
+                    <li>Combines OME metadata with Zarr chunking and cloud optimization</li>
+                </ul>
+            </span>
+        </div>
+    </div>
+
+    <!-- Deep Dive: Why Chunks and Shards Matter -->
+    <div id="phase2-deep4" class="step deep-dive" data-x="-2000" data-y="7000" data-z="-1500" data-scale="1.2">
+        <h3>Why Chunks and Shards Matter</h3>
+
+        <div style="display: grid; grid-template-columns: 1.5fr 1fr; gap: 20px; margin: 30px 0;">
+            <!-- Left: Text Explanation -->
+            <div style="padding: 20px; background: white; border-radius: 8px; border-left: 4px solid #3498db;">
+                <h4 style="margin-top: 0; color: #2c3e50;">Chunking Concept (All Formats)</h4>
+                <p style="margin: 10px 0; font-size: 0.9em;"><strong>Problem:</strong> Can't load 100GB dataset into memory</p>
+                <p style="margin: 10px 0; font-size: 0.9em;"><strong>Solution:</strong> Break into small pieces (chunks)</p>
+                <p style="margin: 10px 0; font-size: 0.9em;"><strong>Example:</strong> 128×128×64 voxels = 2 MiB for uint16</p>
+                <p style="margin: 10px 0; font-size: 0.9em;"><strong>Benefits:</strong></p>
+                <ul style="margin: 5px 0 5px 20px; font-size: 0.85em; line-height: 1.6;">
+                    <li>Process one chunk at a time</li>
+                    <li>Parallel processing on clusters</li>
+                    <li>Only load needed regions</li>
+                </ul>
+
+                <h4 style="margin-top: 20px; color: #2c3e50;">Sharding (Zarr v3 Only)</h4>
+                <p style="margin: 10px 0; font-size: 0.9em;"><strong>Problem:</strong> Millions of chunk files (Zarr2, N5)</p>
+                <p style="margin: 10px 0; font-size: 0.9em;"><strong>Example:</strong> 1TiB dataset with 1MiB chunks = 1,048,576 files</p>
+                <p style="margin: 10px 0; font-size: 0.9em;"><strong>Zarr v3 Solution:</strong> Group chunks into shard files (e.g., 512 chunks per shard)</p>
+                <p style="margin: 10px 0; font-size: 0.9em;"><strong>Result:</strong> 2,048 files instead of 1,048,576 ✓</p>
+
+                <div style="background: #f5f5f5; padding: 12px; border-radius: 6px; margin-top: 15px; font-family: monospace; font-size: 0.75em; line-height: 1.4;">
+                    <strong style="color: #d32f2f;">Zarr2 (no sharding):</strong><br>
+                    compressor: {id: 'zstd', level: 5}<br><br>
+
+                    <strong style="color: #2196f3;">Zarr3 without sharding:</strong><br>
+                    codecs: [{name: 'bytes'}, {name: 'zstd', level: 1}]<br><br>
+
+                    <strong style="color: #4caf50;">Zarr3 WITH sharding:</strong><br>
+                    codecs: [<br>
+                    &nbsp;&nbsp;{name: 'sharding_indexed',<br>
+                    &nbsp;&nbsp;&nbsp;&nbsp;chunk_shape: [128,128,64],<br>
+                    &nbsp;&nbsp;&nbsp;&nbsp;codecs: [&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span style="color: #666;">← Inner: compress chunks</span><br>
+                    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{bytes},<br>
+                    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{zstd, level:5}<br>
+                    &nbsp;&nbsp;&nbsp;&nbsp;],<br>
+                    &nbsp;&nbsp;&nbsp;&nbsp;index_codecs: [&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span style="color: #666;">← Outer: shard index</span><br>
+                    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{bytes},<br>
+                    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{crc32c}<br>
+                    &nbsp;&nbsp;&nbsp;&nbsp;]<br>
+                    &nbsp;&nbsp;}<br>
+                    ]
+                </div>
+
+                <h4 style="margin-top: 20px; color: #2c3e50;">Multiscale Resolution Levels</h4>
+                <p style="margin: 10px 0; font-size: 0.9em;"><strong>Concept:</strong> Store same data at multiple resolutions</p>
+                <p style="margin: 10px 0; font-size: 0.9em;"><strong>Levels:</strong> s0 (full), s1 (half), s2 (quarter), etc.</p>
+                <p style="margin: 10px 0; font-size: 0.9em;"><strong>Benefit:</strong> Fast visualization at any zoom level</p>
+            </div>
+
+            <!-- Right: Sharding Diagrams Stacked Vertically -->
+            <div style="display: flex; flex-direction: column; gap: 20px;">
+                <!-- Top: Sharding Diagram -->
+                <div style="padding: 15px; background: white; border-radius: 8px; text-align: center;">
+                    <h4 style="font-size: 1em; margin-bottom: 15px;">Sharding Concept</h4>
+                    <img src="images_videos/sharding.png" alt="Sharding Concept" class="diagram" style="max-width: 100%; height: auto;">
+                    <p style="margin-top: 10px; font-size: 0.85em; color: #666;">Multiple chunks grouped into one shard file</p>
+                </div>
+
+                <!-- Bottom: Sharding Example -->
+                <div style="padding: 15px; background: white; border-radius: 8px; text-align: center;">
+                    <h4 style="font-size: 1em; margin-bottom: 15px;">Sharding Example</h4>
+                    <img src="images_videos/ShardingExample.png" alt="Sharding Example" class="diagram" style="max-width: 100%; height: auto;">
+                    <p style="margin-top: 10px; font-size: 0.85em; color: #666;">Real-world sharding structure</p>
+                </div>
+            </div>
+        </div>
+
+        <div class="notes">
+            <h3>Why Chunks and Shards Matter</h3>
+            <p>Let's briefly explain three fundamental concepts for large-scale data.</p>
+
+            <p><strong>Chunking - Breaking data into manageable pieces:</strong></p>
             <ul>
-                <li>The fundamental concept across all formats</li>
+                <li>All modern formats use it - N5, Zarr2, Zarr3</li>
                 <li>Such as instead of loading 100GB dataset into memory, break into small pieces like 128×128×64 voxels</li>
-                <li>Each chunk might be 10MB(megabytes) - load one, process it, write it out, move to next</li>
-                <li>Makes huge datasets processable on normal computers</li>
-                <li>Enables parallel processing on clusters</li>
+                <li>Each chunk might be 2MiB (mebibyte) for uint16 data</li>
+                <li>Process one chunk at a time, enables parallel processing</li>
+            </ul>
+            <span style="font-size: 0.8em; color: #888;">
+                <p>Calculation: 128×128×64 voxels = 1,048,576 voxels × 2 bytes (because uint16 = 2 bytes, since 1 byte = 8 bits) = 2,097,152 bytes ÷ 1024 (1024 bytes = 1 kibibyte KiB) = 2,048 KiB ÷ 1024 (1024 kibibytes = 1 mebibyte MiB) = 2 MiB</p>
+                <p>Note: uint16 = a 16-bit unsigned integer = 2 bytes; &lt;u2 in NumPy notation = 2 bytes = unsigned 16-bit little-endian integer</p>
+            </span>
+
+            <p><strong>Sharding - (Zarr3 only)</strong></p>
+            <ul>
+                <li>Groups chunks together into shard files such as 512 chunks per shard file</li>
+                <li>then 1TiB (tebibyte) dataset will create 2,048 files instead of 1 million with sharding</li>
+                <li>which is why we recommend Zarr v3 for large datasets</li>
+            </ul>
+            <span style="font-size: 0.8em; color: #888;">
+                <p>Example calculation: 1TiB (tebibyte) dataset with 1MiB (mebibyte) chunks</p>
+                <p>Calculation process: 1 TiB = 1024 GiB = 1024 × 1024 MiB = 1,048,576 MiB</p>
+                <p>Number of chunks: 1,048,576 MiB ÷ 1 MiB per chunk = 1,048,576 chunks (meaning 1,048,576 separate files without sharding)</p>
+                <p>Cloud storage charges per request - 1,048,576 files is very expensive</p>
+                <p>Zarr v3 introduces sharding codec - groups chunks, such as: 512 chunks per shard file</p>
+                <p>Sharding result: 1,048,576 chunks ÷ 512 chunks per shard = 2,048 shard files</p>
+                <p>So 2,048 files instead of 1,048,576 - but can still access individual chunks efficiently via internal index</p>
+            </span>
+
+            <p><strong>Codec comparison:</strong></p>
+            <ul>
+                <li><strong>Zarr2:</strong> Simple compression - just "zstd level 5"</li>
+                <li><strong>Zarr3 no sharding:</strong> Same compression, different syntax - bytes → zstd</li>
+                <li><strong>Zarr3 WITH sharding:</strong> Two-layer compression:
+                    <ul>
+                        <li>Inner layer: compress chunks (bytes → zstd)</li>
+                        <li>Outer layer: sharding_indexed groups compressed chunks + adds index (bytes → crc32c for integrity)</li>
+                    </ul>
+                </li>
+                <li>Sharding adds minimal overhead but saves millions of files</li>
             </ul>
 
-            <p><strong>Sharding on the other hand:</strong></p>
+            <p><strong>Multiscale resolution levels:</strong></p>
             <ul>
-                <li>Solves the too-many-files problem</li>
-                <li>1TB(terabyte) dataset with 1MB(megabytes) chunks = million files - and filesystems hate this</li>
-                <li>Cloud storage charges per request - which is expensive</li>
-                <li>Zarr3 sharding groups chunks such as: 512 chunks per shard file</li>
-                <li>2000 files instead of million, but can still access individual chunks efficiently via internal index</li>
-            </ul>
-
-            <p><strong>Multiscale pyramids is:</strong></p>
-            <ul>
-                <li>For visualization efficiency</li>
                 <li>Store same data at multiple resolutions: s0 full, s1 half, s2 quarter, etc</li>
-                <li>When zooming out in Neuroglancer, loads s2 instead of downsampling s0 on the fly</li>
-                <li>Much faster viewing experience</li>
-                <li>TensorSwitch creates these pyramids automatically</li>
+                <li>Good for fast visualization at any zoom level</li>
             </ul>
-
         </div>
     </div>
 
@@ -535,20 +684,12 @@
         <p class="dive-hint">↓ See how organization improved workflow</p>
 
         <div class="notes">
-            <h3>Phase 3 Timeline Card (30 seconds)</h3>
-            <p>At this stage, TensorSwitch became my primary tool for handling conversion requests.</p>
-            <ul>
-                <li>Instead of writing new scripts for each lab request, I had one unified command-line interface</li>
-                <li>This replaced the scattered ad-hoc scripts I'd been maintaining</li>
-            </ul>
+            <h3>Phase 3 Timeline Card</h3>
+            <p>At this stage, TensorSwitch became my primary tool for conversion requests.</p>
 
-            <p>The organizational benefits were significant.</p>
-            <ul>
-                <li>Consistent interface across all conversion tasks</li>
-                <li>Could handle multiple requests per day instead of one</li>
-            </ul>
+            <p>Instead of writing new scripts for each lab request, I had one unified command-line interface</p>
 
-            <p>Let me show you what the command-line interface offered.</p>
+            <p>Let me show you what it offered.</p>
         </div>
     </div>
 
@@ -567,71 +708,148 @@
                 </div>
                 <div style="background: rgba(255,255,255,0.15); padding: 10px; border-radius: 4px;">
                     <strong>Downsampling (2 tasks)</strong><br>
-                    Zarr2 → multi-resolution pyramid<br>
-                    Zarr3 → sharded pyramid levels
+                    Zarr2 → multi-resolution levels<br>
+                    Zarr3 → sharded resolution levels
                 </div>
             </div>
         </div>
 
-        <!-- Benefits Grid -->
-        <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 15px;">
-            <div style="background: #e8f5e9; padding: 15px; border-radius: 8px; border-left: 4px solid #4caf50;">
-                <h4 style="margin-top: 0; color: #2e7d32;">✓ Unified Interface</h4>
-                <ul style="margin: 5px 0; padding-left: 20px; line-height: 1.8;">
-                    <li>Same flags across all 10 tasks</li>
-                    <li>Clear, consistent parameter names</li>
-                    <li>No remembering different scripts</li>
-                </ul>
+        <!-- Technical Foundation Section -->
+        <div style="margin-top: 20px; border-top: 2px solid #ddd; padding-top: 20px;">
+            <h4 style="color: #2c3e50; margin-bottom: 15px;">Why TensorStore + Dask?</h4>
+
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 20px;">
+                <!-- Left: Why TensorStore + Dask -->
+                <div style="background: white; padding: 15px; border-radius: 8px; border-left: 4px solid #3498db;">
+                    <h5 style="margin-top: 0; color: #2c3e50;">TensorStore (Speed)</h5>
+                    <ul style="font-size: 0.8em; line-height: 1.5; margin: 5px 0;">
+                        <li>C++ backend → fast I/O</li>
+                        <li>Multi-threaded parallel chunk access</li>
+                        <li>Supports N5, Zarr2, Zarr3, Precomputed</li>
+                    </ul>
+
+                    <h5 style="margin-top: 12px; color: #2c3e50;">Dask (Scale)</h5>
+                    <ul style="font-size: 0.8em; line-height: 1.5; margin: 5px 0;">
+                        <li>Distributes across cluster nodes</li>
+                        <li>Memory-efficient chunk processing</li>
+                        <li>LSF JobQueue integration</li>
+                    </ul>
+
+                    <div style="background: #e8f5e9; padding: 10px; border-radius: 6px; margin-top: 10px; font-size: 0.8em;">
+                        <strong style="color: #2e7d32;">Together:</strong> TensorStore = speed, Dask = scale
+                    </div>
+                </div>
+
+                <!-- Right: Why TensorSwitch Wrapper -->
+                <div style="background: white; padding: 15px; border-radius: 8px; border-left: 4px solid #e74c3c;">
+                    <h5 style="margin-top: 0; color: #2c3e50;">Why TensorSwitch Wrapper?</h5>
+                    <p style="font-size: 0.8em; margin: 5px 0;"><strong>TensorStore Problems:</strong></p>
+                    <ul style="font-size: 0.75em; line-height: 1.5; margin: 5px 0;">
+                        <li>❌ Complex API (specs, kvstores, codecs)</li>
+                        <li>❌ Easy to misconfigure → OOM crashes</li>
+                        <li>❌ Can spawn too many cluster jobs</li>
+                        <li>❌ No format auto-detection</li>
+                    </ul>
+
+                    <p style="font-size: 0.8em; margin: 10px 0 5px 0;"><strong>TensorSwitch Solutions:</strong></p>
+                    <ul style="font-size: 0.75em; line-height: 1.5; margin: 5px 0;">
+                        <li>✓ Simple one-command API</li>
+                        <li>✓ Safe memory/chunk defaults</li>
+                        <li>✓ Job limits prevent cluster overload</li>
+                        <li>✓ Auto-detects formats & metadata</li>
+                    </ul>
+                </div>
             </div>
-            <div style="background: #e3f2fd; padding: 15px; border-radius: 8px; border-left: 4px solid #2196f3;">
-                <h4 style="margin-top: 0; color: #1565c0;">✓ Flexible Execution</h4>
-                <ul style="margin: 5px 0; padding-left: 20px; line-height: 1.8;">
-                    <li>Run locally for quick tests</li>
-                    <li>Submit to cluster for production</li>
-                    <li>Similar command, just add --submit</li>
-                </ul>
-            </div>
-            <div style="background: #fff3e0; padding: 15px; border-radius: 8px; border-left: 4px solid #ff9800;">
-                <h4 style="margin-top: 0; color: #e65100;">✓ Automatic Features</h4>
-                <ul style="margin: 5px 0; padding-left: 20px; line-height: 1.8;">
-                    <li>OME-Zarr metadata generation</li>
-                    <li>Chunk calculation and splitting</li>
-                    <li>LSF job submission handling</li>
-                </ul>
+
+            <!-- Tool Comparison Table -->
+            <div>
+                <h5 style="color: #2c3e50; margin-bottom: 10px;">Comparison vs Other Tools</h5>
+                <table style="width: 100%; font-size: 0.7em; border-collapse: collapse;">
+                    <thead>
+                        <tr style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white;">
+                            <th style="padding: 6px; text-align: left;">Tool</th>
+                            <th style="padding: 6px; text-align: left;">Backend</th>
+                            <th style="padding: 6px;">Cluster</th>
+                            <th style="padding: 6px;">N5</th>
+                            <th style="padding: 6px;">Easy API</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr style="background: #f5f5f5;">
+                            <td style="padding: 6px;">bioformats2raw</td>
+                            <td style="padding: 6px;">zarr-python</td>
+                            <td style="padding: 6px; text-align: center;">✓</td>
+                            <td style="padding: 6px; text-align: center;">✓</td>
+                            <td style="padding: 6px; text-align: center;">⚠️ Slow</td>
+                        </tr>
+                        <tr style="background: white;">
+                            <td style="padding: 6px;">ngff-zarr</td>
+                            <td style="padding: 6px;">zarr-python</td>
+                            <td style="padding: 6px; text-align: center;">❌</td>
+                            <td style="padding: 6px; text-align: center;">✓</td>
+                            <td style="padding: 6px; text-align: center;">✓</td>
+                        </tr>
+                        <tr style="background: #f5f5f5;">
+                            <td style="padding: 6px;">zarr-python v3</td>
+                            <td style="padding: 6px;">Pure Python</td>
+                            <td style="padding: 6px; text-align: center;">✓</td>
+                            <td style="padding: 6px; text-align: center;">❌</td>
+                            <td style="padding: 6px; text-align: center;">✓</td>
+                        </tr>
+                        <tr style="background: white;">
+                            <td style="padding: 6px;">TensorStore</td>
+                            <td style="padding: 6px;">C++ (fast)</td>
+                            <td style="padding: 6px; text-align: center;">✓</td>
+                            <td style="padding: 6px; text-align: center;">✓ All</td>
+                            <td style="padding: 6px; text-align: center;">❌</td>
+                        </tr>
+                        <tr style="background: #e8f5e9; border: 2px solid #4caf50;">
+                            <td style="padding: 6px;"><strong>TensorSwitch</strong></td>
+                            <td style="padding: 6px;"><strong>TensorStore</strong></td>
+                            <td style="padding: 6px; text-align: center;"><strong>✓</strong></td>
+                            <td style="padding: 6px; text-align: center;"><strong>✓ All</strong></td>
+                            <td style="padding: 6px; text-align: center;"><strong>✓</strong></td>
+                        </tr>
+                    </tbody>
+                </table>
             </div>
         </div>
 
-        <!-- Placeholder for CLI demo screenshot or video -->
-        <!-- <video controls src="images_videos/cli_demo.mp4" class="demo-video"></video> -->
-
         <div class="notes">
-            <h3>Personal Tool Deep Dive: CLI Power (2-3 minutes)</h3>
-            <p>TensorSwitch covered 10 different conversion tasks at this point.</p>
+            <h3>Personal Tool Deep Dive: CLI Power</h3>
+            <p>TensorSwitch covers 10 different conversion tasks at this point - all through one unified interface.</p>
+
+            <p><strong>Why TensorStore + Dask combination:</strong></p>
             <ul>
-                <li>8 base conversion tasks - ND2, IMS, TIFF to Zarr2 or Zarr3, plus N5 to Zarr2 and N5 to N5</li>
-                <li>2 downsampling tasks - one for Zarr2, one for Zarr3 with sharding</li>
-                <li>All through one unified command-line interface</li>
+                <li>TensorStore provides speed - with C++ backend for fast I/O, multi-threaded parallel chunk access</li>
+                <li>Supports all formats</li>
+                <li>Dask provides scale - distributes work across cluster nodes, memory-efficient chunk processing, LSF JobQueue integration</li>
+                <li>Together: TensorStore = speed, Dask = scale - will gives me fast parallel processing on large datasets</li>
             </ul>
 
-            <p>The unified interface brought consistency.</p>
+            <p><strong>Why TensorSwitch wrapper needed on top of TensorStore:</strong></p>
             <ul>
-                <li>Similar command structure for all 10 tasks</li>
-                <li>Same flags and parameter names</li>
-                <li>No need to remember different script names</li>
+                <li>TensorStore is powerful but difficult to use by itself</li>
+                <li>with Complex API - requires understanding specs, kvstores, codec configurations</li>
+                <li>Easy to misconfigure - wrong chunk size or memory settings cause out-of-memory crashes</li>
+            </ul>
+            <span style="font-size: 0.8em; color: #888;">
+                <ul>
+                    <li>Can spawn too many cluster jobs and overwhelm the LSF scheduler</li>
+                    <li>No automatic format detection - must manually specify everything</li>
+                </ul>
+            </span>
+            <ul>
+                <li>TensorSwitch simplifies the API, provides safe defaults, auto-detects formats</li>
             </ul>
 
-            <p>You could run locally or on the cluster.</p>
+            <p><strong>For other tools:</strong></p>
             <ul>
-                <li>For quick tests, run locally for instant feedback</li>
-                <li>For large files, submit to cluster with appropriate resources</li>
-                <li>Similar command, just add --submit flag and cluster parameters</li>
-            </ul>
-
-            <p>Several features automated manual work.</p>
-            <ul>
-                <li>OME-Zarr metadata generation - no manual XML writing needed</li>
-                <li>Automatic chunk calculation from input file</li>
-                <li>Job splitting and LSF submission handled automatically</li>
+                <li>bioformats2raw - uses zarr-python backend which is slower than TensorStore</li>
+                <li>ngff-zarr - not scalable on cluster</li>
+                <li>zarr-python version 3 - does not support N5 format anymore</li>
+                <li>TensorStore - difficult to use by itself</li>
+                <li>TensorSwitch - combines TensorStore's speed and format support with simplified API and cluster safety</li>
             </ul>
 
             <p>Let me show you how I used this in a real case.</p>
@@ -735,56 +953,34 @@
             &nbsp;&nbsp;--output_path /groups/liconn/liconn/data_internal/FlyLICONN_zarr_converted/file.zarr \<br>
             &nbsp;&nbsp;--cores 2 --num_volumes 8 --project liconn --submit<br>
             <br>
-            <div style="color: #888;"># Step 2: Downsample to s1, s2, s3 (pyramid levels)</div>
+            <div style="color: #888;"># Step 2: Downsample to s1, s2, s3 (resolution levels)</div>
             python -m tensorswitch --task downsample_shard_zarr3 \<br>
             &nbsp;&nbsp;--base_path /groups/liconn/liconn/data_internal/FlyLICONN_zarr_converted/file.zarr/s0 \<br>
             &nbsp;&nbsp;--cores 2 --num_volumes 8 --project liconn --submit
         </div>
 
         <div class="notes">
-            <h3>Code Organization & Workflow (3-4 minutes)</h3>
-            <p>This structure shows how things organized.</p>
+            <h3>Code Organization & Workflow</h3>
+            <p>The code is organized by task - each task is its own module.</p>
+
+            <p>Here's a real example from LICONN lab - prepare data for WebKnossos.</p>
+
+            <p>The decision steps:</p>
             <ul>
-                <li>Each task is its own module - easier to maintain and fix bugs</li>
-                <li>Common functions like metadata generation in utils.py</li>
-                <li>Cluster integration isolated in dask_utils.py</li>
+                <li>Step 1: Check what formats - mix of ND2 and IMS files</li>
+                <li>Step 2: Choose Zarr3 with sharding for WebKnossos to save storage</li>
+                <li>Step 3: Pick tasks - two steps: First convert to Zarr3 s0, then downsample s0 data to create multi-resolution levels.</li>
+                <li>Step 4: Configure cluster - 2 cores, 8 parallel volumes, liconn billing</li>
             </ul>
 
-            <p>Here's a real example from the LICONN lab.</p>
-            <ul>
-                <li>The request was - need microscopy data prepared for WebKnossos visualization</li>
-            </ul>
+            <p>8 parallel volumes means the chunks get split across 8 cluster jobs running at the same time</p>
 
-            <p>The decision steps I worked through:</p>
+            <p>All this decision-making was manual, which needs expertise in:</p>
             <ul>
-                <li>Step 1: Find the files and check what formats we have</li>
-                <li>Step 2: In this case confirmed was mix of ND2 and IMS files from different microscopes</li>
-                <li>Step 3: Choose Zarr3 for WebKnossos, enable sharding to save storage</li>
-                <li>Step 4: Pick the right tasks - nd2_to_zarr3_s0, ims_to_zarr3_s0, then downsample_shard_zarr3</li>
-                <li>Step 5: Configure cluster - 2 cores per job, 8 parallel volumes to split the work, liconn project billing</li>
-            </ul>
-
-            <p>Why two steps - conversion then downsampling.</p>
-            <ul>
-                <li>First convert to Zarr3 s0 - the full resolution layer</li>
-                <li>Then create s1, s2, s3, s4 pyramid levels for multi-resolution viewing</li>
-                <li>This keeps downsampling reusable for any Zarr3 file</li>
-            </ul>
-
-            <p>The commands shown are what I actually ran.</p>
-            <ul>
-                <li>Notice the --submit flag for cluster submission</li>
-                <li>8 parallel volumes means the chunks get split across 8 cluster jobs running at the same time</li>
-                <li>All this decision-making was manual</li>
-            </ul>
-
-            <p>Thus, it might need some expertise such as:</p>
-            <ul>
-                <li>Format knowledge - knowing to use Zarr3 with sharding for storage efficiency</li>
-                <li>Path knowledge - where to store data for server access</li>
-                <li>Resource knowledge - how many cores and parallel jobs to use</li>
-                <li>Task knowledge - which scripts to run in what order</li>
-                <li>Cluster knowledge - job submission and billing</li>
+                <li>Format knowledge <span style="font-size: 0.8em; color: #888;">(Zarr3 with sharding)</span></li>
+                <li>Resource knowledge <span style="font-size: 0.8em; color: #888;">(cores and parallel jobs)</span></li>
+                <li>Task knowledge <span style="font-size: 0.8em; color: #888;">(which scripts, what order)</span></li>
+                <li>Cluster knowledge <span style="font-size: 0.8em; color: #888;">(submission and billing)</span></li>
             </ul>
         </div>
     </div>
@@ -795,7 +991,7 @@
         <h2>Phase 4: GUI</h2>
         <p class="phase-subtitle">Empowering Scientists</p>
         <ul class="key-points">
-            <li>Web-based interface for everyone</li>
+            <li>Built with Panel (Python web framework)</li>
             <li>Smart Mode: auto-detection</li>
             <li>Manual Mode: full control</li>
             <li>Lab paths integration</li>
@@ -807,7 +1003,7 @@
         </p>
 
         <div class="notes">
-            <h3>Phase 4 Timeline Card (1 minute)</h3>
+            <h3>Phase 4 Timeline Card</h3>
             <p>After the command line interface was working, I realized we could make it more convenient.</p>
             <ul>
                 <li>Scientists might know less about data formats</li>
@@ -815,14 +1011,11 @@
                 <li>A web-based GUI would make TensorSwitch accessible to everyone</li>
             </ul>
 
-            <p>The GUI has some key features.</p>
-            <ul>
-                <li>Smart Mode automatically detects the format</li>
-                <li>Manual Mode gives full control</li>
-                <li>Lab paths integration makes navigation easy</li>
-            </ul>
+            <p>So I used Panel to built the GUI.</p>
 
-            <p>Let me walk through how it works.</p>
+            <p>Panel a Python library lets me build web interfaces directly in Python without JavaScript</p>
+
+            <p>Let me walk through how the GUI works.</p>
         </div>
     </div>
 
@@ -841,11 +1034,8 @@
         <div class="notes">
             <h3>Welcome & Overview</h3>
             <p>The GUI starts with a simple welcome page with brief introduction of what is TensorSwitch and what it does.</p>
-            <ul>
-                <li>Move on to the conversion page, which shows only 3-step workflow</li>
-                <li>Users see what to expect before they start</li>
-                <li>Keeps things simple and straightforward</li>
-            </ul>
+
+            <p>Move on to the conversion page, which shows only 3-step workflow.</p>
         </div>
     </div>
 
@@ -911,10 +1101,8 @@
             <p>Smart Mode has two parts.</p>
             <ul>
                 <li>Step 2A detects the input format automatically</li>
-                <li>Reads file metadata and structure to identify the format</li>
                 <li>Shows detected format, file size, and dimensions</li>
-                <li>Step 2B lets user configure output format</li>
-                <li>Choose output format and downsampling levels</li>
+                <li>Step 2B lets user configure output format and downsampling levels</li>
                 <li>Shows conversion plan preview so user know what will happen</li>
             </ul>
         </div>
@@ -934,10 +1122,8 @@
         <div class="notes">
             <h3>Manual Mode Task Selection</h3>
             <p>Manual Mode is for users who know exactly what task they need.</p>
-            <ul>
-                <li>Choose the specific conversion task from the dropdown</li>
-                <li>That's it - no auto-detection, just direct task selection</li>
-            </ul>
+
+            <p>Choose the specific conversion task from the dropdown.</p>
         </div>
     </div>
 
@@ -959,9 +1145,9 @@
             <ul>
                 <li>User could Run locally on the machine</li>
                 <li>Or uncheck the box to Run on cluster with LSF or Dask</li>
-                <li>Both options let user set shard (for Zarr3), OME-Zarr structure, and memory limits - memory limits control how much RAM the process can use, preventing out-of-memory crashes</li>
-                <li>Cluster adds settings like: which lab to charge, cores, wall time, num_volume</li>
-                <li>Advanced option includes: Dask JobQueue for distributed processing - Dask JobQueue spreads chunks across multiple cluster jobs dynamically, while LSF submits fixed number of jobs upfront</li>
+                <li>Both options let user set shard (for Zarr3), OME-Zarr structure, and memory limits <span style="font-size: 0.8em; color: #888;">(memory limits control how much RAM the process can use, preventing out-of-memory crashes)</span></li>
+                <li>Cluster adds: lab billing, cores, wall time, num_volumes</li>
+                <li>Advanced option includes: Dask JobQueue for distributed processing <span style="font-size: 0.8em; color: #888;">(Dask spreads chunks across multiple cluster jobs dynamically, while LSF submits fixed jobs upfront)</span></li>
             </ul>
         </div>
     </div>
@@ -981,12 +1167,10 @@
         <div class="notes">
             <h3>Job Preview and Submission</h3>
             <p>Before user submit, the GUI shows a preview of everything.</p>
-            <ul>
-                <li>Job preview with cost estimates and processing time, here the estimated cost is the max cost of setted wall time plus number of cores and num_volumes, but I need to investigate a bit more on this</li>
-                <li>Review all the parameters one more time</li>
-                <li>Click submit when ready</li>
-                <li>Confirmation that jobs submitted successfully to the cluster</li>
-            </ul>
+
+            <p>Job preview with cost estimates and processing time <span style="font-size: 0.8em; color: #888;">(here the estimated cost is the max cost of set wall time plus number of cores plus num_volumes, but I need to investigate a bit more on this)</span>.</p>
+
+            <p>Then successful submission confirmation will show after submitted job.</p>
         </div>
     </div>
 
@@ -1008,23 +1192,15 @@
         </p>
 
         <div class="notes">
-            <h3>Phase 5 Timeline Card (30 seconds)</h3>
+            <h3>Phase 5 Timeline Card</h3>
             <p>Even with Smart Mode and the GUI, users might still have questions.</p>
             <ul>
                 <li>What does this parameter mean?</li>
                 <li>Why should I use Zarr3 vs Zarr2?</li>
                 <li>How many cores should I use?</li>
-                <li>Therefore, I added an AI assistant to answer these questions in real-time</li>
+                <li>So I added an AI assistant to answer these questions in real-time</li>
             </ul>
 
-            <p>The AI assistant is OpenAI-powered.</p>
-            <ul>
-                <li>Knows everything about TensorSwitch</li>
-                <li>Understands context of what the user is doing in the GUI</li>
-                <li>Provides recommendations specific to the data</li>
-            </ul>
-
-            <p>Let me show what the AI can do.</p>
         </div>
     </div>
 
@@ -1070,7 +1246,7 @@
                         <li>✓ Better resource utilization</li>
                         <li>✓ Immediate answers</li>
                         <li>✓ Reduced support burden</li>
-                        <li>✓ Cost & Privacy: ~$0.10/session</li>
+                        <li>✓ Cost & Privacy: ~$0.10 (ten cents)/session</li>
                         <li>✓ Optional feature</li>
                     </ul>
                 </div>
@@ -1082,35 +1258,14 @@
         </p>
 
         <div class="notes">
-            <h3>AI Assistant Interface (2 minutes)</h3>
-            <p>Why we added AI assistant.</p>
-            <ul>
-                <li>Even with Smart Mode and GUI, users might still have questions</li>
-                <li>Questions about parameters, format choices, resource settings</li>
-                <li>AI provides instant, context-aware answers without leaving the interface</li>
-            </ul>
+            <h3>AI Assistant Interface</h3>
+            <p>Left side shows the AI chat interface.</p>
 
-            <p>What AI can do are:</p>
-            <ul>
-                <li>Format detection guidance</li>
-                <li>Parameter optimization</li>
-                <li>Lab path assistance</li>
-                <li>Workflow recommendations</li>
-                <li>Conversion advice</li>
-                <li>Real-time support</li>
-                <li>Apply settings to GUI - this is Phase 2 automation</li>
-            </ul>
+            <p>Why we added AI - users still have questions even with Smart Mode.</p>
 
-            <p>User benefits.</p>
-            <ul>
-                <li>Faster learning curve</li>
-                <li>Fewer configuration mistakes</li>
-                <li>Better resource utilization</li>
-                <li>Immediate answers</li>
-                <li>Reduced support burden</li>
-                <li>Cost is about $0.10 per session conservatively, often $0.002-$0.005</li>
-                <li>It's an optional feature</li>
-            </ul>
+            <p>What AI can do such as - format guidance, parameter optimization, lab paths, workflow recommendations, and can apply settings to GUI.</p>
+
+            <p>It helps users with: faster learning, fewer mistakes, immediate answers. Cost is about $0.10 (ten cents) per session.</p>
         </div>
     </div>
 
@@ -1126,21 +1281,14 @@
         </p>
 
         <div class="notes">
-            <h3>AI Example: Setting Optimal Parameters (1 minute)</h3>
+            <h3>AI Example: Setting Optimal Parameters</h3>
             <p>Here is a real example of how AI helped with parameter optimization.</p>
-            <ul>
-                <li>User asks AI to set optimal parameters for the file</li>
-                <li>AI analyzes the file characteristics based on the smart format detection</li>
-                <li>Provides specific recommendations tailored to this file</li>
-            </ul>
 
-            <p>Why this matters.</p>
-            <ul>
-                <li>Removes guesswork from parameter selection</li>
-                <li>Based on actual file size and format</li>
-                <li>Prevents costly mistakes before they happen</li>
-                <li>No need to leave GUI to search documentation</li>
-            </ul>
+            <p>User asks AI to set optimal parameters for the file.</p>
+
+            <p>AI analyzes file characteristics from smart format detection.</p>
+
+            <p>Then, provides specific recommendations tailored to this file.</p>
         </div>
     </div>
 
@@ -1157,15 +1305,14 @@
         </p>
 
         <div class="notes">
-            <h3>AI Automation: Step 1 - Ask for Help (1 minute)</h3>
+            <h3>AI Automation: Step 1 - Ask for Help</h3>
             <p>This shows the first step of AI automation.</p>
-            <ul>
-                <li>Since the recommended core and default core is set to 2 cores</li>
-                <li>So I asked AI to optimize core count to 4 cores</li>
-                <li>AI analyzes the file size and the conversion task</li>
-                <li>AI determines that 4 cores would be better than the current setting</li>
-                <li>AI respects the user's decision, with 4 cores even though it was not recommended initially</li>
-            </ul>
+
+            <p>Although the default core is set to 2 cores.</p>
+
+            <p>I asked AI to optimize to 4 cores instead.</p>
+
+            <p>AI will respect user's decision, with 4 cores even though it was not recommended initially.</p>
         </div>
     </div>
 
@@ -1192,38 +1339,14 @@
         </p>
 
         <div class="notes">
-            <h3>AI Automation: Step 2 - Apply Changes (2 minutes)</h3>
+            <h3>AI Automation: Step 2 - Apply Changes</h3>
             <p>This slide shows the complete AI automation workflow.</p>
 
-            <p>After I tell AI that I want to use 4 cores, AI asks if I want it to apply the changes for me.</p>
-            <ul>
-                <li>AI doesn't just recommend - AI asks if I want the changes applied by AI</li>
-                <li>Two options to confirm</li>
-            </ul>
+            <p>After I tell AI I want 4 cores, AI asks if I want it applied to the GUI for me.</p>
 
-            <p>Two ways to confirm.</p>
-            <ul>
-                <li>Type "yes" in the chat - conversational approach</li>
-                <li>Click the button - one-click convenience</li>
-                <li>Both options work equally well</li>
-            </ul>
+            <p>Two ways to confirm - type "yes" in chat, or click the button.</p>
 
-            <p>The result.</p>
-            <ul>
-                <li>Users could click the button to apply</li>
-                <li>Form immediately updates to 4 cores</li>
-                <li>User can see the change happen in real time</li>
-                <li>User can still manually adjust if needed</li>
-                <li>This is Phase 2 AI automation in action</li>
-            </ul>
-
-            <p>Cost and privacy.</p>
-            <ul>
-                <li>Conservative estimate: $0.10 per session</li>
-                <li>Actual cost: often $0.002-$0.005 (gpt-4o-mini is efficient)</li>
-                <li>Only conversation and GUI state sent to OpenAI, no actual data</li>
-                <li>Optional feature - full functionality without AI</li>
-            </ul>
+            <p>Then, the GUI interface updates automatically to 4 cores.</p>
         </div>
     </div>
 
@@ -1324,24 +1447,26 @@
             <div>
                 <h4 style="color: #27ae60; margin-bottom: 15px;">How We Restrict AI's Answers</h4>
                 <div style="background: white; padding: 15px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); margin-bottom: 15px;">
-                    <h5 style="color: #2c3e50; margin: 0 0 10px 0;">System Prompt Example</h5>
-                    <div style="background: #2c3e50; color: #ecf0f1; padding: 12px; border-radius: 4px; font-family: monospace; font-size: 0.75em; line-height: 1.5;">
-                        system_prompt = """<br>
-                        You are TensorSwitch AI Assistant.<br>
+                    <h5 style="color: #2c3e50; margin: 0 0 10px 0;">System Prompt (from tensorswitch_assistant.py)</h5>
+                    <div style="background: #2c3e50; color: #ecf0f1; padding: 12px; border-radius: 4px; font-family: monospace; font-size: 0.7em; line-height: 1.4;">
+                        system_prompt = f"""You are a TensorSwitch<br>
+                        data conversion assistant...<br>
                         <br>
-                        <strong style="color: #e74c3c;">RESTRICTIONS:</strong><br>
-                        - Only answer about TensorSwitch<br>
-                        - Don't make up features<br>
-                        - Always check current GUI state<br>
-                        - Recommend optimal parameters<br>
-                        - Explain technical terms simply<br>
+                        <strong style="color: #e74c3c;">CORE GUIDANCE PRINCIPLES:</strong><br>
+                        1. ALWAYS guide users to Smart Mode first<br>
+                        2. Smart Mode auto-detects formats<br>
+                        3. Only suggest Manual Mode for advanced users<br>
                         <br>
-                        <strong style="color: #3498db;">KNOWLEDGE:</strong><br>
-                        - 10 conversion tasks<br>
-                        - Zarr2/Zarr3/N5 formats<br>
-                        - Cluster parameters (cores, memory)<br>
-                        - OME-Zarr metadata structure<br>
-                        """
+                        <strong style="color: #f39c12;">IMPORTANT:</strong> When user requests specific parameter values<br>
+                        (like "use 4 cores"), HONOR their request. Users know their needs.<br>
+                        <br>
+                        <strong style="color: #e74c3c;">IMPORTANT RULES:</strong><br>
+                        - ONLY help with TensorSwitch questions<br>
+                        - Always recommend Smart Mode first<br>
+                        - Give SPECIFIC parameter recommendations<br>
+                        <br>
+                        <strong style="color: #3498db;">TensorSwitch Knowledge:</strong><br>
+                        {json.dumps(knowledge, indent=2)}"""
                     </div>
                 </div>
 
@@ -1375,31 +1500,30 @@
         </p>
 
         <div class="notes">
-            <h3>AI Pipeline Structure & Logic (3 minutes)</h3>
-            <p>This slide shows the complete AI architecture with both conceptual flow and actual code implementation.</p>
-
-            <p>Left column shows the 4-stage AI pipeline flow.</p>
+            <h3>AI Pipeline Structure & Logic</h3>
+            <p><strong>Left side:</strong> 4-stage AI pipeline flow.</p>
             <ul>
-                <li>Stage 1: User query - when user asks a question like "How many cores should I use?", we capture it as a string variable</li>
-                <li>Stage 2: Context gathering - we collect current GUI state (file path, file size, current cores setting) into a context dictionary using the gui_state object</li>
-                <li>Stage 3: AI processing - we make the OpenAI API call using openai.chat.completions.create, passing both the system prompt and the user message with context injected via f-string formatting</li>
-                <li>Stage 4: Response and actions - we parse AI's response, extract recommendations, and use conditional logic to apply settings back to the GUI if requested</li>
+                <li><strong>Stage 1:</strong> User query - capture question as string</li>
+                <li><strong>Stage 2:</strong> Context gathering - collect current GUI state <span style="font-size: 0.8em; color: #888;">(using gui_state object)</span></li>
+                <li><strong>Stage 3:</strong> AI processing - OpenAI API call <span style="font-size: 0.8em; color: #888;">(openai.chat.completions.create with context via f-string)</span></li>
+                <li><strong>Stage 4:</strong> Response and actions - parse AI response and apply to GUI if requested</li>
             </ul>
 
-            <p>Right side shows how we control AI behavior.</p>
+            <p><strong>Right side:</strong> How we control AI behavior.</p>
             <ul>
-                <li>System prompt example shows actual prompt text we send to OpenAI</li>
-                <li>RESTRICTIONS section: only TensorSwitch topics, no hallucination, always check GUI state, recommend optimal parameters, explain simply</li>
-                <li>KNOWLEDGE section: 10 conversion tasks, format differences (Zarr2/Zarr3/N5), cluster parameters, OME-Zarr metadata</li>
-                <li>Context injection example shows how we format the context dictionary and combine it with user question</li>
+                <li>System prompt with restrictions <span style="font-size: 0.8em; color: #888;">(Only TensorSwitch topics, recommend Smart Mode, honor user requests like "use 4 cores")</span></li>
+                <li>TensorSwitch Knowledge injected as JSON - 10 tasks, formats, parameters, troubleshooting</li>
             </ul>
 
-            <p>Key design principle is that:</p>
+            <p><strong>Context injection:</strong></p>
             <ul>
-                <li>AI scoped strictly to TensorSwitch - can't help with unrelated topics</li>
-                <li>Always has current GUI state so recommendations are context-aware and accurate</li>
-                <li>This makes AI genuinely useful instead of generic chatbot</li>
+                <li>We create a context dictionary with current GUI values like: input_file, file_size</li>
+                <li>This context gets combined with user's question using f-string: "Given: {context}, {user_question}"</li>
+                <li>AI sees both the question AND the current GUI state, so recommendations are specific to the user's actual situation</li>
+                <li>For example, if user has a 5.7GB ND2 file loaded and asks about cores, AI knows the file size and can give accurate recommendations</li>
             </ul>
+
+            <p><strong>Key principle:</strong> AI scoped to TensorSwitch only, always has GUI state for context-aware recommendations.</p>
         </div>
     </div>
 
@@ -1417,21 +1541,8 @@
         <p class="dive-hint">↓ See current status and future plans</p>
 
         <div class="notes">
-            <h3>Phase 6 Timeline Card (30 seconds)</h3>
+            <h3>Phase 6 Timeline Card</h3>
             <p>Phase 6 is where we are now and where we're heading next.</p>
-
-            <p>Current status.</p>
-            <ul>
-                <li>Core features tested and working</li>
-                <li>Basic conversions are functional</li>
-                <li>Deployed at tensorswitch.int.janelia.org - open to try</li>
-            </ul>
-
-            <p>What's ahead.</p>
-            <ul>
-                <li>More comprehensive testing needed across all features</li>
-                <li>Future improvements: more formats, better AI, enhanced features</li>
-            </ul>
         </div>
     </div>
 
@@ -1482,36 +1593,20 @@
         </div>
 
         <div class="notes">
-            <h3>Current Status (2 minutes)</h3>
-            <p>Currently:</p>
+            <h3>Current Status</h3>
+            <p><strong>Currently:</strong></p>
             <ul>
                 <li>Some tests have passed - basic conversions are functional</li>
-                <li>Core tasks working with sample data: ND2, IMS, TIFF files</li>
                 <li>OME-Zarr metadata generation is functional</li>
-                <li>Deployed at tensorswitch.int.janelia.org - open to try</li>
+                <li>Website tensorswitch.int.janelia.org - is open to try</li>
             </ul>
 
-            <p>Real data we tested with.</p>
-            <ul>
-                <li>ND2: 5.7GB files</li>
-                <li>IMS: 3.8GB files</li>
-                <li>TIFF: 961MB stacks</li>
-                <li>Used middle chunks for realistic validation without processing entire huge files</li>
-            </ul>
-
-            <p>What needs to be done in the next stage is:</p>
+            <p><strong>What needs to be done in the next stage are:</strong></p>
             <ul>
                 <li>Cluster submission with LSF and Dask needs testing</li>
                 <li>Edge cases - very large files, unusual dimensions</li>
                 <li>Comprehensive testing of all feature combinations</li>
                 <li>AI button fixes - some don't apply correctly yet</li>
-            </ul>
-
-            <p>Bottom line.</p>
-            <ul>
-                <li>Core conversions work well</li>
-                <li>GUI features and edge cases need more testing</li>
-                <li>Getting there but not fully validated yet</li>
             </ul>
         </div>
     </div>
@@ -1564,30 +1659,16 @@
         </div>
 
         <div class="notes">
-            <h3>Future Plans (2 minutes)</h3>
-            <p>Four main areas of improvement.</p>
+            <h3>Future Plans</h3>
+            <p><strong>Four main areas of improvement:</strong></p>
             <ul>
-                <li>More formats and testing - HDF5, CZI, LIF support, edge cases, comprehensive validation</li>
-                <li>Enhanced AI - fix button application issues, learn from conversions, smarter recommendations</li>
-                <li>Better UX - FileSelector widget for visual browsing, batch operations, improved error messages</li>
+                <li>More formats and testing - HDF5, CZI, LIF support, edge cases</li>
+                <li>Enhanced AI - fix button issues, smarter recommendations</li>
+                <li>Better UX - FileSelector widget, batch operations, improved error messages</li>
                 <li>Analytics and security - performance tracking, figure out cluster charge system more accurately, Okta authentication</li>
             </ul>
 
-            <p>Why these priorities.</p>
-            <ul>
-                <li>More formats - scientists use many different formats beyond what we support now</li>
-                <li>Enhanced AI - current AI is helpful but some features don't work perfectly yet</li>
-                <li>Better UX - make it easier to use with visual file browsing and batch operations</li>
-                <li>Analytics and security - track usage, understand cluster costs better, add proper authentication</li>
-            </ul>
-
-            <p>Open for suggestions and feedback.</p>
-            <ul>
-                <li>This roadmap is flexible</li>
-                <li>Looking for input from the team</li>
-                <li>What features would be most useful?</li>
-                <li>What should we prioritize?</li>
-            </ul>
+            <p><strong>Open for suggestions and feedback.</strong></p>
         </div>
     </div>
 
@@ -1596,38 +1677,25 @@
         <h2 style="text-align: center; margin-bottom: 50px; font-size: 2.2em; color: #2c3e50;">Thanks to</h2>
         <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 40px 60px; max-width: 900px; margin: 0 auto;">
             <div>
-                <h4 style="margin: 0 0 8px 0; font-size: 1.2em; font-weight: bold; color: #2c3e50;">Mark Kittisopikul</h4>
-                <p style="margin: 0; font-size: 0.9em; color: #666; line-height: 1.4;">Mentorship and guidance throughout the entire journey</p>
+                <h4 style="margin: 0; font-size: 1.3em; font-weight: bold; color: #2c3e50;">Mark Kittisopikul</h4>
             </div>
 
             <div>
-                <h4 style="margin: 0 0 8px 0; font-size: 1.2em; font-weight: bold; color: #2c3e50;">Stephan Preibisch</h4>
-                <p style="margin: 0; font-size: 0.9em; color: #666; line-height: 1.4;">Naming suggestions for TensorSwitch</p>
+                <h4 style="margin: 0; font-size: 1.3em; font-weight: bold; color: #2c3e50;">Stephan Preibisch</h4>
             </div>
 
             <div>
-                <h4 style="margin: 0 0 8px 0; font-size: 1.2em; font-weight: bold; color: #2c3e50;">Nathan Soules</h4>
-                <p style="margin: 0; font-size: 0.9em; color: #666; line-height: 1.4;">Set up the VM infrastructure</p>
+                <h4 style="margin: 0; font-size: 1.3em; font-weight: bold; color: #2c3e50;">Nathan Soules</h4>
             </div>
 
             <div>
-                <h4 style="margin: 0 0 8px 0; font-size: 1.2em; font-weight: bold; color: #2c3e50;">Scientific Computing Team</h4>
-                <p style="margin: 0; font-size: 0.9em; color: #666; line-height: 1.4;">Continuous support and collaboration</p>
+                <h4 style="margin: 0; font-size: 1.3em; font-weight: bold; color: #2c3e50;">Scientific Computing Team</h4>
             </div>
         </div>
 
         <div class="notes">
-            <h3>Thank You Slide (1 minute)</h3>
-            <p>I want to thank the people who made TensorSwitch possible.</p>
-
-            <ul>
-                <li>Mark Kittisopikul - my mentor who guided me throughout the entire journey from introducing file format to any VM setup</li>
-                <li>Stephan Preibisch - naming suggestions for TensorSwitch</li>
-                <li>Nathan Soules - set up the VM infrastructure that hosts TensorSwitch</li>
-                <li>Scientific Computing Team - for continuous support and collaboration throughout the development</li>
-            </ul>
-
-            <p>Thank you all for your contributions!</p>
+            <h3>Thank You Slide</h3>
+            <p>Really appreciate Mark, guided me throughout the entire journey as well as Stephan, Nathan and the SciComp team.</p>
         </div>
     </div>
 
