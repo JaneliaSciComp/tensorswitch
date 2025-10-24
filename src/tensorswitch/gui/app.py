@@ -1335,51 +1335,105 @@ Click **🚀 Run Job** to execute this configuration.
         thread.start()
     
     def _execute_local_job(self, input_path, output_path):
-        """Execute local job with real-time progress monitoring"""
+        """Execute local job with real-time progress monitoring - handles multiscale"""
         try:
-            # Build command for local execution
-            # Determine level to use (smart mode uses max_downsample_level, manual mode would use level if it existed)
-            level_to_use = self.max_downsample_level if self.workflow_mode == "smart" else 0
+            # Determine max level to use
+            max_level = self.max_downsample_level if self.workflow_mode == "smart" else 0
+
+            # STEP 1: Run s0 conversion first
+            self.status.object = f"**Status**: 🟡 Starting s0 conversion (level 0/{max_level})...\n\n📊 Analyzing dataset..."
+            self.status.styles = {'background': '#fff3cd', 'padding': '15px', 'border-radius': '8px', 'border-left': '4px solid #ffc107'}
+
+            s0_success = self._execute_single_level_local(input_path, output_path, level=0, is_downsample=False)
+
+            if not s0_success:
+                self._job_finished(success=False, message="s0 conversion failed")
+                return
+
+            # STEP 2: Run downsampling for levels 1 through max_level
+            if max_level > 0:
+                # Determine downsampling task
+                if "zarr3" in self.task or "shard" in self.task:
+                    downsample_task = "downsample_shard_zarr3"
+                elif "zarr2" in self.task:
+                    downsample_task = "downsample_zarr2"
+                else:
+                    downsample_task = None
+
+                if downsample_task:
+                    for level in range(1, max_level + 1):
+                        self.status.object = f"**Status**: 🟡 Downsampling level {level}/{max_level}...\n\n📊 Processing..."
+                        self.status.styles = {'background': '#fff3cd', 'padding': '15px', 'border-radius': '8px', 'border-left': '4px solid #ffc107'}
+
+                        # Adjust base_path for downsampling
+                        if self.use_ome_structure:
+                            prev_level_path = os.path.join(output_path, f"multiscale/s{level-1}")
+                        else:
+                            prev_level_path = os.path.join(output_path, f"s{level-1}")
+
+                        level_success = self._execute_single_level_local(
+                            prev_level_path, output_path, level=level,
+                            is_downsample=True, downsample_task=downsample_task
+                        )
+
+                        if not level_success:
+                            self._job_finished(success=False, message=f"Downsampling failed at level {level}")
+                            return
+
+            # All levels completed successfully
+            self._job_finished(success=True, message=f"All {max_level + 1} levels completed successfully! (s0 through s{max_level})")
+
+        except Exception as e:
+            self._job_finished(success=False, message=f"Error starting job: {str(e)}")
+
+    def _execute_single_level_local(self, input_path, output_path, level, is_downsample=False, downsample_task=None):
+        """Execute a single level locally and monitor progress - returns True on success"""
+        try:
+            # Determine which task to use
+            task = downsample_task if is_downsample else self.task
 
             cmd = [
                 "python", "-m", "tensorswitch",
-                "--task", self.task,
+                "--task", task,
                 "--base_path", input_path,
                 "--output_path", output_path,
-                "--level", str(level_to_use),
+                "--level", str(level),
                 "--use_shard", "1" if self.use_shard else "0",
                 "--use_ome_structure", "1" if self.use_ome_structure else "0",
                 "--memory_limit", str(self.memory_limit),
                 "--num_volumes", str(self.num_volumes)
             ]
 
-            # Add custom shape parameters if provided
-            if self.custom_shard_shape and self.custom_shard_shape.strip():
-                cmd.extend(["--custom_shard_shape", self.custom_shard_shape.strip()])
-            if self.custom_chunk_shape and self.custom_chunk_shape.strip():
-                cmd.extend(["--custom_chunk_shape", self.custom_chunk_shape.strip()])
-            
-            # Show command being executed
-            cmd_str = " ".join(cmd)
-            self.status.object = f"**Status**: 🟡 Starting local job...\n\n`{cmd_str}`\n\n📊 Analyzing dataset..."
-            self.status.styles = {'background': '#fff3cd', 'padding': '15px', 'border-radius': '8px', 'border-left': '4px solid #ffc107'}
-            
+            # Add custom shape parameters if provided (only for s0, not downsampling)
+            if not is_downsample:
+                if self.custom_shard_shape and self.custom_shard_shape.strip():
+                    cmd.extend(["--custom_shard_shape", self.custom_shard_shape.strip()])
+                if self.custom_chunk_shape and self.custom_chunk_shape.strip():
+                    cmd.extend(["--custom_chunk_shape", self.custom_chunk_shape.strip()])
+
             # Execute command with real-time output capture
             self.current_process = subprocess.Popen(
-                cmd, 
-                stdout=subprocess.PIPE, 
+                cmd,
+                stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
-                text=True, 
+                text=True,
                 bufsize=1,
                 universal_newlines=True,
                 cwd=os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
             )
-            
+
             # Monitor progress in real-time
             self._monitor_job_progress()
-            
+
+            # Check if job completed successfully
+            if self.current_process and self.current_process.returncode == 0:
+                return True
+            else:
+                return False
+
         except Exception as e:
-            self._job_finished(success=False, message=f"Error starting job: {str(e)}")
+            print(f"Error executing level {level}: {str(e)}")
+            return False
     
     def _monitor_job_progress(self):
         """Monitor job progress by parsing stdout"""
@@ -1479,23 +1533,281 @@ Click **🚀 Run Job** to execute this configuration.
             self.current_process = None
         self._job_finished(success=False, message="Job cancelled by user")
     
+    def _generate_coordinator_script(self, input_path, output_path, max_level):
+        """Generate bash coordinator script for sequential multiscale job submission"""
+
+        # Determine downsampling task based on current task
+        if "zarr3" in self.task or "shard" in self.task:
+            downsample_task = "downsample_shard_zarr3"
+        elif "zarr2" in self.task:
+            downsample_task = "downsample_zarr2"
+        else:
+            downsample_task = None
+
+        # Get absolute path to python and tensorswitch
+        python_path = sys.executable
+        tensorswitch_dir = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+
+        # Build base command arguments
+        base_args = f"--use_shard {'1' if self.use_shard else '0'} --use_ome_structure {'1' if self.use_ome_structure else '0'} --memory_limit {self.memory_limit} --cores {self.cores} --wall_time {self.wall_time} --num_volumes {self.num_volumes} --project {self.project}"
+
+        # Add custom shape parameters if provided
+        if self.custom_shard_shape and self.custom_shard_shape.strip():
+            base_args += f" --custom_shard_shape {self.custom_shard_shape.strip()}"
+        if self.custom_chunk_shape and self.custom_chunk_shape.strip():
+            base_args += f" --custom_chunk_shape {self.custom_chunk_shape.strip()}"
+
+        script = f"""#!/bin/bash
+# TensorSwitch Multiscale Coordinator Script
+# Generated by GUI for sequential level submission
+# Levels: s0 through s{max_level}
+
+set -e  # Exit on any error
+
+echo "========================================="
+echo "TensorSwitch Multiscale Coordinator"
+echo "========================================="
+echo "Input: {input_path}"
+echo "Output: {output_path}"
+echo "Levels: s0 through s{max_level}"
+echo "Started: $(date)"
+echo "========================================="
+
+cd {tensorswitch_dir}
+
+# Function to extract job IDs from bsub output
+extract_job_ids() {{
+    grep -oP 'Job <\\K[0-9]+(?=>)' || true
+}}
+
+# Function to submit level and wait for completion
+submit_and_wait() {{
+    local level=$1
+    local task=$2
+    local base_path=$3
+    local output_path=$4
+
+    echo ""
+    echo ">>> Submitting level s$level (task: $task)..."
+
+    # Submit jobs and capture output
+    output=$({python_path} -m tensorswitch \\
+        --task $task \\
+        --base_path "$base_path" \\
+        --output_path "$output_path" \\
+        --level $level \\
+        {base_args} \\
+        --submit 2>&1)
+
+    echo "$output"
+
+    # Extract job IDs
+    job_ids=$(echo "$output" | extract_job_ids | tr '\\n' ' ')
+
+    if [ -z "$job_ids" ]; then
+        echo "ERROR: No job IDs found for level s$level"
+        exit 1
+    fi
+
+    echo ">>> Level s$level jobs submitted: $job_ids"
+    echo ">>> Waiting for level s$level to complete..."
+
+    # Build wait condition: ended(job1) && ended(job2) && ...
+    wait_condition=""
+    for job_id in $job_ids; do
+        if [ -z "$wait_condition" ]; then
+            wait_condition="ended($job_id)"
+        else
+            wait_condition="$wait_condition && ended($job_id)"
+        fi
+    done
+
+    # Wait for all jobs to finish
+    bwait -w "$wait_condition" 2>&1 || true
+
+    echo ">>> Level s$level completed at $(date)"
+}}
+
+# Submit s0 (initial conversion)
+echo ""
+echo "=== LEVEL 0: Initial Conversion ==="
+submit_and_wait 0 "{self.task}" "{input_path}" "{output_path}"
+
+"""
+
+        # Add downsampling levels if needed
+        if max_level > 0 and downsample_task:
+            for level in range(1, max_level + 1):
+                if self.use_ome_structure:
+                    prev_level_path = os.path.join(output_path, f"multiscale/s{level-1}")
+                else:
+                    prev_level_path = os.path.join(output_path, f"s{level-1}")
+
+                script += f"""
+# Submit s{level} (downsample from s{level-1})
+echo ""
+echo "=== LEVEL {level}: Downsampling ==="
+submit_and_wait {level} "{downsample_task}" "{prev_level_path}" "{output_path}"
+
+"""
+
+        script += f"""
+echo ""
+echo "========================================="
+echo "✅ All levels completed successfully!"
+echo "Finished: $(date)"
+echo "Output location: {output_path}"
+echo "========================================="
+"""
+
+        return script
+
     def submit_cluster_job(self, input_path, output_path):
-        """Submit job to LSF cluster and show job tracking info in preview box"""
+        """Submit job to LSF cluster - uses coordinator for multiscale"""
         # Update preview box to show submission is starting
         self.preview_box.object = f"**Job Submission**: 🚀 Submitting to LSF cluster...\n\nInput: `{input_path}`\nOutput: `{output_path}`\nProject: `{self.project}`"
         self.preview_box.styles = {'background': '#fff3cd', 'padding': '15px', 'border-radius': '8px', 'border-left': '4px solid #ffc107', 'margin-bottom': '15px'}
-        
-        try:
-            # Determine level to use (smart mode uses max_downsample_level, manual mode would use level if it existed)
-            level_to_use = self.max_downsample_level if self.workflow_mode == "smart" else 0
 
-            # Build command for cluster submission based on CLI implementation
+        try:
+            # Determine max level to use (smart mode uses max_downsample_level, manual mode uses 0)
+            max_level = self.max_downsample_level if self.workflow_mode == "smart" else 0
+
+            # If max_level > 0, use coordinator script approach
+            if max_level > 0:
+                self._submit_coordinator_job(input_path, output_path, max_level)
+            else:
+                # For single level (s0 only), use direct submission
+                self._submit_direct_job(input_path, output_path)
+
+        except Exception as e:
+            self.preview_box.object = f"**❌ Error Submitting Cluster Job**\n\n{str(e)}"
+            self.preview_box.styles = {'background': '#f8d7da', 'padding': '15px', 'border-radius': '8px', 'border-left': '4px solid #dc3545', 'margin-bottom': '15px'}
+
+    def _submit_direct_job(self, input_path, output_path):
+        """Submit single level job directly (no coordinator needed)"""
+        result = self._submit_single_level_job(input_path, output_path, level=0, is_downsample=False)
+
+        if result and result['job_ids']:
+            job_info = f"\n**📋 Job Tracking:**\n"
+            for i, (job_id, job_name) in enumerate(zip(result['job_ids'], result['job_names'])):
+                job_info += f"- **Job {i+1}**: `{job_name}` (ID: {job_id})\n"
+            job_info += f"\n**🔍 Check Status:** `bjobs {' '.join(result['job_ids'])}`\n"
+            job_info += f"**📊 Monitor:** `bjobs -w`\n"
+
+            self.preview_box.object = f"""**✅ Cluster Jobs Submitted Successfully!**
+
+**Input:** `{input_path}`
+**Output:** `{output_path}`
+**Project:** `{self.project}`
+**Resources:** {self.cores} cores, {self.wall_time} wall time
+
+**Job Info:** [START]{job_info} [END]
+
+**💡 Tip:** Jobs are running in the background. Check output directory when complete!"""
+
+            self.preview_box.styles = {'background': '#d4edda', 'padding': '15px', 'border-radius': '8px', 'border-left': '4px solid #28a745', 'margin-bottom': '15px'}
+        else:
+            self.preview_box.object = f"**❌ Cluster Submission Failed!**\n\nNo jobs were submitted successfully."
+            self.preview_box.styles = {'background': '#f8d7da', 'padding': '15px', 'border-radius': '8px', 'border-left': '4px solid #dc3545', 'margin-bottom': '15px'}
+
+    def _submit_coordinator_job(self, input_path, output_path, max_level):
+        """Submit coordinator job for multiscale processing"""
+        import tempfile
+        import time
+
+        # Generate coordinator script
+        script_content = self._generate_coordinator_script(input_path, output_path, max_level)
+
+        # Write script to persistent location (not /tmp which gets cleaned up)
+        # Use output directory so it persists and user can inspect it
+        tensorswitch_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+        output_dir = os.path.join(tensorswitch_root, "output")
+        os.makedirs(output_dir, exist_ok=True)
+
+        # Create script with timestamp to avoid collisions
+        timestamp = int(time.time())
+        script_path = os.path.join(output_dir, f"coordinator_s0_s{max_level}_{timestamp}.sh")
+
+        with open(script_path, 'w') as f:
+            f.write(script_content)
+
+        # Make script executable
+        os.chmod(script_path, 0o755)
+
+        # Submit coordinator as LSF job
+        job_name = f"tensorswitch_coordinator_s0_s{max_level}"
+
+        cmd = [
+            "bsub",
+            "-J", job_name,
+            "-n", "1",  # Coordinator only needs 1 core
+            "-W", "24:00",  # Give plenty of time for all levels
+            "-P", self.project,
+            "-o", f"{output_dir}/coordinator_{job_name}_%J.log",
+            "-e", f"{output_dir}/coordinator_{job_name}_%J.err",
+            script_path
+        ]
+
+        result = subprocess.run(cmd, capture_output=True, text=True)
+
+        if result.returncode == 0:
+            # Extract coordinator job ID
+            import re
+            match = re.search(r'Job <(\d+)>', result.stdout)
+            if match:
+                coordinator_job_id = match.group(1)
+
+                self.preview_box.object = f"""**✅ Coordinator Job Submitted Successfully!**
+
+**Input:** `{input_path}`
+**Output:** `{output_path}`
+**Project:** `{self.project}`
+**Levels:** s0 through s{max_level}
+
+**📋 Coordinator Job:**
+- **Job Name**: `{job_name}`
+- **Job ID**: `{coordinator_job_id}`
+- **Script**: `{script_path}`
+
+**What happens next:**
+1. Coordinator submits s0 jobs (8 parallel workers)
+2. Waits for s0 to complete
+3. Submits s1 jobs (8 parallel workers)
+4. Waits for s1 to complete
+5. Continues through s{max_level}...
+
+**🔍 Monitor Progress:**
+- Check coordinator: `bjobs {coordinator_job_id}`
+- View coordinator log: `tail -f {output_dir}/coordinator_{job_name}_{coordinator_job_id}.log`
+- Check all jobs: `bjobs -w`
+
+**📁 Logs:** `{output_dir}/`
+
+**💡 Tip:** The coordinator orchestrates everything. You can close the GUI - jobs will continue running!"""
+
+                self.preview_box.styles = {'background': '#d4edda', 'padding': '15px', 'border-radius': '8px', 'border-left': '4px solid #28a745', 'margin-bottom': '15px'}
+            else:
+                raise Exception("Could not extract coordinator job ID from bsub output")
+        else:
+            self.preview_box.object = f"**❌ Coordinator Submission Failed!**\n\n**Error:**\n```\n{result.stderr[:800]}\n```"
+            self.preview_box.styles = {'background': '#f8d7da', 'padding': '15px', 'border-radius': '8px', 'border-left': '4px solid #dc3545', 'margin-bottom': '15px'}
+
+    def _submit_single_level_job(self, input_path, output_path, level, is_downsample=False, downsample_task=None):
+        """Submit a single level job (either s0 conversion or downsampling)"""
+        try:
+            # Determine which task to use
+            if is_downsample:
+                task = downsample_task
+            else:
+                task = self.task
+
+            # Build command for cluster submission
             cmd = [
                 "python", "-m", "tensorswitch",
-                "--task", self.task,
+                "--task", task,
                 "--base_path", input_path,
                 "--output_path", output_path,
-                "--level", str(level_to_use),
+                "--level", str(level),
                 "--use_shard", "1" if self.use_shard else "0",
                 "--use_ome_structure", "1" if self.use_ome_structure else "0",
                 "--memory_limit", str(self.memory_limit),
@@ -1506,56 +1818,42 @@ Click **🚀 Run Job** to execute this configuration.
                 "--submit"  # This triggers cluster submission
             ]
 
-            # Add custom shape parameters if provided
-            if self.custom_shard_shape and self.custom_shard_shape.strip():
-                cmd.extend(["--custom_shard_shape", self.custom_shard_shape.strip()])
-            if self.custom_chunk_shape and self.custom_chunk_shape.strip():
-                cmd.extend(["--custom_chunk_shape", self.custom_chunk_shape.strip()])
+            # Add custom shape parameters if provided (only for s0 conversion, not downsampling)
+            if not is_downsample:
+                if self.custom_shard_shape and self.custom_shard_shape.strip():
+                    cmd.extend(["--custom_shard_shape", self.custom_shard_shape.strip()])
+                if self.custom_chunk_shape and self.custom_chunk_shape.strip():
+                    cmd.extend(["--custom_chunk_shape", self.custom_chunk_shape.strip()])
 
             # Add Dask JobQueue flag if enabled
             if self.use_dask_jobqueue:
                 cmd.append("--use_dask_jobqueue")
-            
+
             # Execute command
             result = subprocess.run(cmd, capture_output=True, text=True, cwd=os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
-            
+
             if result.returncode == 0:
                 # Extract job IDs from output
                 import re
                 job_ids = re.findall(r'Job <(\d+)>', result.stdout)
                 job_names = re.findall(r'Submitted (\w+)', result.stdout)
-                
-                # Create job tracking information
-                job_info = ""
-                if job_ids:
-                    job_info = f"\n**📋 Job Tracking:**\n"
-                    for i, (job_id, job_name) in enumerate(zip(job_ids, job_names)):
-                        job_info += f"- **Job {i+1}**: `{job_name}` (ID: {job_id})\n"
-                    job_info += f"\n**🔍 Check Status:** `bjobs {' '.join(job_ids)}`\n"
-                    job_info += f"**📊 Monitor:** `bjobs -w` or `bjobs -l {job_ids[0]}`\n"
-                    job_info += f"**📁 Logs:** `output/` directory\n"
-                
-                self.preview_box.object = f"""**✅ Cluster Jobs Submitted Successfully!**
 
-**Input:** `{input_path}`  
-**Output:** `{output_path}`  
-**Project:** `{self.project}`  
-**Resources:** {self.cores} cores, {self.wall_time} wall time
-
-**Job Info:** [START]{job_info} [END]
-**stdout:** [START]{result.stdout} [END]
-**Errors:** [START]{result.stderr}[END]
-
-**💡 Tip:** Jobs are running in the background. Check output directory when complete!"""
-                
-                self.preview_box.styles = {'background': '#d4edda', 'padding': '15px', 'border-radius': '8px', 'border-left': '4px solid #28a745', 'margin-bottom': '15px'}
+                # Return results dict for the main function to collect
+                return {
+                    'success': True,
+                    'stdout': result.stdout,
+                    'stderr': result.stderr,
+                    'job_ids': job_ids,
+                    'job_names': job_names
+                }
             else:
-                self.preview_box.object = f"**❌ Cluster Submission Failed!**\n\n**Error Details:**\n```\n{result.stderr[-800:] if result.stderr else result.stdout[-800:] if result.stdout else 'No error details available'}\n```"
-                self.preview_box.styles = {'background': '#f8d7da', 'padding': '15px', 'border-radius': '8px', 'border-left': '4px solid #dc3545', 'margin-bottom': '15px'}
-                
+                # Job submission failed - log error but don't stop other levels
+                print(f"Job submission failed for level {level}: {result.stderr[:500]}")
+                return None
+
         except Exception as e:
-            self.preview_box.object = f"**❌ Error Submitting Cluster Job**\n\n{str(e)}"
-            self.preview_box.styles = {'background': '#f8d7da', 'padding': '15px', 'border-radius': '8px', 'border-left': '4px solid #dc3545', 'margin-bottom': '15px'}
+            print(f"Error submitting level {level} job: {str(e)}")
+            return None
 
 def create_simple_app():
     """Create simple test app"""
