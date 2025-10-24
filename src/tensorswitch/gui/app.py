@@ -1393,7 +1393,8 @@ Click **🚀 Run Job** to execute this configuration.
             task = downsample_task if is_downsample else self.task
 
             cmd = [
-                "python", "-m", "tensorswitch",
+                "python", "-u",  # -u for unbuffered output (real-time progress)
+                "-m", "tensorswitch",
                 "--task", task,
                 "--base_path", input_path,
                 "--output_path", output_path,
@@ -1412,6 +1413,10 @@ Click **🚀 Run Job** to execute this configuration.
                     cmd.extend(["--custom_chunk_shape", self.custom_chunk_shape.strip()])
 
             # Execute command with real-time output capture
+            # Set PYTHONUNBUFFERED environment variable for immediate output
+            env = os.environ.copy()
+            env['PYTHONUNBUFFERED'] = '1'
+
             self.current_process = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
@@ -1419,6 +1424,7 @@ Click **🚀 Run Job** to execute this configuration.
                 text=True,
                 bufsize=1,
                 universal_newlines=True,
+                env=env,
                 cwd=os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
             )
 
@@ -1426,8 +1432,9 @@ Click **🚀 Run Job** to execute this configuration.
             self._monitor_job_progress()
 
             # Check if job completed successfully
-            if self.current_process and self.current_process.returncode == 0:
-                return True
+            # Note: _monitor_job_progress sets self.current_process = None, so check progress_data
+            if hasattr(self, 'last_job_success'):
+                return self.last_job_success
             else:
                 return False
 
@@ -1512,7 +1519,8 @@ Click **🚀 Run Job** to execute this configuration.
         self.cancel_btn.visible = False
         self.submit_btn.disabled = False
         self.current_process = None
-        
+        self.last_job_success = success  # Store for _execute_single_level_local to check
+
         if success:
             self.progress_bar.value = 100
             self.status.object = f"**Status**: ✅ {message}"
