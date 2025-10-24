@@ -430,7 +430,17 @@ python -m tensorswitch --task precomputed_to_n5 \
   --submit
 ```
 
-**Note**: After converting all scales (s0-s8), create root `attributes.json` to match BigStitcher/BigDataViewer structure.
+**Automatic N5 Attributes Generation:**
+- ✅ **Scale-level attributes.json** automatically created with:
+  - `downsamplingFactors` (calculated from Precomputed resolutions)
+  - `pixelResolution` (extracted from Precomputed info)
+  - `blockSize`, `compression`, `dataType`, `dimensions`
+- ✅ **Root attributes.json** automatically created with:
+  - Complete Bigstitcher-Spark metadata structure
+  - `MultiResolutionInfos` for all scales
+  - `pixelResolution` array matching MultiResolutionInfos
+  - `AnisotropyFactor` calculated from source resolution
+- ✅ **No manual attribute fixing needed!** All metadata generated during conversion
 
 #### Create Complete Multiscale OME-Zarr Dataset
 

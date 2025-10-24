@@ -8,6 +8,7 @@ from ..utils import (
     precomputed_store_spec,
     n5_output_spec_with_compression,
     calculate_downsample_factors,
+    update_n5_root_attributes,
     get_chunk_domains,
     commit_tasks,
     print_processing_info,
@@ -102,6 +103,9 @@ def convert(base_path, output_path, level, start_idx=0, stop_idx=None,
     print("NEUROGLANCER PRECOMPUTED TO N5 CONVERSION")
     print("=" * 80)
 
+    # Set umask for proper permissions (664 for files, 775 for directories)
+    os.umask(0o0002)
+
     # Step 1: Ensure info file is decompressed (for local paths)
     print(f"\n[1/7] Preparing Precomputed dataset...")
     ensure_precomputed_info_decompressed(base_path)
@@ -123,6 +127,7 @@ def convert(base_path, output_path, level, start_idx=0, stop_idx=None,
     scale = info['scales'][level]
     scale_key = scale['key']
     shape = scale['size']  # [X, Y, Z] in Neuroglancer format
+    resolution = scale['resolution']  # [X, Y, Z] resolution in nm
     dtype = info['data_type']  # e.g., 'uint8', 'uint64'
 
     print(f"\n  Dataset type: {info['@type']}")
@@ -130,7 +135,7 @@ def convert(base_path, output_path, level, start_idx=0, stop_idx=None,
     print(f"  Total scales: {len(info['scales'])}")
     print(f"\n  Converting scale {level}:")
     print(f"    Key: {scale_key}")
-    print(f"    Resolution: {scale['resolution']} nm")
+    print(f"    Resolution: {resolution} nm")
     print(f"    Dimensions: {shape[0]:,} × {shape[1]:,} × {shape[2]:,}")
     print(f"    Encoding: {scale.get('encoding', 'unknown')}")
 
@@ -187,12 +192,14 @@ def convert(base_path, output_path, level, start_idx=0, stop_idx=None,
             dtype,
             chunk_shape=chunk_shape,
             compression_level=3,
-            downsample_factors=downsample_factors
+            downsample_factors=downsample_factors,
+            pixel_resolution=resolution  # Pass resolution from Precomputed info
         )
         output_store = ts.open(n5_spec, create=True, open=True, delete_existing=False).result()
         print(f"  ✓ N5 dataset created/opened")
         print(f"  Compression: zstd level 3")
         print(f"  Block size: {chunk_shape}")
+        print(f"  Pixel resolution: {resolution} nm (added to attributes.json)")
 
         # Verify attributes.json was created
         attrs_path = os.path.join(output_path, "attributes.json")
@@ -269,4 +276,18 @@ def convert(base_path, output_path, level, start_idx=0, stop_idx=None,
     print(f"  Processed: {processed_chunks:,} chunks in {elapsed_time/60:.2f} minutes")
     print(f"  Speed: {processed_chunks/elapsed_time:.2f} chunks/second")
     print(f"\n✅ Successfully converted Precomputed scale {level} to N5 format")
+
+    # Update root attributes.json with pixelResolution metadata
+    print(f"\n" + "=" * 80)
+    print(f"UPDATING ROOT ATTRIBUTES")
+    print(f"=" * 80)
+    # Extract N5 root path from output_path (e.g., /path/to/dataset.n5/ch0tp0/s0 → /path/to/dataset.n5)
+    n5_root = os.path.dirname(os.path.dirname(output_path))
+    if n5_root.endswith('.n5'):
+        print(f"  N5 root: {n5_root}")
+        update_n5_root_attributes(n5_root, info)
+    else:
+        print(f"  ℹ  Note: Could not determine N5 root from output path: {output_path}")
+        print(f"         Root attributes update skipped. Run manually if needed.")
+
     print("=" * 80)

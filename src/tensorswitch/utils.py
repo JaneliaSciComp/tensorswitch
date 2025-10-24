@@ -1519,7 +1519,8 @@ def precomputed_store_spec(precomputed_path, scale_key):
 def n5_output_spec_with_compression(n5_path, shape, dtype,
                                      chunk_shape=None,
                                      compression_level=3,
-                                     downsample_factors=None):
+                                     downsample_factors=None,
+                                     pixel_resolution=None):
     """
     Create N5 output specification with zstd compression.
 
@@ -1531,6 +1532,9 @@ def n5_output_spec_with_compression(n5_path, shape, dtype,
         compression_level: zstd compression level (default 3)
         downsample_factors: Downsampling relative to s0 (e.g., [2,2,1] for s1)
                            None for s0 (full resolution)
+        pixel_resolution: Physical resolution in nm (e.g., [10.0, 10.0, 25.0])
+                         Extracted from Precomputed info['scales'][i]['resolution']
+                         None to skip adding pixelResolution
 
     Returns:
         dict: TensorStore N5 spec with proper attributes.json format
@@ -1539,14 +1543,16 @@ def n5_output_spec_with_compression(n5_path, shape, dtype,
         >>> spec = n5_output_spec_with_compression(
         ...     "/path/to/data.n5/ch0tp0/s0",
         ...     [47000, 13000, 1000],
-        ...     'uint8'
+        ...     'uint8',
+        ...     pixel_resolution=[10.0, 10.0, 25.0]
         ... )
 
         >>> spec = n5_output_spec_with_compression(
         ...     "/path/to/data.n5/ch0tp0/s1",
         ...     [23500, 6500, 1000],
         ...     'uint8',
-        ...     downsample_factors=[2, 2, 1]
+        ...     downsample_factors=[2, 2, 1],
+        ...     pixel_resolution=[20.0, 20.0, 25.0]
         ... )
     """
     if chunk_shape is None:
@@ -1571,6 +1577,13 @@ def n5_output_spec_with_compression(n5_path, shape, dtype,
     # Add downsamplingFactors for all scales (s0: [1,1,1], s1: [2,2,1], etc.)
     if downsample_factors is not None:
         metadata['downsamplingFactors'] = list(downsample_factors)
+
+    # Add pixelResolution from Precomputed info for n5-viewer compatibility
+    if pixel_resolution is not None:
+        metadata['pixelResolution'] = {
+            'unit': 'nm',
+            'dimensions': list(pixel_resolution)
+        }
 
     return {
         'driver': 'n5',
@@ -1690,5 +1703,212 @@ def calculate_downsample_factors(scale_idx, precomputed_info):
         for i in range(3)
     ]
     return factors
+
+
+def update_n5_root_attributes(n5_root_path, precomputed_info):
+    """
+    Create or update root attributes.json with complete metadata including pixelResolution.
+
+    If root attributes.json doesn't exist, creates it from scratch by scanning existing
+    scales. If it exists, updates it with pixelResolution. pixelResolution is always
+    included in the initial creation, not added later.
+
+    Args:
+        n5_root_path: Path to N5 dataset root (e.g., /path/to/dataset.n5)
+        precomputed_info: Parsed Precomputed info.json dictionary
+
+    Returns:
+        bool: True if successful, False otherwise
+
+    Structure created:
+        {
+          "n5": "4.0.0",
+          "Bigstitcher-Spark": {
+            "MultiResolutionInfos": [[...scales...]],
+            "pixelResolution": [
+              [  // Channel 0
+                {"unit": "nm", "dimensions": [10.0, 10.0, 25.0]},    // s0
+                {"unit": "nm", "dimensions": [20.0, 20.0, 25.0]},    // s1
+                ...
+              ]
+            ],
+            ...other metadata...
+          }
+        }
+
+    Examples:
+        >>> info = fetch_precomputed_info("/path/to/precomputed/image")
+        >>> update_n5_root_attributes("/path/to/dataset.n5", info)
+        True
+    """
+    from pathlib import Path
+    import glob
+
+    root_attrs_path = Path(n5_root_path) / "attributes.json"
+    os.umask(0o0002)
+
+    try:
+        # Check if root attributes.json exists
+        if root_attrs_path.exists():
+            # EXISTING FILE: Load and update
+            print(f"  → Root attributes.json exists, updating...")
+            with open(root_attrs_path, 'r') as f:
+                attrs = json.load(f)
+
+            if "Bigstitcher-Spark" not in attrs:
+                print(f"  ✗ Warning: No Bigstitcher-Spark section in root attributes.json")
+                return False
+
+            bigstitcher = attrs["Bigstitcher-Spark"]
+
+            # Get MultiResolutionInfos
+            if "MultiResolutionInfos" not in bigstitcher:
+                print(f"  ✗ Warning: No MultiResolutionInfos found in root attributes.json")
+                return False
+
+            multi_res_infos = bigstitcher["MultiResolutionInfos"]
+
+        else:
+            # NEW FILE: Create from scratch by scanning N5 structure
+            print(f"  → Root attributes.json not found, creating from scratch...")
+
+            # Scan for channel groups (ch0tp0, ch1tp0, etc.)
+            channel_dirs = sorted(glob.glob(os.path.join(n5_root_path, "ch*tp*")))
+            if not channel_dirs:
+                print(f"  ✗ Error: No channel directories (ch*tp*) found in {n5_root_path}")
+                return False
+
+            # Build MultiResolutionInfos by scanning scales
+            multi_res_infos = []
+            first_scale_attrs = None
+
+            for ch_dir in channel_dirs:
+                ch_name = os.path.basename(ch_dir)
+                scale_dirs = sorted(glob.glob(os.path.join(ch_dir, "s*")))
+
+                channel_scales = []
+                for scale_dir in scale_dirs:
+                    scale_name = os.path.basename(scale_dir)
+                    scale_attrs_path = os.path.join(scale_dir, "attributes.json")
+
+                    if not os.path.exists(scale_attrs_path):
+                        continue
+
+                    with open(scale_attrs_path, 'r') as f:
+                        scale_attrs = json.load(f)
+
+                    # Save first scale for metadata reference
+                    if first_scale_attrs is None:
+                        first_scale_attrs = scale_attrs
+
+                    # Extract scale index from name (s0 → 0, s1 → 1, etc.)
+                    scale_idx = int(scale_name[1:])
+
+                    # Get downsampling factors
+                    downsample = scale_attrs.get('downsamplingFactors', [1, 1, 1])
+
+                    # Calculate relative downsampling (always [1,1,1] for s0, then incremental)
+                    if scale_idx == 0:
+                        relative_downsample = [1, 1, 1]
+                        absolute_downsample = [1, 1, 1]
+                    else:
+                        relative_downsample = downsample
+                        absolute_downsample = downsample
+
+                    channel_scales.append({
+                        "relativeDownsampling": relative_downsample,
+                        "absoluteDownsampling": absolute_downsample,
+                        "blockSize": scale_attrs['blockSize'],
+                        "dimensions": scale_attrs['dimensions'],
+                        "dataset": f"{ch_name}/{scale_name}",
+                        "dataType": scale_attrs['dataType']
+                    })
+
+                multi_res_infos.append(channel_scales)
+
+            # Create root attributes from scratch
+            if first_scale_attrs is None:
+                print(f"  ✗ Error: No scale attributes.json found")
+                return False
+
+            # Calculate bounding box from s0 dimensions
+            s0_dims = multi_res_infos[0][0]['dimensions']
+
+            # Calculate anisotropy factor from precomputed resolution
+            s0_resolution = precomputed_info['scales'][0]['resolution']
+            # AnisotropyFactor = Z resolution / XY resolution
+            anisotropy = s0_resolution[2] / s0_resolution[0]
+
+            attrs = {
+                "n5": "4.0.0",
+                "Bigstitcher-Spark": {
+                    "InputXML": f"file:{n5_root_path}",
+                    "NumTimepoints": 1,
+                    "NumChannels": len(multi_res_infos),
+                    "Boundingbox_min": [0, 0, 0],
+                    "Boundingbox_max": s0_dims,
+                    "PreserveAnisotropy": True,
+                    "AnisotropyFactor": round(anisotropy, 1),
+                    "DataType": first_scale_attrs['dataType'],
+                    "BlockSize": first_scale_attrs['blockSize'],
+                    "MinIntensity": 0.0,
+                    "MaxIntensity": 255.0 if first_scale_attrs['dataType'] == 'uint8' else 65535.0,
+                    "FusionFormat": "N5",
+                    "MultiResolutionInfos": multi_res_infos
+                }
+            }
+
+            bigstitcher = attrs["Bigstitcher-Spark"]
+            print(f"  ✓ Created new root attributes.json structure")
+            print(f"    Channels: {len(multi_res_infos)}")
+            print(f"    Scales per channel: {len(multi_res_infos[0]) if multi_res_infos else 0}")
+            print(f"    Anisotropy factor: {anisotropy:.1f}")
+
+        # Now add pixelResolution to Bigstitcher-Spark
+        # Build pixelResolution array mirroring MultiResolutionInfos structure
+        scales = precomputed_info['scales']
+        pixel_resolution = []
+
+        for ch_idx, channel_scales in enumerate(multi_res_infos):
+            channel_resolutions = []
+
+            for scale_entry in channel_scales:
+                # Extract actual scale index from dataset path (e.g., "ch0tp0/s8" → 8)
+                dataset_path = scale_entry.get('dataset', '')
+                if '/s' in dataset_path:
+                    scale_idx = int(dataset_path.split('/s')[-1])
+                else:
+                    print(f"  ✗ Warning: Could not parse scale index from dataset: {dataset_path}")
+                    continue
+
+                if scale_idx >= len(scales):
+                    print(f"  ✗ Warning: Scale s{scale_idx} exceeds Precomputed scales")
+                    continue
+
+                scale_resolution = scales[scale_idx]['resolution']
+                channel_resolutions.append({
+                    "unit": "nm",
+                    "dimensions": list(scale_resolution)
+                })
+
+            pixel_resolution.append(channel_resolutions)
+
+        # Add pixelResolution to Bigstitcher-Spark (created with other metadata, not updated later!)
+        bigstitcher["pixelResolution"] = pixel_resolution
+
+        # Save complete attributes with pixelResolution included
+        with open(root_attrs_path, 'w') as f:
+            json.dump(attrs, f, indent=2)
+
+        print(f"  ✓ Root attributes.json saved with pixelResolution included")
+        print(f"    Structure: {len(multi_res_infos)} channel(s) × {len(multi_res_infos[0]) if multi_res_infos else 0} scale(s)")
+
+        return True
+
+    except Exception as e:
+        print(f"  ✗ Error creating/updating root attributes: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
 
 
