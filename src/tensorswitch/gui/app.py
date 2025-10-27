@@ -225,7 +225,41 @@ class SimpleTensorSwitchGUI(param.Parameterized):
         </div>
         </div>
         """)
-        
+
+        # Passkey protection section
+        passkey_section = pn.pane.Markdown("""
+        <div style="text-align: center; margin: 30px 0;">
+        <h3 style="color: #e74c3c; margin-bottom: 15px;">🔒 Access Required</h3>
+        <p style="color: #7f8c8d; font-size: 1.1em;">
+        Please enter the passkey to access TensorSwitch
+        </p>
+        </div>
+        """)
+
+        # Passkey input
+        self.passkey_input = pn.widgets.PasswordInput(
+            name="",
+            placeholder="Enter passkey...",
+            width=300,
+            styles={
+                'margin': '0 auto',
+                'font-size': '1.1em',
+                'text-align': 'center'
+            }
+        )
+
+        # Error message (initially hidden)
+        self.passkey_error = pn.pane.Markdown(
+            "",
+            styles={
+                'color': '#e74c3c',
+                'text-align': 'center',
+                'font-weight': '600',
+                'margin-top': '10px',
+                'font-size': '1.1em'
+            }
+        )
+
         # Let's convert button
         self.start_btn = pn.widgets.Button(
             name="🚀 Let's Convert!",
@@ -235,7 +269,7 @@ class SimpleTensorSwitchGUI(param.Parameterized):
             styles={
                 'font-size': '1.4em',
                 'font-weight': '600',
-                'margin': '30px auto',
+                'margin': '20px auto',
                 'display': 'block',
                 'border-radius': '16px',
                 'background': '#87CEEB !important',
@@ -253,10 +287,13 @@ class SimpleTensorSwitchGUI(param.Parameterized):
         }
         """]
         self.start_btn.on_click(self.show_conversion_page)
-        
+
         self.welcome_layout = pn.Column(
             welcome_title,
             explanation,
+            passkey_section,
+            pn.Row(pn.Spacer(), self.passkey_input, pn.Spacer()),
+            pn.Row(pn.Spacer(), self.passkey_error, pn.Spacer()),
             pn.Row(pn.Spacer(), self.start_btn, pn.Spacer()),
             sizing_mode="stretch_width",
             styles={'max-width': '900px', 'margin': '0 auto', 'padding': '40px 20px'}
@@ -807,7 +844,24 @@ class SimpleTensorSwitchGUI(param.Parameterized):
         self.main_container.append(self.welcome_layout)
         
     def show_conversion_page(self, event=None):
-        """Show the conversion configuration page with floating AI"""
+        """Show the conversion configuration page with floating AI - requires passkey validation"""
+        # Passkey protection - change this value to update the passkey
+        correct_passkey = "5678"
+
+        # Validate passkey
+        entered_passkey = self.passkey_input.value if hasattr(self, 'passkey_input') else ""
+
+        if entered_passkey != correct_passkey:
+            # Show error message
+            self.passkey_error.object = "❌ **Incorrect passkey. Please try again.**"
+            # Clear the passkey input
+            self.passkey_input.value = ""
+            return
+
+        # Passkey is correct - clear any error messages
+        self.passkey_error.object = ""
+
+        # Proceed to conversion page
         self.current_page = "conversion"
         # Clear main container and add conversion content
         self.main_container.clear()
