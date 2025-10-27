@@ -89,19 +89,134 @@ tensorswitch/
 
 ```
 
-## Installation
+## Environment Setup
 
-### Pip
+### Prerequisites
 
+**Python Version**: Python 3.12
+**System Requirements**: Linux (tested on RHEL/CentOS)
+**Package Manager**: Pixi (recommended) or pip
+
+### Option 1: Pixi Environment (Recommended)
+
+Pixi is a cross-platform package manager that creates reproducible environments. TensorSwitch uses Pixi for dependency management.
+
+#### Installing Pixi
+
+If you don't have Pixi installed:
+
+```bash
+# Install Pixi (one-time setup)
+curl -fsSL https://pixi.sh/install.sh | bash
+
+# Or using conda
+conda install -c conda-forge pixi
 ```
-pip install git+https://github.com/JaneliaSciComp/tensorswitch
+
+After installation, restart your shell or run:
+```bash
+source ~/.bashrc  # or ~/.zshrc depending on your shell
 ```
 
-### Pixi
-
+Verify Pixi is installed:
+```bash
+pixi --version
 ```
-pixi add python
-pixi add --pypi "tensorswitch @ git+https://github.com/JaneliaSciComp/tensorswitch"
+
+#### Setting Up TensorSwitch with Pixi
+
+1. **Clone the repository** (develop branch):
+   ```bash
+   git clone -b develop https://github.com/JaneliaSciComp/tensorswitch.git
+   cd tensorswitch
+   ```
+
+2. **Install dependencies** (Pixi will read `pixi.lock` and `pyproject.toml`):
+   ```bash
+   pixi install
+   ```
+
+   This creates a complete environment with:
+   - Python 3.12
+   - TensorStore
+   - All required dependencies (NumPy, Dask, Panel, etc.)
+   - GUI dependencies (Bokeh, Panel)
+
+3. **Verify installation**:
+   ```bash
+   # Check Python version in Pixi environment
+   pixi run python --version
+   # Should output: Python 3.12.x
+
+   # Test TensorSwitch CLI
+   pixi run python -m tensorswitch --help
+   ```
+
+#### Using the Pixi Environment
+
+**Run CLI commands**:
+```bash
+pixi run python -m tensorswitch --task tiff_to_zarr3_s0 --base_path /path/to/input.tif --output_path /path/to/output.zarr
+```
+
+**Launch the GUI**:
+```bash
+pixi run python src/tensorswitch/gui/launch_gui.py
+```
+
+**Run Python scripts**:
+```bash
+pixi run python your_script.py
+```
+
+**Activate the shell** (for interactive use):
+```bash
+pixi shell
+# Now you're inside the Pixi environment
+python -m tensorswitch --help
+```
+
+#### Environment Location
+
+Pixi creates the environment at:
+```
+.pixi/envs/default/
+```
+
+The Python interpreter is located at:
+```
+.pixi/envs/default/bin/python3.12
+```
+
+**Important**: On the Janelia cluster, use the full path to the Pixi Python when submitting jobs to ensure the correct environment is used.
+
+### Option 2: Pip Installation
+
+If you prefer pip over Pixi:
+
+```bash
+# Create a virtual environment (recommended)
+python3.12 -m venv tensorswitch_env
+source tensorswitch_env/bin/activate
+
+# Install TensorSwitch (develop branch)
+pip install git+https://github.com/JaneliaSciComp/tensorswitch@develop
+```
+
+### Option 3: Development Installation
+
+For development or contributing:
+
+```bash
+# Clone the repository (develop branch)
+git clone -b develop https://github.com/JaneliaSciComp/tensorswitch.git
+cd tensorswitch
+
+# Install with Pixi in development mode
+pixi install
+
+# Or with pip in editable mode
+pip install -e .
 ```
 
 ## Quick Start
