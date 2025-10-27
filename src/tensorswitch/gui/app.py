@@ -1553,8 +1553,11 @@ Click **🚀 Run Job** to execute this configuration.
             downsample_task = None
 
         # Get absolute path to python and tensorswitch
-        python_path = sys.executable
-        tensorswitch_dir = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+        # IMPORTANT: Use shared filesystem paths accessible from compute nodes
+        # The VM's /opt/tensorswitch is LOCAL to the VM and NOT accessible to compute nodes
+        # Instead, use the shared installation in the user's home directory on /groups
+        tensorswitch_dir = "/groups/scicompsoft/home/chend/temp/downsample_script/tensorswitch/src"
+        python_path = "/groups/scicompsoft/home/chend/temp/downsample_script/tensorswitch/.pixi/envs/default/bin/python3.12"
 
         # Build base command arguments
         base_args = f"--use_shard {'1' if self.use_shard else '0'} --use_ome_structure {'1' if self.use_ome_structure else '0'} --memory_limit {self.memory_limit} --cores {self.cores} --wall_time {self.wall_time} --num_volumes {self.num_volumes} --project {self.project}"
