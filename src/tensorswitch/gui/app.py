@@ -1727,9 +1727,9 @@ echo "========================================="
         script_content = self._generate_coordinator_script(input_path, output_path, max_level)
 
         # Write script to persistent location (not /tmp which gets cleaned up)
-        # Use output directory so it persists and user can inspect it
-        tensorswitch_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
-        output_dir = os.path.join(tensorswitch_root, "output")
+        # Use user's output directory so it's on shared filesystem accessible to compute nodes
+        # output_path is the zarr file/directory, so get its parent directory
+        output_dir = os.path.dirname(output_path) if output_path else os.path.expanduser("~/tensorswitch_jobs")
         os.makedirs(output_dir, exist_ok=True)
 
         # Create script with timestamp to avoid collisions
