@@ -142,10 +142,16 @@ def zarr3_store_spec(path, shape, dtype, use_shard=True, level_path="s0", use_om
         # Adjust inner chunk shape for different array dimensions
         if len(shape) == 3 and len(inner_chunk_shape) == 3:
             adjusted_inner_chunk = inner_chunk_shape
+        elif len(shape) == 3 and len(inner_chunk_shape) == 2:
+            adjusted_inner_chunk = [1] + inner_chunk_shape  # 2D images: CYX with YX chunks -> add Z=1
         elif len(shape) == 4 and len(inner_chunk_shape) == 3:
             adjusted_inner_chunk = [1] + inner_chunk_shape  # CZYX
+        elif len(shape) == 4 and len(inner_chunk_shape) == 2:
+            adjusted_inner_chunk = [1, 1] + inner_chunk_shape  # 2D images: CZYX with YX chunks
         elif len(shape) == 5 and len(inner_chunk_shape) == 3:
             adjusted_inner_chunk = [1, 1] + inner_chunk_shape  # TCZYX
+        elif len(shape) == 5 and len(inner_chunk_shape) == 2:
+            adjusted_inner_chunk = [1, 1, 1] + inner_chunk_shape  # 2D images: TCZYX with YX chunks
         else:
             adjusted_inner_chunk = inner_chunk_shape
         
@@ -171,10 +177,16 @@ def zarr3_store_spec(path, shape, dtype, use_shard=True, level_path="s0", use_om
         if custom_shard_shape is not None:
             if len(shape) == 3 and len(custom_shard_shape) == 3:
                 chunk_shape = custom_shard_shape
+            elif len(shape) == 3 and len(custom_shard_shape) == 2:
+                chunk_shape = [1] + custom_shard_shape  # 2D images: CYX with YX shards -> add Z=1
             elif len(shape) == 4 and len(custom_shard_shape) == 3:
                 chunk_shape = [1] + custom_shard_shape  # CZYX
+            elif len(shape) == 4 and len(custom_shard_shape) == 2:
+                chunk_shape = [1, 1] + custom_shard_shape  # 2D images: CZYX with YX shards
             elif len(shape) == 5 and len(custom_shard_shape) == 3:
                 chunk_shape = [1, 1] + custom_shard_shape  # TCZYX
+            elif len(shape) == 5 and len(custom_shard_shape) == 2:
+                chunk_shape = [1, 1, 1] + custom_shard_shape  # 2D images: TCZYX with YX shards
             else:
                 chunk_shape = custom_shard_shape
         else:

@@ -53,10 +53,16 @@ def get_total_chunks_for_task(args, use_v2_encoding=True):
 
         # Handle custom shapes for chunk counting
         if custom_shard_shape:
-            if len(volume.shape) == 4 and len(custom_shard_shape) == 3:
+            if len(volume.shape) == 3 and len(custom_shard_shape) == 2:
+                chunk_shape_for_counting = [1] + custom_shard_shape  # 2D images: CYX with YX shards
+            elif len(volume.shape) == 4 and len(custom_shard_shape) == 3:
                 chunk_shape_for_counting = [1] + custom_shard_shape
+            elif len(volume.shape) == 4 and len(custom_shard_shape) == 2:
+                chunk_shape_for_counting = [1, 1] + custom_shard_shape  # 2D images: CZYX with YX shards
             elif len(volume.shape) == 5 and len(custom_shard_shape) == 3:
                 chunk_shape_for_counting = [1, 1] + custom_shard_shape
+            elif len(volume.shape) == 5 and len(custom_shard_shape) == 2:
+                chunk_shape_for_counting = [1, 1, 1] + custom_shard_shape  # 2D images: TCZYX with YX shards
             else:
                 chunk_shape_for_counting = custom_shard_shape
             total_chunks = get_total_chunks_from_store(temp_store, chunk_shape_for_counting)
@@ -79,10 +85,16 @@ def get_total_chunks_for_task(args, use_v2_encoding=True):
 
         # Handle custom shapes for chunk counting
         if custom_shard_shape:
-            if len(volume.shape) == 4 and len(custom_shard_shape) == 3:
+            if len(volume.shape) == 3 and len(custom_shard_shape) == 2:
+                chunk_shape_for_counting = [1] + custom_shard_shape  # 2D images: CYX with YX shards
+            elif len(volume.shape) == 4 and len(custom_shard_shape) == 3:
                 chunk_shape_for_counting = [1] + custom_shard_shape
+            elif len(volume.shape) == 4 and len(custom_shard_shape) == 2:
+                chunk_shape_for_counting = [1, 1] + custom_shard_shape  # 2D images: CZYX with YX shards
             elif len(volume.shape) == 5 and len(custom_shard_shape) == 3:
                 chunk_shape_for_counting = [1, 1] + custom_shard_shape
+            elif len(volume.shape) == 5 and len(custom_shard_shape) == 2:
+                chunk_shape_for_counting = [1, 1, 1] + custom_shard_shape  # 2D images: TCZYX with YX shards
             else:
                 chunk_shape_for_counting = custom_shard_shape
             total_chunks = get_total_chunks_from_store(temp_store, chunk_shape_for_counting)
@@ -172,12 +184,14 @@ def submit_job(args, use_v2_encoding=True):
         print(f"vol{i}: {start_idx}–{stop_idx}")
 
         # Extract setup number from base_path if any
+        # Build job name with optional prefix
+        prefix = f"{args.job_prefix}_" if args.job_prefix else ""
         match = re.search(r"setup(\d+)", args.base_path)
         if match:
             setup_number = match.group(1)
-            job_name = f"{args.task}_setup{setup_number}_s{args.level}_vol{i}"
+            job_name = f"{prefix}{args.task}_setup{setup_number}_s{args.level}_vol{i}"
         else:
-            job_name = f"{args.task}_s{args.level}_vol{i}"
+            job_name = f"{prefix}{args.task}_s{args.level}_vol{i}"
 
 
         command = [
@@ -235,6 +249,7 @@ def main():
     parser.add_argument("--project", default="None", help="Project to charge")
     parser.add_argument("--cores", type=str, default="2", help="Number of cores for LSF job (-n flag)")
     parser.add_argument("--wall_time", type=str, default="1:00", help="Wall time for LSF job (-W flag)")
+    parser.add_argument("--job_prefix", type=str, default="", help="Prefix for job names (e.g., 'ahrens_', 'lavis_brain_')")
     parser.add_argument("--custom_shard_shape", type=str, help="Custom shard shape as comma-separated values (e.g., '128,576,576')")
     parser.add_argument("--custom_chunk_shape", type=str, help="Custom chunk shape as comma-separated values (e.g., '32,32,32')")
     parser.add_argument("--use_dask_jobqueue", action="store_true", help="Use Dask JobQueue instead of direct LSF submission")
