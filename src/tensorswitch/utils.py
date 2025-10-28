@@ -596,11 +596,22 @@ def create_zarr3_ome_metadata(ome_xml, array_shape, image_name, pixel_sizes=None
     # Build axes information based on array shape
     axes = []
     if len(array_shape) == 3:
-        axes = [
-            {"name": "z", "type": "space", "unit": "micrometer"},
-            {"name": "y", "type": "space", "unit": "micrometer"},
-            {"name": "x", "type": "space", "unit": "micrometer"}
-        ]
+        # Check if this is 2D multi-channel (CYX) or true 3D volume (ZYX)
+        # Heuristic: if first dimension is small (<=10), treat as channels
+        if array_shape[0] <= 10:
+            # 2D multi-channel: CYX
+            axes = [
+                {"name": "c", "type": "channel"},
+                {"name": "y", "type": "space", "unit": "micrometer"},
+                {"name": "x", "type": "space", "unit": "micrometer"}
+            ]
+        else:
+            # True 3D volume: ZYX
+            axes = [
+                {"name": "z", "type": "space", "unit": "micrometer"},
+                {"name": "y", "type": "space", "unit": "micrometer"},
+                {"name": "x", "type": "space", "unit": "micrometer"}
+            ]
     elif len(array_shape) == 4:
         axes = [
             {"name": "c", "type": "channel"},
@@ -619,18 +630,23 @@ def create_zarr3_ome_metadata(ome_xml, array_shape, image_name, pixel_sizes=None
     else:
         # Fallback for other dimensions
         axes = [{"name": f"axis_{i}", "type": "space"} for i in range(len(array_shape))]
-    
+
     # Extract pixel sizes from OME XML if available
     scale_factors = [1.0] * len(array_shape)
     if pixel_sizes is not None:
         # Map pixel sizes to the correct axes
-        if len(array_shape) == 3:  # ZYX
-            scale_factors = [pixel_sizes.get('z', 1.0), pixel_sizes.get('y', 1.0), pixel_sizes.get('x', 1.0)]
+        if len(array_shape) == 3:
+            if array_shape[0] <= 10:
+                # 2D multi-channel: CYX -> scale = [1.0, y, x]
+                scale_factors = [1.0, pixel_sizes.get('y', 1.0), pixel_sizes.get('x', 1.0)]
+            else:
+                # True 3D: ZYX -> scale = [z, y, x]
+                scale_factors = [pixel_sizes.get('z', 1.0), pixel_sizes.get('y', 1.0), pixel_sizes.get('x', 1.0)]
         elif len(array_shape) == 4:  # CZYX
             scale_factors = [1.0, pixel_sizes.get('z', 1.0), pixel_sizes.get('y', 1.0), pixel_sizes.get('x', 1.0)]
         elif len(array_shape) == 5:  # TCZYX
             scale_factors = [1.0, 1.0, pixel_sizes.get('z', 1.0), pixel_sizes.get('y', 1.0), pixel_sizes.get('x', 1.0)]
-    
+
     # Create coordinate transformations for s0 level
     coordinate_transformations = [{
         "type": "scale",
