@@ -43,7 +43,7 @@ def update_zarr_ome_xml(multiscale_path, source_tiff_path):
     else:
         print("No OME XML found in source TIFF")
 
-def process(base_path, output_path, use_shard=False, memory_limit=50, start_idx=0, stop_idx=None, use_ome_structure=True, create_dual_metadata=True, use_v2_encoding=True):
+def process(base_path, output_path, use_shard=False, memory_limit=50, start_idx=0, stop_idx=None, use_ome_structure=True, custom_shard_shape=None, custom_chunk_shape=None, create_dual_metadata=True, use_v2_encoding=True):
     print(f"Loading TIFF stack from: {base_path}", flush=True)
 
     volume = load_tiff_stack(base_path)
@@ -53,7 +53,7 @@ def process(base_path, output_path, use_shard=False, memory_limit=50, start_idx=
     # DEBUG
     print(f"Volume dimensions: {len(volume.shape)}D")
     print(f"Volume chunk structure from dask: {volume.chunksize}")
-    
+
     # DEBUG: what a single chunk looks like
     if len(volume.shape) == 4:
         print("4D array detected - likely (C, Z, Y, X)")
@@ -74,6 +74,8 @@ def process(base_path, output_path, use_shard=False, memory_limit=50, start_idx=
         use_shard=use_shard,
         level_path="s0",
         use_ome_structure=use_ome_structure,
+        custom_shard_shape=custom_shard_shape,
+        custom_chunk_shape=custom_chunk_shape,
         use_v2_encoding=use_v2_encoding
     )
 

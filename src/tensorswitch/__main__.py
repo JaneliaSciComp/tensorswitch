@@ -45,10 +45,23 @@ def get_total_chunks_for_task(args, use_v2_encoding=True):
             dtype=str(volume.dtype),
             use_shard=bool(args.use_shard),
             use_ome_structure=bool(args.use_ome_structure),
+            custom_shard_shape=custom_shard_shape,
+            custom_chunk_shape=custom_chunk_shape,
             use_v2_encoding=use_v2_encoding
         )
         temp_store = ts.open(store_spec, create=True, delete_existing=True).result()
-        total_chunks = get_total_chunks_from_store(temp_store)
+
+        # Handle custom shapes for chunk counting
+        if custom_shard_shape:
+            if len(volume.shape) == 4 and len(custom_shard_shape) == 3:
+                chunk_shape_for_counting = [1] + custom_shard_shape
+            elif len(volume.shape) == 5 and len(custom_shard_shape) == 3:
+                chunk_shape_for_counting = [1, 1] + custom_shard_shape
+            else:
+                chunk_shape_for_counting = custom_shard_shape
+            total_chunks = get_total_chunks_from_store(temp_store, chunk_shape_for_counting)
+        else:
+            total_chunks = get_total_chunks_from_store(temp_store)
 
     elif args.task == "nd2_to_zarr3_s0":
         volume = load_nd2_stack(args.base_path)
@@ -279,7 +292,7 @@ def main():
         elif args.task == "downsample_shard_zarr3":
             downsample_shard_zarr3.process(args.base_path, args.output_path, args.level, args.start_idx, args.stop_idx, bool(args.downsample), bool(args.use_shard), args.memory_limit, custom_shard_shape, custom_chunk_shape)
         elif args.task == "tiff_to_zarr3_s0":
-            tiff_to_zarr3_s0.process(args.base_path, args.output_path, bool(args.use_shard), args.memory_limit, args.start_idx, args.stop_idx, bool(args.use_ome_structure), create_dual_metadata, use_v2_encoding)
+            tiff_to_zarr3_s0.process(args.base_path, args.output_path, bool(args.use_shard), args.memory_limit, args.start_idx, args.stop_idx, bool(args.use_ome_structure), custom_shard_shape, custom_chunk_shape, create_dual_metadata, use_v2_encoding)
         elif args.task == "nd2_to_zarr3_s0":
             nd2_to_zarr3_s0.process(args.base_path, args.output_path, bool(args.use_shard), args.memory_limit, args.start_idx, args.stop_idx, bool(args.use_ome_structure), custom_shard_shape, custom_chunk_shape, create_dual_metadata, use_v2_encoding)
         elif args.task == "ims_to_zarr3_s0":
