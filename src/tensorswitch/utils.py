@@ -245,11 +245,27 @@ def zarr3_store_spec(path, shape, dtype, use_shard=True, level_path="s0", use_om
         }
     }
 
-def downsample_spec(base_spec):
+def downsample_spec(base_spec, array_shape=None, dimension_names=None):
+    """
+    Create downsample spec with appropriate factors based on dimension names.
+    For 2D multi-channel images (CYX), only downsample Y and X, not C.
+    """
+    # Default: downsample all dimensions by 2x
+    downsample_factors = [2] * len(array_shape) if array_shape is not None else [2, 2, 2]
+
+    # If we have dimension_names, adjust factors to preserve non-spatial dimensions
+    if dimension_names and array_shape:
+        downsample_factors = []
+        for dim_name in dimension_names:
+            if dim_name in ['c', 't']:  # Channel or Time - don't downsample
+                downsample_factors.append(1)
+            else:  # Spatial dimensions (x, y, z) - downsample by 2x
+                downsample_factors.append(2)
+
     return {
         'driver': 'downsample',
         'base': get_zarr_store_spec(base_spec),
-        'downsample_factors': [2, 2, 2],
+        'downsample_factors': downsample_factors,
         'downsample_method': 'mode'
     }
 
