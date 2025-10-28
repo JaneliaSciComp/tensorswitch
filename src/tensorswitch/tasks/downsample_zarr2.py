@@ -41,7 +41,24 @@ def process(base_path, output_path, level, start_idx=0, stop_idx=None, downsampl
 
     # Apply downsampling if requested and level > 0
     if downsample and level > 0:
-        downsample_spec_dict = downsample_spec(zarr_store_spec)
+        # Extract dimension_names for proper downsampling
+        dimension_names = None
+        try:
+            # For Zarr v2, try to read from .zattrs file
+            zattrs_path = os.path.join(zarr_input_path, '.zattrs')
+            if os.path.exists(zattrs_path):
+                with open(zattrs_path, 'r') as f:
+                    attrs = json.load(f)
+                    dimension_names = attrs.get('_ARRAY_DIMENSIONS')
+                    print(f"Extracted dimension_names from .zattrs: {dimension_names}")
+        except Exception as e:
+            print(f"Warning: Could not extract dimension_names from zarr2: {e}")
+
+        if not dimension_names:
+            print("Warning: No dimension_names found for zarr2, defaulting to [2,2,2] downsampling")
+
+        print(f"Downsampling zarr2 with dimension_names: {dimension_names}")
+        downsample_spec_dict = downsample_spec(zarr_store_spec, zarr_store.shape, dimension_names)
         downsample_store = ts.open(downsample_spec_dict).result()
     else:
         downsample_store = zarr_store
