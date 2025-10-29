@@ -71,9 +71,39 @@ def process(base_path, output_path, level, start_idx=0, stop_idx=None, downsampl
 
     downsampled_saved = create_output_store(downsampled_saved_spec)
 
+    # Pre-create shard directory structure to avoid race conditions with parallel workers
+    if use_shard and custom_shard_shape:
+        print("Pre-creating shard directory structure...")
+        shard_shape = custom_shard_shape if isinstance(custom_shard_shape, list) else [int(x) for x in custom_shard_shape.split(',')]
+        output_shape = list(downsample_store.shape)
+
+        # Adjust shard shape to match array dimensions
+        if len(output_shape) == 4 and len(shard_shape) == 3:
+            shard_shape = [1] + shard_shape  # CZYX
+        elif len(output_shape) == 3 and len(shard_shape) == 2:
+            shard_shape = [1] + shard_shape  # CYX
+
+        # Calculate number of shards in each dimension
+        num_shards = [((dim_size + shard_size - 1) // shard_size) for dim_size, shard_size in zip(output_shape, shard_shape)]
+
+        # Create all shard parent directories
+        base_shard_path = os.path.join(output_array_path, "c")
+        if len(num_shards) == 4:  # CZYX
+            for c in range(num_shards[0]):
+                for z in range(num_shards[1]):
+                    for y in range(num_shards[2]):
+                        dir_path = os.path.join(base_shard_path, str(c), str(z), str(y))
+                        os.makedirs(dir_path, exist_ok=True)
+        elif len(num_shards) == 3:  # CYX or ZYX
+            for dim0 in range(num_shards[0]):
+                for dim1 in range(num_shards[1]):
+                    dir_path = os.path.join(base_shard_path, str(dim0), str(dim1))
+                    os.makedirs(dir_path, exist_ok=True)
+        print(f"Created directory structure for {np.prod(num_shards[:3] if len(num_shards) >= 3 else num_shards)} shard locations")
+
     #chunk_shape = downsampled_saved.chunk_layout.write_chunk.shape
     #chunk_domains = get_chunk_domains(chunk_shape, downsampled_saved)
-    
+
     chunk_shape = downsample_store.chunk_layout.read_chunk.shape
     print("Shape of downsample_store:", downsample_store.shape)
     print("Chunk shape used:", chunk_shape)

@@ -81,6 +81,64 @@ def process(base_path, output_path, use_shard=False, memory_limit=50, start_idx=
 
     store = ts.open(store_spec, create=True, open=True, delete_existing=False).result()
 
+    # Note: Shard directory structure should be pre-created by submit_job() before workers start.
+    # This block is kept as a safety fallback but should rarely execute.
+    if use_shard and custom_shard_shape:
+        # Check if directories already exist (they should have been pre-created)
+        if use_ome_structure:
+            base_check_path = os.path.join(output_path, "multiscale", "s0", "c", "0")
+        else:
+            base_check_path = os.path.join(output_path, "c", "0")
+
+        if os.path.exists(base_check_path):
+            print("✓ Shard directories already exist (pre-created), skipping redundant creation")
+        else:
+            print("⚠ Shard directories not found, creating them now (this should be rare)...")
+            import numpy as np
+            shard_shape = custom_shard_shape if isinstance(custom_shard_shape, list) else [int(x) for x in custom_shard_shape.split(',')]
+            output_shape = list(volume.shape)
+
+            # Adjust shard shape to match array dimensions
+            if len(output_shape) == 4 and len(shard_shape) == 3:
+                shard_shape = [1] + shard_shape  # CZYX
+            elif len(output_shape) == 4 and len(shard_shape) == 2:
+                shard_shape = [1, 1] + shard_shape  # CZYX with YX shards
+            elif len(output_shape) == 3 and len(shard_shape) == 2:
+                shard_shape = [1] + shard_shape  # CYX
+            elif len(output_shape) == 5 and len(shard_shape) == 3:
+                shard_shape = [1, 1] + shard_shape  # TCZYX
+            elif len(output_shape) == 5 and len(shard_shape) == 2:
+                shard_shape = [1, 1, 1] + shard_shape  # TCZYX with YX shards
+
+            # Calculate number of shards in each dimension
+            num_shards = [((dim_size + shard_size - 1) // shard_size) for dim_size, shard_size in zip(output_shape, shard_shape)]
+
+            # Create all shard parent directories
+            if use_ome_structure:
+                base_shard_path = os.path.join(output_path, "multiscale", "s0", "c")
+            else:
+                base_shard_path = os.path.join(output_path, "c")
+
+            if len(num_shards) == 4:  # CZYX
+                for c in range(num_shards[0]):
+                    for z in range(num_shards[1]):
+                        for y in range(num_shards[2]):
+                            dir_path = os.path.join(base_shard_path, str(c), str(z), str(y))
+                            os.makedirs(dir_path, exist_ok=True)
+            elif len(num_shards) == 3:  # CYX or ZYX
+                for dim0 in range(num_shards[0]):
+                    for dim1 in range(num_shards[1]):
+                        dir_path = os.path.join(base_shard_path, str(dim0), str(dim1))
+                        os.makedirs(dir_path, exist_ok=True)
+            elif len(num_shards) == 5:  # TCZYX
+                for t in range(num_shards[0]):
+                    for c in range(num_shards[1]):
+                        for z in range(num_shards[2]):
+                            for y in range(num_shards[3]):
+                                dir_path = os.path.join(base_shard_path, str(t), str(c), str(z), str(y))
+                                os.makedirs(dir_path, exist_ok=True)
+            print(f"Created directory structure for {np.prod(num_shards[:3] if len(num_shards) >= 3 else num_shards)} shard locations")
+
     # Prepare chunk domains and filter to assigned range
     chunk_shape = store.chunk_layout.write_chunk.shape
     total_chunks = get_total_chunks_from_store(store, chunk_shape=chunk_shape)
