@@ -24,6 +24,88 @@ from .dask_utils import submit_dask_job, submit_dask_wrapper_job
 os.umask(0o0002)
 
 
+def precreate_shard_directories(args, volume_shape, use_v2_encoding=True):
+    """
+    Pre-create all shard directories before job submission to avoid race conditions.
+    This function runs once on the submission node, not on each worker.
+    """
+    # Only create directories if sharding is enabled
+    if not bool(args.use_shard):
+        print("Sharding disabled, skipping directory pre-creation")
+        return
+
+    if not args.custom_shard_shape:
+        print("No custom shard shape specified, skipping directory pre-creation")
+        return
+
+    print("\n" + "="*80)
+    print("PRE-CREATING SHARD DIRECTORY STRUCTURE")
+    print("="*80)
+
+    # Parse shard shape
+    shard_shape = [int(x) for x in args.custom_shard_shape.split(',')]
+    output_shape = list(volume_shape)
+
+    # Adjust shard shape to match array dimensions
+    if len(output_shape) == 4 and len(shard_shape) == 3:
+        shard_shape = [1] + shard_shape  # CZYX
+    elif len(output_shape) == 4 and len(shard_shape) == 2:
+        shard_shape = [1, 1] + shard_shape  # CZYX with YX shards
+    elif len(output_shape) == 3 and len(shard_shape) == 2:
+        shard_shape = [1] + shard_shape  # CYX
+    elif len(output_shape) == 5 and len(shard_shape) == 3:
+        shard_shape = [1, 1] + shard_shape  # TCZYX
+    elif len(output_shape) == 5 and len(shard_shape) == 2:
+        shard_shape = [1, 1, 1] + shard_shape  # TCZYX with YX shards
+
+    # Calculate number of shards in each dimension
+    num_shards = [((dim_size + shard_size - 1) // shard_size)
+                  for dim_size, shard_size in zip(output_shape, shard_shape)]
+
+    print(f"Data shape: {output_shape}")
+    print(f"Shard shape: {shard_shape}")
+    print(f"Number of shards per dimension: {num_shards}")
+
+    # Determine base path
+    use_ome_structure = bool(args.use_ome_structure)
+    if use_ome_structure:
+        base_shard_path = os.path.join(args.output_path, "multiscale", "s0", "c")
+    else:
+        base_shard_path = os.path.join(args.output_path, "c")
+
+    # Create all shard parent directories
+    total_dirs = 0
+    import time
+    start_time = time.time()
+
+    if len(num_shards) == 4:  # CZYX
+        for c in range(num_shards[0]):
+            for z in range(num_shards[1]):
+                for y in range(num_shards[2]):
+                    dir_path = os.path.join(base_shard_path, str(c), str(z), str(y))
+                    os.makedirs(dir_path, exist_ok=True)
+                    total_dirs += 1
+    elif len(num_shards) == 3:  # CYX or ZYX
+        for dim0 in range(num_shards[0]):
+            for dim1 in range(num_shards[1]):
+                dir_path = os.path.join(base_shard_path, str(dim0), str(dim1))
+                os.makedirs(dir_path, exist_ok=True)
+                total_dirs += 1
+    elif len(num_shards) == 5:  # TCZYX
+        for t in range(num_shards[0]):
+            for c in range(num_shards[1]):
+                for z in range(num_shards[2]):
+                    for y in range(num_shards[3]):
+                        dir_path = os.path.join(base_shard_path, str(t), str(c), str(z), str(y))
+                        os.makedirs(dir_path, exist_ok=True)
+                        total_dirs += 1
+
+    elapsed = time.time() - start_time
+    print(f"✓ Created {total_dirs} shard directories in {elapsed:.2f} seconds")
+    print(f"✓ Base path: {base_shard_path}")
+    print("="*80 + "\n")
+
+
 def get_total_chunks_for_task(args, use_v2_encoding=True):
     """Calculate total chunks for a given task."""
     # Parse custom shard and chunk shapes
@@ -165,6 +247,26 @@ def submit_job(args, use_v2_encoding=True):
 
     print(f"The total number of chunks is {total_chunks} with downsample={args.downsample} and level={args.level}")
 
+    # Get volume shape for directory pre-creation
+    volume_shape = None
+    if args.task == "tiff_to_zarr3_s0":
+        volume = load_tiff_stack(args.base_path)
+        volume_shape = volume.shape
+    elif args.task == "nd2_to_zarr3_s0":
+        volume = load_nd2_stack(args.base_path)
+        volume_shape = volume.shape
+    elif args.task == "ims_to_zarr3_s0":
+        volume = load_ims_stack(args.base_path)
+        volume_shape = volume.shape
+    elif args.task == "downsample_shard_zarr3":
+        # For downsampling, get shape from the source zarr
+        store = ts.open({'driver': 'zarr3', 'kvstore': {'driver': 'file', 'path': args.base_path}}).result()
+        volume_shape = store.shape
+
+    # Pre-create all shard directories BEFORE submitting any jobs
+    if volume_shape is not None and args.task in ["tiff_to_zarr3_s0", "nd2_to_zarr3_s0", "ims_to_zarr3_s0"]:
+        precreate_shard_directories(args, volume_shape, use_v2_encoding)
+
     # Check if using Dask JobQueue
     if hasattr(args, 'use_dask_jobqueue') and args.use_dask_jobqueue:
         print("Using Dask JobQueue submission")
@@ -172,16 +274,40 @@ def submit_job(args, use_v2_encoding=True):
 
     # Traditional LSF bsub method
     print("Using traditional LSF bsub submission")
-    
-    # The number of volumes can be at most total_chunks
-    num_volumes = min(total_chunks, args.num_volumes)
+
+    # Calculate chunks per shard for shard-aligned distribution
+    chunks_per_shard = 1  # Default: no sharding
+    if bool(args.use_shard) and args.custom_shard_shape and args.custom_chunk_shape:
+        # Parse shard and chunk shapes
+        shard_shape = [int(x) for x in args.custom_shard_shape.split(',')]
+        chunk_shape = [int(x) for x in args.custom_chunk_shape.split(',')]
+
+        # Calculate chunks per shard in each dimension
+        chunks_per_shard = 1
+        for s, c in zip(shard_shape, chunk_shape):
+            chunks_per_shard *= (s // c)
+
+        print(f"Shard-aligned distribution: {chunks_per_shard} chunks per shard")
+
+    # Calculate total shards (round up)
+    total_shards = (total_chunks + chunks_per_shard - 1) // chunks_per_shard
+
+    # The number of volumes can be at most total_shards
+    num_volumes = min(total_shards, args.num_volumes)
+
     for i in range(num_volumes):
-        start_idx = i * (total_chunks // num_volumes)
+        # Distribute by complete shards
+        start_shard = i * (total_shards // num_volumes)
         if i == num_volumes - 1:
-            stop_idx = total_chunks
+            stop_shard = total_shards
         else:
-            stop_idx = (i + 1) * (total_chunks // num_volumes)
-        print(f"vol{i}: {start_idx}–{stop_idx}")
+            stop_shard = (i + 1) * (total_shards // num_volumes)
+
+        # Convert shard indices to chunk indices
+        start_idx = start_shard * chunks_per_shard
+        stop_idx = min(stop_shard * chunks_per_shard, total_chunks)
+
+        print(f"vol{i}: shards {start_shard}–{stop_shard} → chunks {start_idx}–{stop_idx}")
 
         # Extract setup number from base_path if any
         # Build job name with optional prefix
@@ -230,6 +356,8 @@ def submit_job(args, use_v2_encoding=True):
 
         subprocess.run(command)
         print(f"Submitted {job_name}, volume={i}, chunks={start_idx}-{stop_idx}")
+
+        # Small delay between job submissions to avoid overwhelming the scheduler
         time.sleep(0.1)
 
 def main():
@@ -317,7 +445,7 @@ def main():
         elif args.task == "ims_to_zarr2_s0":
             ims_to_zarr2_s0.process(args.base_path, args.output_path, args.memory_limit, args.start_idx, args.stop_idx, bool(args.use_ome_structure))
         elif args.task == "tiff_to_zarr2_s0":
-            tiff_to_zarr2_s0.process(args.base_path, args.output_path, args.memory_limit, args.start_idx, args.stop_idx, bool(args.use_ome_structure))
+            tiff_to_zarr2_s0.process(args.base_path, args.output_path, args.memory_limit, args.start_idx, args.stop_idx, bool(args.use_ome_structure), custom_chunk_shape)
         elif args.task == "downsample_zarr2":
             downsample_zarr2.process(args.base_path, args.output_path, args.level, args.start_idx, args.stop_idx, bool(args.downsample), args.memory_limit, custom_chunk_shape)
         elif args.task == "precomputed_to_n5":
