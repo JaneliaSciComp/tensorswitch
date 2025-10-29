@@ -11,7 +11,7 @@ def process(base_path, output_path, level, start_idx=0, stop_idx=None, downsampl
     if base_path.endswith(f"s{level - 1}") or level == 0:
         zarr_input_path = base_path
     else:
-        zarr_input_path = os.path.join(base_path, "multiscale", f"s{level - 1}")
+        zarr_input_path = os.path.join(base_path, f"s{level - 1}")
 
     input_driver = get_input_driver(zarr_input_path)
         
@@ -21,8 +21,6 @@ def process(base_path, output_path, level, start_idx=0, stop_idx=None, downsampl
     }
 
     downsampled_saved_path = output_path
-
-    os.makedirs(f"{output_path}/multiscale", exist_ok=True)
 
     print(f" Downsample: {downsample}, Shard: {use_shard}, Level: {level}")
     print(f"Reading from: {zarr_input_path}")
@@ -66,7 +64,7 @@ def process(base_path, output_path, level, start_idx=0, stop_idx=None, downsampl
     )
 
     # Create basic output directory structure
-    output_array_path = f"{downsampled_saved_path}/multiscale/s{level}"
+    output_array_path = f"{downsampled_saved_path}/s{level}"
     os.makedirs(output_array_path, exist_ok=True)
 
     downsampled_saved = create_output_store(downsampled_saved_spec)

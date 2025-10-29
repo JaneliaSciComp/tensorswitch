@@ -69,7 +69,7 @@ def precreate_shard_directories(args, volume_shape, use_v2_encoding=True):
     # Determine base path
     use_ome_structure = bool(args.use_ome_structure)
     if use_ome_structure:
-        base_shard_path = os.path.join(args.output_path, "multiscale", "s0", "c")
+        base_shard_path = os.path.join(args.output_path, "s0", "c")
     else:
         base_shard_path = os.path.join(args.output_path, "c")
 
