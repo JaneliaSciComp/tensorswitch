@@ -13,12 +13,12 @@ import dask.array as da
 import os
 import json
 
-def update_zarr_ome_xml_nd2(multiscale_path, source_nd2_path):
+def update_zarr_ome_xml_nd2(zarr_root_path, source_nd2_path):
     """Update zarr.json with OME XML from source ND2 (like update_metadata.py --check-ome-xml)"""
-    zarr_json_path = os.path.join(multiscale_path, 'zarr.json')
+    zarr_json_path = os.path.join(zarr_root_path, 'zarr.json')
     
     if not os.path.exists(zarr_json_path):
-        raise ValueError(f"zarr.json not found in {multiscale_path}")
+        raise ValueError(f"zarr.json not found in {zarr_root_path}")
     
     # Read current metadata
     with open(zarr_json_path, 'r') as f:
@@ -129,15 +129,14 @@ def process(base_path, output_path, use_shard=False, memory_limit=50, start_idx=
             image_name = os.path.splitext(os.path.basename(base_path))[0]
             
             zarr3_metadata = convert_ome_to_zarr3_metadata(ome_metadata, volume.shape, image_name)
-            # Write zarr.json to multiscale folder 
-            multiscale_path = os.path.join(output_path, "multiscale")
-            write_zarr3_group_metadata(multiscale_path, zarr3_metadata)
+            # Write zarr.json to root (no multiscale folder)
+            write_zarr3_group_metadata(output_path, zarr3_metadata)
             print("OME-Zarr metadata written successfully", flush=True)
             
             # Update metadata with OME XML from source ND2 (like update_metadata.py --check-ome-xml)
             try:
                 print("Updating zarr.json with enhanced OME XML metadata...", flush=True)
-                update_zarr_ome_xml_nd2(multiscale_path, base_path)
+                update_zarr_ome_xml_nd2(output_path, base_path)
                 print("Enhanced OME XML metadata updated successfully", flush=True)
             except Exception as e:
                 print(f"Warning: Could not update enhanced OME XML metadata: {e}", flush=True)

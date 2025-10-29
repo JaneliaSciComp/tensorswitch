@@ -86,7 +86,7 @@ def process(base_path, output_path, use_shard=False, memory_limit=50, start_idx=
     if use_shard and custom_shard_shape:
         # Check if directories already exist (they should have been pre-created)
         if use_ome_structure:
-            base_check_path = os.path.join(output_path, "multiscale", "s0", "c", "0")
+            base_check_path = os.path.join(output_path, "s0", "c", "0")
         else:
             base_check_path = os.path.join(output_path, "c", "0")
 
@@ -115,7 +115,7 @@ def process(base_path, output_path, use_shard=False, memory_limit=50, start_idx=
 
             # Create all shard parent directories
             if use_ome_structure:
-                base_shard_path = os.path.join(output_path, "multiscale", "s0", "c")
+                base_shard_path = os.path.join(output_path, "s0", "c")
             else:
                 base_shard_path = os.path.join(output_path, "c")
 
@@ -183,15 +183,14 @@ def process(base_path, output_path, use_shard=False, memory_limit=50, start_idx=
             image_name = os.path.splitext(os.path.basename(base_path))[0]
             
             zarr3_metadata = convert_ome_to_zarr3_metadata(ome_metadata, volume.shape, image_name)
-            # Write zarr.json to multiscale folder
-            multiscale_path = os.path.join(output_path, "multiscale")
-            write_zarr3_group_metadata(multiscale_path, zarr3_metadata)
+            # Write zarr.json to root (no multiscale folder)
+            write_zarr3_group_metadata(output_path, zarr3_metadata)
             print("OME-Zarr metadata written successfully", flush=True)
-            
+
             # Update metadata with OME XML from source TIFF (like update_metadata.py --check-ome-xml)
             try:
                 print("Updating zarr.json with enhanced OME XML metadata...", flush=True)
-                update_zarr_ome_xml(multiscale_path, base_path)
+                update_zarr_ome_xml(output_path, base_path)
                 print("Enhanced OME XML metadata updated successfully", flush=True)
             except Exception as e:
                 print(f"Warning: Could not update enhanced OME XML metadata: {e}", flush=True)
