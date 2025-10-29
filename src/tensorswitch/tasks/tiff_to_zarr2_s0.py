@@ -38,43 +38,84 @@ def update_zarr2_ome_xml_tiff(zarr_path, source_tiff_path):
 
     print(f"Successfully updated source metadata in {zattrs_path}")
 
-def process(base_path, output_path, memory_limit=50, start_idx=0, stop_idx=None, use_ome_structure=True):
+def process(base_path, output_path, memory_limit=50, start_idx=0, stop_idx=None, use_ome_structure=True, custom_chunk_shape=None):
     print(f"Loading TIFF stack from: {base_path}", flush=True)
 
     volume = load_tiff_stack(base_path)
     print(f"Original volume shape: {volume.shape}, dtype: {volume.dtype}", flush=True)
-    
+
 
     # Determine output shape and chunk strategy
     print(f"Volume dimensions: {len(volume.shape)}D")
     print(f"Volume shape: {volume.shape}")
-    
-    # Default chunk shapes based on dimensions
-    if len(volume.shape) == 3:
-        print("3D array detected - likely (Z, Y, X)")
-        print(f"Z-slices: {volume.shape[0]}")
-        print(f"Y (height): {volume.shape[1]}")
-        print(f"X (width): {volume.shape[2]}")
-        chunk_shape = (1, min(2304, volume.shape[1]), min(2304, volume.shape[2]))
-        
-    elif len(volume.shape) == 4:
-        print("4D array detected - likely (T, Z, Y, X)")
-        print(f"T-frames: {volume.shape[0]}")
-        print(f"Z-slices: {volume.shape[1]}")
-        print(f"Y (height): {volume.shape[2]}")
-        print(f"X (width): {volume.shape[3]}")
-        chunk_shape = (1, 1, min(2304, volume.shape[2]), min(2304, volume.shape[3]))
-        
-    elif len(volume.shape) == 5:
-        print("5D array detected - likely (T, C, Z, Y, X)")
-        print(f"T-frames: {volume.shape[0]}")
-        print(f"C-channels: {volume.shape[1]}")
-        print(f"Z-slices: {volume.shape[2]}")
-        print(f"Y (height): {volume.shape[3]}")
-        print(f"X (width): {volume.shape[4]}")
-        chunk_shape = (1, 1, 1, min(2304, volume.shape[3]), min(2304, volume.shape[4]))
+
+    # Use custom chunk shape if provided, otherwise use defaults
+    if custom_chunk_shape:
+        # Convert custom_chunk_shape to tuple if it's a list
+        if isinstance(custom_chunk_shape, list):
+            chunk_shape_base = tuple(custom_chunk_shape)
+        else:
+            chunk_shape_base = custom_chunk_shape
+
+        # Adjust chunk shape to match array dimensions
+        if len(volume.shape) == 3 and len(chunk_shape_base) == 2:
+            # 2D multi-channel image: CYX with YX chunks
+            chunk_shape = (1,) + chunk_shape_base
+            print(f"2D multi-channel (CYX) detected with custom chunk shape")
+            print(f"C-channels: {volume.shape[0]}")
+            print(f"Y (height): {volume.shape[1]}")
+            print(f"X (width): {volume.shape[2]}")
+        elif len(volume.shape) == 4 and len(chunk_shape_base) == 2:
+            # 2D multi-channel time-series or 3D multi-channel: YX chunks
+            chunk_shape = (1, 1) + chunk_shape_base
+            print(f"4D array with custom YX chunk shape")
+        elif len(volume.shape) == 4 and len(chunk_shape_base) == 3:
+            chunk_shape = (1,) + chunk_shape_base
+            print(f"4D array with custom ZYX chunk shape")
+        elif len(volume.shape) == 5 and len(chunk_shape_base) == 2:
+            chunk_shape = (1, 1, 1) + chunk_shape_base
+            print(f"5D array with custom YX chunk shape")
+        elif len(volume.shape) == 5 and len(chunk_shape_base) == 3:
+            chunk_shape = (1, 1) + chunk_shape_base
+            print(f"5D array with custom ZYX chunk shape")
+        else:
+            chunk_shape = chunk_shape_base
+            print(f"Using custom chunk shape as-is")
     else:
-        raise ValueError(f"Unsupported volume dimensions: {len(volume.shape)}D")
+        # Default chunk shapes based on dimensions
+        if len(volume.shape) == 3:
+            # Check if it's 2D multi-channel (CYX) or 3D single-channel (ZYX)
+            # Heuristic: if first dimension is small (<=10), likely channels
+            if volume.shape[0] <= 10:
+                print("3D array detected - likely 2D multi-channel (C, Y, X)")
+                print(f"C-channels: {volume.shape[0]}")
+                print(f"Y (height): {volume.shape[1]}")
+                print(f"X (width): {volume.shape[2]}")
+            else:
+                print("3D array detected - likely (Z, Y, X)")
+                print(f"Z-slices: {volume.shape[0]}")
+                print(f"Y (height): {volume.shape[1]}")
+                print(f"X (width): {volume.shape[2]}")
+            chunk_shape = (1, min(2304, volume.shape[1]), min(2304, volume.shape[2]))
+
+        elif len(volume.shape) == 4:
+            print("4D array detected - likely (C, Z, Y, X) or (T, Z, Y, X)")
+            print(f"Dim0: {volume.shape[0]}")
+            print(f"Dim1: {volume.shape[1]}")
+            print(f"Y (height): {volume.shape[2]}")
+            print(f"X (width): {volume.shape[3]}")
+            chunk_shape = (1, 1, min(2304, volume.shape[2]), min(2304, volume.shape[3]))
+
+        elif len(volume.shape) == 5:
+            print("5D array detected - likely (T, C, Z, Y, X)")
+            print(f"T-frames: {volume.shape[0]}")
+            print(f"C-channels: {volume.shape[1]}")
+            print(f"Z-slices: {volume.shape[2]}")
+            print(f"Y (height): {volume.shape[3]}")
+            print(f"X (width): {volume.shape[4]}")
+            chunk_shape = (1, 1, 1, min(2304, volume.shape[3]), min(2304, volume.shape[4]))
+        else:
+            raise ValueError(f"Unsupported volume dimensions: {len(volume.shape)}D")
 
     print(f"Using chunk shape: {chunk_shape}")
 
