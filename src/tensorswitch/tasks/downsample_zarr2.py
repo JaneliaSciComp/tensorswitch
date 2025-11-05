@@ -6,8 +6,14 @@ from ..utils import get_chunk_domains, commit_tasks, downsample_spec, zarr2_stor
 import os
 import json
 
-def process(base_path, output_path, level, start_idx=0, stop_idx=None, downsample=True, memory_limit=50, custom_chunk_shape=None, **kwargs):
-    """Downsample zarr2 dataset."""
+def process(base_path, output_path, level, start_idx=0, stop_idx=None, downsample=True, memory_limit=50, custom_chunk_shape=None, anisotropic_factors=None, **kwargs):
+    """
+    Downsample zarr2 dataset.
+
+    Args:
+        anisotropic_factors: Optional list of downsampling factors (e.g., [1, 1, 2, 2] for CZYX)
+                            If provided, uses these instead of default [1, 2, 2, 2]
+    """
     
     # Determine input path
     if base_path.endswith(f"s{level - 1}") or level == 0:
@@ -57,8 +63,13 @@ def process(base_path, output_path, level, start_idx=0, stop_idx=None, downsampl
         if not dimension_names:
             print("Warning: No dimension_names found for zarr2, defaulting to [2,2,2] downsampling")
 
-        print(f"Downsampling zarr2 with dimension_names: {dimension_names}")
-        downsample_spec_dict = downsample_spec(zarr_store_spec, zarr_store.shape, dimension_names)
+        # Use anisotropic factors if provided, otherwise default behavior
+        if anisotropic_factors:
+            print(f"Using anisotropic downsampling factors: {anisotropic_factors}")
+        else:
+            print(f"Downsampling zarr2 with dimension_names: {dimension_names}")
+
+        downsample_spec_dict = downsample_spec(zarr_store_spec, zarr_store.shape, dimension_names, custom_factors=anisotropic_factors)
         downsample_store = ts.open(downsample_spec_dict).result()
     else:
         downsample_store = zarr_store

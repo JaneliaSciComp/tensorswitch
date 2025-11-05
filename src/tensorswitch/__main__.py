@@ -14,7 +14,9 @@ if not __package__:
 from . import tasks
 from .utils import (get_total_chunks, downsample_spec, zarr3_store_spec, get_chunk_domains,
                     estimate_total_chunks_for_tiff, get_input_driver, get_total_chunks_from_store,
-                    load_tiff_stack, load_nd2_stack, load_ims_stack, update_ome_metadata_if_needed)
+                    load_tiff_stack, load_nd2_stack, load_ims_stack, update_ome_metadata_if_needed,
+                    calculate_num_multiscale_levels, calculate_anisotropic_downsample_factors,
+                    generate_auto_multiscale, calculate_pyramid_plan, generate_cli_coordinator_script)
 from .tasks import (downsample_shard_zarr3, n5_to_n5, n5_to_zarr2, tiff_to_zarr3_s0,
                     nd2_to_zarr3_s0, ims_to_zarr3_s0, nd2_to_zarr2_s0, ims_to_zarr2_s0,
                     tiff_to_zarr2_s0, downsample_zarr2, precomputed_to_n5)
@@ -382,6 +384,10 @@ def main():
     parser.add_argument("--custom_chunk_shape", type=str, help="Custom chunk shape as comma-separated values (e.g., '32,32,32')")
     parser.add_argument("--use_dask_jobqueue", action="store_true", help="Use Dask JobQueue instead of direct LSF submission")
     parser.add_argument("--dual_zarr_approach", type=str, default="none", choices=["v2_chunks", "v3_chunks", "none"], help="Dual zarr v2/v3 compatibility approach: none (default, pure zarr v3), v2_chunks (colocated metadata), or v3_chunks (.zarray in c/ directory)")
+    parser.add_argument("--auto_multiscale", action="store_true", help="Automatically generate all multiscale levels until thumbnail-sized (uses Yurii Zubov's anisotropic algorithm)")
+    parser.add_argument("--min_array_nbytes", type=int, default=None, help="Stop pyramid when array size < this in bytes (default: chunk_nbytes from metadata)")
+    parser.add_argument("--min_array_shape", type=str, default=None, help="Stop pyramid when all dims < this, format: '32,64,128' (default: chunk_shape from metadata)")
+    parser.add_argument("--anisotropic_factors", type=str, default=None, help="Anisotropic downsampling factors, format: '1,2,2' (used by auto-multiscale coordinator)")
 
     args = parser.parse_args()
 
@@ -405,15 +411,115 @@ def main():
     custom_shard_shape = None
     if args.custom_shard_shape and args.custom_shard_shape != "None":
         custom_shard_shape = [int(x) for x in args.custom_shard_shape.split(',')]
-    
+
     custom_chunk_shape = None
     if args.custom_chunk_shape and args.custom_chunk_shape != "None":
         custom_chunk_shape = [int(x) for x in args.custom_chunk_shape.split(',')]
 
+    # Parse anisotropic factors if provided
+    anisotropic_factors = None
+    if args.anisotropic_factors and args.anisotropic_factors != "None":
+        anisotropic_factors = [int(x) for x in args.anisotropic_factors.split(',')]
+
+    # Check for auto_multiscale FIRST (before submit check)
+    if args.auto_multiscale:
+            # Phase 1: Auto-multiscale from existing s0 (downsample tasks only)
+            if args.task in ["downsample_shard_zarr3", "downsample_zarr2"]:
+                print("\nAuto-multiscale from s0 (cluster mode)")
+                print(f"Base path (s0): {args.base_path}")
+                print(f"Output path: {args.output_path}")
+
+                # Parse min_array_shape if provided
+                min_array_shape = None
+                if args.min_array_shape:
+                    min_array_shape = [int(x) for x in args.min_array_shape.split(',')]
+
+                # Calculate pyramid plan from s0
+                try:
+                    pyramid_plan = calculate_pyramid_plan(
+                        args.base_path,
+                        min_array_nbytes=args.min_array_nbytes,
+                        min_array_shape=min_array_shape
+                    )
+                except Exception as e:
+                    print(f"ERROR: Failed to calculate pyramid plan: {e}")
+                    return
+
+                print(f"Pyramid plan: {pyramid_plan['num_levels']} levels needed")
+                for level_info in pyramid_plan['pyramid_plan']:
+                    print(f"  s{level_info['level']}: factor {level_info['factor']}")
+
+                # Generate coordinator script
+                script_content = generate_cli_coordinator_script(args.output_path, pyramid_plan, args)
+
+                # Write script to output directory
+                output_dir = os.path.dirname(args.output_path) if args.output_path else os.path.expanduser("~/tensorswitch_jobs")
+                os.makedirs(output_dir, exist_ok=True)
+
+                timestamp = int(time.time())
+                script_path = os.path.join(output_dir, f"coordinator_autoscale_{timestamp}.sh")
+
+                with open(script_path, 'w') as f:
+                    f.write(script_content)
+                os.chmod(script_path, 0o755)
+
+                print(f"\nCoordinator script: {script_path}")
+
+                # Submit coordinator job if --submit is used
+                if args.submit:
+                    if args.project == "None":
+                        raise ValueError(f"Project cannot be None when submitting.")
+
+                    job_name = f"tensorswitch_autoscale"
+                    log_file = os.path.join(output_dir, f"coordinator_{timestamp}.log")
+                    err_file = os.path.join(output_dir, f"coordinator_{timestamp}.err")
+
+                    cmd = [
+                        "bsub",
+                        "-J", job_name,
+                        "-n", "1",
+                        "-W", "24:00",
+                        "-P", args.project,
+                        "-o", log_file,
+                        "-e", err_file,
+                        script_path
+                    ]
+
+                    print(f"\nSubmitting coordinator: {' '.join(cmd)}")
+                    result = subprocess.run(cmd, capture_output=True, text=True)
+
+                    if result.returncode == 0:
+                        print(f"Coordinator submitted")
+                        print(f"Monitor: tail -f {log_file}")
+                        # Extract job ID
+                        import re
+                        match = re.search(r'Job <(\d+)>', result.stdout)
+                        if match:
+                            print(f"Job ID: {match.group(1)}")
+                    else:
+                        print(f"ERROR: Coordinator submission failed")
+                        print(result.stderr)
+                else:
+                    print("Dry run mode (no --submit). To submit, add --submit --project <project_name>")
+
+                return
+
+            # Phase 2: Not yet implemented (s0 creation tasks)
+            elif args.task in ["tiff_to_zarr3_s0", "nd2_to_zarr3_s0", "ims_to_zarr3_s0", "tiff_to_zarr2_s0", "nd2_to_zarr2_s0", "ims_to_zarr2_s0"]:
+                print("\nAuto-multiscale from raw input (not yet implemented)")
+                print("Current workflow:")
+                print("  1. Submit s0 job first (without --auto_multiscale)")
+                print("  2. After s0 completes, run:")
+                print(f"     python -m tensorswitch --task downsample_shard_zarr3 \\")
+                print(f"       --base_path {args.output_path}/s0 \\")
+                print(f"       --output_path {args.output_path} \\")
+                print(f"       --auto_multiscale --submit --project {args.project}")
+                return
+
+    # Regular submission (non-auto_multiscale)
     if args.submit:
         if args.project == "None":
             raise ValueError(f"Project cannot be None when submitting.")
-
         submit_job(args, use_v2_encoding)
 
     else:
@@ -433,7 +539,7 @@ def main():
         elif args.task == "n5_to_zarr2":
             n5_to_zarr2.convert(args.base_path, args.output_path, args.level, args.start_idx, args.stop_idx, args.memory_limit)
         elif args.task == "downsample_shard_zarr3":
-            downsample_shard_zarr3.process(args.base_path, args.output_path, args.level, args.start_idx, args.stop_idx, bool(args.downsample), bool(args.use_shard), args.memory_limit, custom_shard_shape, custom_chunk_shape)
+            downsample_shard_zarr3.process(args.base_path, args.output_path, args.level, args.start_idx, args.stop_idx, bool(args.downsample), bool(args.use_shard), args.memory_limit, custom_shard_shape, custom_chunk_shape, anisotropic_factors)
         elif args.task == "tiff_to_zarr3_s0":
             tiff_to_zarr3_s0.process(args.base_path, args.output_path, bool(args.use_shard), args.memory_limit, args.start_idx, args.stop_idx, bool(args.use_ome_structure), custom_shard_shape, custom_chunk_shape, create_dual_metadata, use_v2_encoding)
         elif args.task == "nd2_to_zarr3_s0":
@@ -447,12 +553,31 @@ def main():
         elif args.task == "tiff_to_zarr2_s0":
             tiff_to_zarr2_s0.process(args.base_path, args.output_path, args.memory_limit, args.start_idx, args.stop_idx, bool(args.use_ome_structure), custom_chunk_shape)
         elif args.task == "downsample_zarr2":
-            downsample_zarr2.process(args.base_path, args.output_path, args.level, args.start_idx, args.stop_idx, bool(args.downsample), args.memory_limit, custom_chunk_shape)
+            downsample_zarr2.process(args.base_path, args.output_path, args.level, args.start_idx, args.stop_idx, bool(args.downsample), args.memory_limit, custom_chunk_shape, anisotropic_factors)
         elif args.task == "precomputed_to_n5":
             precomputed_to_n5.convert(args.base_path, args.output_path, args.level, args.start_idx, args.stop_idx, args.memory_limit, custom_chunk_shape)
         else:
             raise ValueError(f"Unsupported task: {args.task}")
-        
+
+        # Auto-multiscale generation (local mode only)
+        if args.auto_multiscale:
+            # Only trigger for s0 tasks
+            if args.task in ["tiff_to_zarr3_s0", "nd2_to_zarr3_s0", "ims_to_zarr3_s0", "tiff_to_zarr2_s0", "nd2_to_zarr2_s0", "ims_to_zarr2_s0"]:
+                print("\n" + "="*80)
+                print("AUTO-MULTISCALE ENABLED - Starting pyramid generation")
+                print("="*80)
+
+                # Call generate_auto_multiscale from utils
+                generate_auto_multiscale(
+                    output_path=args.output_path,
+                    min_dimension=args.min_dimension,
+                    use_shard=bool(args.use_shard),
+                    memory_limit=args.memory_limit,
+                    custom_shard_shape=custom_shard_shape,
+                    custom_chunk_shape=custom_chunk_shape,
+                    is_submit_mode=False
+                )
+
         # Update OME-Zarr metadata after processing is complete
         # For zarr3 tasks that support use_ome_structure parameter
         if args.task in ["tiff_to_zarr3_s0", "nd2_to_zarr3_s0", "ims_to_zarr3_s0"]:
