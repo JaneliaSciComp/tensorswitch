@@ -2094,9 +2094,9 @@ def calculate_num_multiscale_levels(shape, axes_names, voxel_sizes, chunk_shape=
     Calculate how many multiscale levels to generate.
 
     Stops when either:
-    - Rule 3: array_nbytes < min_array_nbytes (total volume too small)
-    - Rule 4: all(shape[i] < min_array_shape[i]) (all dimensions below threshold)
-    - Rule 5: any(shape[i] < shard_shape[i]) (cannot fit at least 1 complete shard)
+    - Rule 1: array_nbytes < min_array_nbytes (total volume too small)
+    - Rule 2: all(shape[i] < min_array_shape[i]) (all dimensions below threshold)
+    - Rule 3: cumulative magnification drifts >4% from power-of-2 (WebKnossos compatibility)
 
     Args:
         shape: Array shape (e.g., [3, 1196, 31416, 17635] for C, Z, Y, X)
@@ -2106,7 +2106,7 @@ def calculate_num_multiscale_levels(shape, axes_names, voxel_sizes, chunk_shape=
         dtype_size: Bytes per element (default 2 for uint16)
         min_array_nbytes: Stop when array size < this (default: chunk_nbytes)
         min_array_shape: Stop when all dims < this (default: chunk_shape)
-        shard_shape: Shard shape for Rule 5 check (e.g., [1, 128, 576, 576])
+        shard_shape: (Deprecated, not used)
         use_anisotropic: Use anisotropic downsampling factors
 
     Returns:
@@ -2148,7 +2148,7 @@ def calculate_num_multiscale_levels(shape, axes_names, voxel_sizes, chunk_shape=
         new_shape = [max(1, dim // factor) for dim, factor in zip(current_shape, factors)]
         new_voxel_sizes = [voxel * factor for voxel, factor in zip(current_voxel_sizes, factors)]
 
-        # Rule 3: Check array_nbytes
+        # Rule 1: Check array_nbytes
         array_nbytes = dtype_size
         for dim in new_shape:
             array_nbytes *= dim
@@ -2156,15 +2156,37 @@ def calculate_num_multiscale_levels(shape, axes_names, voxel_sizes, chunk_shape=
         if array_nbytes < min_array_nbytes:
             return level - 1  # Stop: total volume too small (don't create this level)
 
-        # Rule 4: Check if ALL dimensions below threshold
+        # Rule 2: Check if ALL dimensions below threshold
         if all(new_shape[i] < min_array_shape[i] for i in range(len(new_shape))):
             return level - 1  # Stop: all dimensions small (don't create this level)
 
-        # Rule 5: DISABLED - Zarr3 supports partial shards perfectly fine
-        # Rule 3 (size) and Rule 4 (all dims < chunk) are sufficient stopping conditions
-        # if shard_shape is not None:
-        #     if any(new_shape[i] < shard_shape[i] for i in range(len(new_shape))):
-        #         return level - 1  # Stop: cannot fit even 1 shard (don't create this level)
+        # Rule 3: WebKnossos power-of-2 validation (November 5, 2025)
+        # WebKnossos requires cumulative magnifications to be powers of 2 within ~4% tolerance
+        import math
+        max_power_of_2_error = 0.0
+        for i in range(len(shape)):
+            # Skip non-spatial dimensions
+            if axes_names[i] in ['c', 't']:
+                continue
+
+            cumulative_mag = shape[i] / new_shape[i]
+
+            # Find nearest power of 2 using log2
+            # e.g., log2(15) = 3.906 → round = 4 → expected_mag = 16
+            if cumulative_mag > 0:
+                log2_mag = math.log2(cumulative_mag)
+                expected_power = round(log2_mag)  # Round to nearest integer power
+                expected_mag = 2 ** expected_power
+
+                # Calculate error percentage
+                error = abs(cumulative_mag - expected_mag) / expected_mag
+                max_power_of_2_error = max(max_power_of_2_error, error)
+
+        # Stop if cumulative magnification drifts >4% from nearest power of 2
+        # This prevents WebKnossos upload failures like "invalid mag: (16, 16, 15)"
+        if max_power_of_2_error > 0.04:
+            print(f"Stopping at level {level-1}: Cumulative mag error {max_power_of_2_error*100:.1f}% exceeds WebKnossos 4% tolerance")
+            return level - 1
 
         current_shape = new_shape
         current_voxel_sizes = new_voxel_sizes
@@ -2275,10 +2297,21 @@ def calculate_pyramid_plan(s0_path, min_array_nbytes=None, min_array_shape=None)
             with open(root_zarr_json, 'r') as f:
                 root_metadata = json.load(f)
                 # Look for OME-NGFF multiscales metadata
-                if 'attributes' in root_metadata and 'multiscales' in root_metadata['attributes']:
-                    multiscales = root_metadata['attributes']['multiscales'][0]
+                # Try OME-NGFF v0.5 format first (attributes.ome.multiscales)
+                if 'attributes' in root_metadata and 'ome' in root_metadata['attributes'] and 'multiscales' in root_metadata['attributes']['ome']:
+                    multiscales = root_metadata['attributes']['ome']['multiscales'][0]
                     if 'datasets' in multiscales and len(multiscales['datasets']) > 0:
                         # Get s0 transformations
+                        s0_dataset = multiscales['datasets'][0]
+                        if 'coordinateTransformations' in s0_dataset:
+                            for transform in s0_dataset['coordinateTransformations']:
+                                if transform['type'] == 'scale':
+                                    voxel_sizes = transform['scale']
+                                    break
+                # Fallback: try older OME-NGFF format (attributes.multiscales)
+                elif 'attributes' in root_metadata and 'multiscales' in root_metadata['attributes']:
+                    multiscales = root_metadata['attributes']['multiscales'][0]
+                    if 'datasets' in multiscales and len(multiscales['datasets']) > 0:
                         s0_dataset = multiscales['datasets'][0]
                         if 'coordinateTransformations' in s0_dataset:
                             for transform in s0_dataset['coordinateTransformations']:

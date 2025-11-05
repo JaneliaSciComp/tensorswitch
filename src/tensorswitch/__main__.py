@@ -335,7 +335,7 @@ def submit_job(args, use_v2_encoding=True):
             "-m", "tensorswitch",
         ]
 
-        string_args = ["task", "base_path", "output_path", "custom_shard_shape", "custom_chunk_shape", "dual_zarr_approach"]
+        string_args = ["task", "base_path", "output_path", "custom_shard_shape", "custom_chunk_shape", "dual_zarr_approach", "anisotropic_factors"]
         int_args = ["level", "downsample", "use_shard", "use_ome_structure", "memory_limit"]
         boolean_flags = ["use_dask_jobqueue"]
 
