@@ -245,22 +245,33 @@ def zarr3_store_spec(path, shape, dtype, use_shard=True, level_path="s0", use_om
         }
     }
 
-def downsample_spec(base_spec, array_shape=None, dimension_names=None):
+def downsample_spec(base_spec, array_shape=None, dimension_names=None, custom_factors=None):
     """
     Create downsample spec with appropriate factors based on dimension names.
     For 2D multi-channel images (CYX), only downsample Y and X, not C.
-    """
-    # Default: downsample all dimensions by 2x
-    downsample_factors = [2] * len(array_shape) if array_shape is not None else [2, 2, 2]
 
-    # If we have dimension_names, adjust factors to preserve non-spatial dimensions
-    if dimension_names and array_shape:
-        downsample_factors = []
-        for dim_name in dimension_names:
-            if dim_name in ['c', 't']:  # Channel or Time - don't downsample
-                downsample_factors.append(1)
-            else:  # Spatial dimensions (x, y, z) - downsample by 2x
-                downsample_factors.append(2)
+    Args:
+        base_spec: Base zarr store spec
+        array_shape: Shape of the array
+        dimension_names: List of dimension names (e.g., ['c', 'z', 'y', 'x'])
+        custom_factors: Optional custom downsampling factors (e.g., [1, 1, 2, 2] for anisotropic data)
+                       If provided, overrides default factor calculation
+    """
+    # If custom factors provided, use them directly
+    if custom_factors is not None:
+        downsample_factors = custom_factors
+    else:
+        # Default: downsample all dimensions by 2x
+        downsample_factors = [2] * len(array_shape) if array_shape is not None else [2, 2, 2]
+
+        # If we have dimension_names, adjust factors to preserve non-spatial dimensions
+        if dimension_names and array_shape:
+            downsample_factors = []
+            for dim_name in dimension_names:
+                if dim_name in ['c', 't']:  # Channel or Time - don't downsample
+                    downsample_factors.append(1)
+                else:  # Spatial dimensions (x, y, z) - downsample by 2x
+                    downsample_factors.append(2)
 
     return {
         'driver': 'downsample',
@@ -710,23 +721,55 @@ def write_zarr3_group_metadata(output_path, metadata):
         json.dump(metadata, f, indent=2)
 
 def update_ome_multiscale_metadata(zarr_path, max_level=4):
-    """Update OME-ZARR metadata to include all multiscale levels s0 through max_level."""
+    """Update OME-ZARR metadata to include all multiscale levels s0 through max_level.
+
+    Calculates correct anisotropic scale factors by reading actual array shapes
+    from each level's metadata instead of assuming isotropic 2x downsampling.
+    """
+    import numpy as np
+
     zarr_json_path = os.path.join(zarr_path, "zarr.json")
-    
+
     # Read existing metadata
     with open(zarr_json_path, 'r') as f:
         metadata = json.load(f)
-    
+
     # Get existing multiscales and s0 scale factors
     multiscales = metadata["attributes"]["ome"]["multiscales"][0]
     s0_scale_factors = multiscales["datasets"][0]["coordinateTransformations"][0]["scale"]
-    
+
+    # Read s0 shape for calculating actual downsampling factors
+    s0_metadata_path = os.path.join(zarr_path, "s0", "zarr.json")
+    with open(s0_metadata_path, 'r') as f:
+        s0_meta = json.load(f)
+    s0_shape = s0_meta.get('shape')
+
     # Build datasets for all levels with multiscale paths
     datasets = []
     for level in range(max_level + 1):
-        scale_factor = 2 ** level  # 1, 2, 4, 8, 16 for levels 0-4
-        current_scale = [sf * scale_factor for sf in s0_scale_factors]
-        
+        if level == 0:
+            # s0 uses original scale factors
+            current_scale = s0_scale_factors
+        else:
+            # Read this level's shape to calculate actual downsampling factor per dimension
+            level_metadata_path = os.path.join(zarr_path, f"s{level}", "zarr.json")
+
+            if not os.path.exists(level_metadata_path):
+                print(f"Warning: s{level}/zarr.json not found, skipping level {level}")
+                break
+
+            with open(level_metadata_path, 'r') as f:
+                level_meta = json.load(f)
+            level_shape = level_meta.get('shape')
+
+            # Calculate actual downsampling factor per dimension
+            # factor = s0_shape / level_shape (e.g., [4/4, 17993/8997, 10274/5137] ≈ [1, 2, 2])
+            factors = [s0_shape[i] / level_shape[i] for i in range(len(s0_shape))]
+
+            # Apply factors to s0 scale to get current level's scale
+            # (voxel size increases proportionally to downsampling)
+            current_scale = [s0_scale_factors[i] * factors[i] for i in range(len(s0_scale_factors))]
+
         datasets.append({
             "path": f"s{level}",  # Relative path at root level
             "coordinateTransformations": [{
@@ -1952,5 +1995,734 @@ def update_n5_root_attributes(n5_root_path, precomputed_info):
         import traceback
         traceback.print_exc()
         return False
+
+
+# =============================================================================
+# Anisotropy-Aware Multiscale Generation
+# =============================================================================
+# Based on the algorithm developed by Yurii Zubov (Janelia CellMap Team)
+# Original implementation: https://github.com/janelia-cellmap/zarrify
+# Reference: https://github.com/janelia-cellmap/zarrify/blob/main/src/zarrify/utils/volume.py#L91
+#
+# Credit: Yurii Zubov for the anisotropic downsampling algorithm that makes
+# voxel sizes more homogeneous with each iteration.
+# =============================================================================
+
+def calculate_anisotropic_downsample_factors(voxel_sizes, axes_names, min_ratio=0.5, max_ratio=2.0, use_anisotropic=True):
+    """
+    Calculate adaptive downsampling factors based on voxel size aspect ratios.
+
+    Algorithm credit: Yurii Zubov (Janelia CellMap Team)
+    Based on: https://github.com/janelia-cellmap/zarrify/blob/main/src/zarrify/utils/volume.py#L91
+
+    Goal: Make voxel sizes more homogeneous with each downsampling iteration.
+
+    Example:
+        s0: voxel_sizes = (100, 20, 20) nm for (z, y, x)
+        → z is 5× larger than y/x
+        → factor = (1, 2, 2) to get s1: (100, 40, 40) nm
+
+        s1: voxel_sizes = (100, 40, 40) nm
+        → z is 2.5× larger
+        → factor = (1, 2, 2) to get s2: (100, 80, 80) nm
+
+        s2: voxel_sizes = (100, 80, 80) nm
+        → z is 1.25× larger (< 2.0 threshold)
+        → factor = (2, 2, 2) to get s3: (200, 160, 160) nm
+
+    Args:
+        voxel_sizes: List of voxel sizes (e.g., [1.0, 0.116, 0.116] for c, y, x)
+        axes_names: List of axis names (e.g., ['c', 'y', 'x'])
+        min_ratio: Minimum ratio threshold (default 0.5)
+        max_ratio: Maximum ratio threshold (default 2.0)
+        use_anisotropic: If False, always use (1, 2, 2, ...) pattern
+
+    Returns:
+        List of downsampling factors (e.g., [1, 2, 2] for c, y, x)
+    """
+    if not use_anisotropic:
+        # Simple mode: preserve channels/time, downsample spatial by 2
+        return [1 if axis in ['c', 't'] else 2 for axis in axes_names]
+
+    # Get spatial dimensions (skip channel and time)
+    spatial_data = [(axis, voxel_sizes[i]) for i, axis in enumerate(axes_names) if axis not in ['c', 't']]
+
+    if not spatial_data:
+        return [1] * len(axes_names)
+
+    axes, dimensions = zip(*spatial_data)
+
+    if len(dimensions) == 1:
+        # Only one spatial dimension
+        factors = [2]
+    else:
+        # Calculate aspect ratios
+        ratios = []
+        for i, dim in enumerate(dimensions):
+            # Calculate ratios of current dimension to all others
+            # Example for 3D: [(z/y, z/x), (y/z, y/x), (x/z, x/y)]
+            dim_ratios = tuple(dim / dimensions[j] for j in range(len(dimensions)) if j != i)
+            ratios.append(dim_ratios)
+
+        # Determine downsampling factors for each spatial dimension
+        factors = []
+        for (i, dim_ratios) in enumerate(ratios):
+            # If this dimension is >= 2× larger than all others
+            if all(ratio >= max_ratio for ratio in dim_ratios):
+                # This dimension is large, keep it at 1, downsample others by 2
+                factors = [2] * len(ratios)
+                factors[i] = 1
+                break
+            # If this dimension is <= 0.5× smaller than all others
+            elif all(ratio <= min_ratio for ratio in dim_ratios):
+                # This dimension is small, downsample it by 2, keep others at 1
+                factors = [1] * len(ratios)
+                factors[i] = 2
+                break
+            else:
+                # Within acceptable range, downsample by 2
+                factors.append(2)
+
+    # Map spatial factors back to all axes
+    spatial_factors = {k: v for k, v in zip(axes, factors)}
+    return [1 if axis in ['c', 't'] else spatial_factors[axis] for axis in axes_names]
+
+
+def calculate_num_multiscale_levels(shape, axes_names, voxel_sizes, chunk_shape=None, dtype_size=2,
+                                     min_array_nbytes=None, min_array_shape=None, shard_shape=None, use_anisotropic=True):
+    """
+    Calculate how many multiscale levels to generate.
+
+    Stops when either:
+    - Rule 3: array_nbytes < min_array_nbytes (total volume too small)
+    - Rule 4: all(shape[i] < min_array_shape[i]) (all dimensions below threshold)
+    - Rule 5: any(shape[i] < shard_shape[i]) (cannot fit at least 1 complete shard)
+
+    Args:
+        shape: Array shape (e.g., [3, 1196, 31416, 17635] for C, Z, Y, X)
+        axes_names: List of axis names (e.g., ['c', 'z', 'y', 'x'])
+        voxel_sizes: Initial voxel sizes (e.g., [1.0, 1.0, 0.116, 0.116])
+        chunk_shape: Chunk shape for calculating defaults (e.g., [1, 64, 128, 128])
+        dtype_size: Bytes per element (default 2 for uint16)
+        min_array_nbytes: Stop when array size < this (default: chunk_nbytes)
+        min_array_shape: Stop when all dims < this (default: chunk_shape)
+        shard_shape: Shard shape for Rule 5 check (e.g., [1, 128, 576, 576])
+        use_anisotropic: Use anisotropic downsampling factors
+
+    Returns:
+        int: Total number of levels (including s0)
+    """
+    current_shape = list(shape)
+    current_voxel_sizes = list(voxel_sizes)
+
+    # Calculate defaults from chunk_shape
+    if chunk_shape is not None:
+        if min_array_nbytes is None:
+            chunk_nbytes = 1
+            for dim in chunk_shape:
+                chunk_nbytes *= dim
+            chunk_nbytes *= dtype_size
+            min_array_nbytes = chunk_nbytes
+
+        if min_array_shape is None:
+            min_array_shape = list(chunk_shape)
+
+    # Fallbacks if no chunk_shape provided
+    if min_array_nbytes is None:
+        min_array_nbytes = 524288  # 512KB default
+    if min_array_shape is None:
+        min_array_shape = [32] * len(shape)  # Default 32 per dimension
+
+    level = 0
+    while True:
+        level += 1
+
+        # Calculate downsampling factors for next level
+        factors = calculate_anisotropic_downsample_factors(
+            current_voxel_sizes,
+            axes_names,
+            use_anisotropic=use_anisotropic
+        )
+
+        # Apply downsampling to get next level shape
+        new_shape = [max(1, dim // factor) for dim, factor in zip(current_shape, factors)]
+        new_voxel_sizes = [voxel * factor for voxel, factor in zip(current_voxel_sizes, factors)]
+
+        # Rule 3: Check array_nbytes
+        array_nbytes = dtype_size
+        for dim in new_shape:
+            array_nbytes *= dim
+
+        if array_nbytes < min_array_nbytes:
+            return level - 1  # Stop: total volume too small (don't create this level)
+
+        # Rule 4: Check if ALL dimensions below threshold
+        if all(new_shape[i] < min_array_shape[i] for i in range(len(new_shape))):
+            return level - 1  # Stop: all dimensions small (don't create this level)
+
+        # Rule 5: DISABLED - Zarr3 supports partial shards perfectly fine
+        # Rule 3 (size) and Rule 4 (all dims < chunk) are sufficient stopping conditions
+        # if shard_shape is not None:
+        #     if any(new_shape[i] < shard_shape[i] for i in range(len(new_shape))):
+        #         return level - 1  # Stop: cannot fit even 1 shard (don't create this level)
+
+        current_shape = new_shape
+        current_voxel_sizes = new_voxel_sizes
+
+        # Safety check: don't generate too many levels
+        if level > 20:
+            print(f"Warning: Stopped at level {level} (safety limit)")
+            return level
+
+    return level
+
+
+def calculate_pyramid_plan(s0_path, min_array_nbytes=None, min_array_shape=None):
+    """
+    Pre-calculate entire multiscale pyramid plan before submitting cluster jobs.
+
+    This function mathematically predicts voxel sizes for all levels WITHOUT creating data.
+    Enables cluster submission with pre-determined anisotropic downsampling factors.
+
+    Args:
+        s0_path: Path to s0 level (either zarr3 s0/ or zarr2 multiscale/s0/)
+        min_array_nbytes: Stop when array size < this (default: chunk_nbytes from metadata)
+        min_array_shape: Stop when all dims < this (default: chunk_shape from metadata)
+
+    Returns:
+        dict with keys:
+            'format': 'zarr3' or 'zarr2'
+            'shape': s0 shape
+            'voxel_sizes': s0 voxel sizes
+            'axes_names': dimension names
+            'chunk_shape': chunk shape
+            'dtype_size': bytes per element
+            'num_levels': total number of levels needed
+            'pyramid_plan': list of dicts for each level:
+                [
+                    {"level": 1, "factor": [1,2,2], "predicted_voxel_sizes": [100,40,40]},
+                    {"level": 2, "factor": [1,2,2], "predicted_voxel_sizes": [100,80,80]},
+                    ...
+                ]
+
+    Example:
+        >>> plan = calculate_pyramid_plan("/path/to/dataset.zarr/s0")
+        >>> print(f"Need {plan['num_levels']} levels")
+        >>> for level_plan in plan['pyramid_plan']:
+        ...     print(f"Level {level_plan['level']}: factor {level_plan['factor']}")
+
+    Credit: Based on Yurii Zubov's anisotropic downsampling algorithm (Janelia CellMap Team)
+    Reference: https://github.com/janelia-cellmap/zarrify
+    """
+    import json
+    import numpy as np
+
+    # Detect format: zarr3 (has zarr.json) or zarr2 (has .zarray)
+    zarr3_metadata_path = os.path.join(s0_path, "zarr.json")
+    zarr2_metadata_path = os.path.join(s0_path, ".zarray")
+
+    is_zarr3 = os.path.exists(zarr3_metadata_path)
+    is_zarr2 = os.path.exists(zarr2_metadata_path)
+
+    if not is_zarr3 and not is_zarr2:
+        raise FileNotFoundError(
+            f"Cannot find zarr metadata at {s0_path}\n"
+            f"Expected either:\n"
+            f"  - Zarr3: {zarr3_metadata_path}\n"
+            f"  - Zarr2: {zarr2_metadata_path}"
+        )
+
+    format_type = "zarr3" if is_zarr3 else "zarr2"
+
+    # Read metadata based on format
+    chunk_shape = None
+    dtype_size = 2  # default uint16
+
+    if is_zarr3:
+        # Read s0 shape, dimension names, chunk/shard configuration, dtype
+        with open(zarr3_metadata_path, 'r') as f:
+            metadata = json.load(f)
+        shape = metadata.get('shape')
+        axes_names = metadata.get('dimension_names')
+
+        # Read shard and chunk shapes
+        # shard_shape = outer chunk grid (what we pass as --custom_shard_shape)
+        # inner_chunk_shape = inner chunks within shard (what we pass as --custom_chunk_shape)
+        shard_shape = metadata.get('chunk_grid', {}).get('configuration', {}).get('chunk_shape')
+        inner_chunk_shape = None
+
+        # Check if using sharding codec
+        codecs = metadata.get('codecs', [])
+        if codecs and codecs[0].get('name') == 'sharding_indexed':
+            inner_chunk_shape = codecs[0].get('configuration', {}).get('chunk_shape')
+
+        # Use inner_chunk_shape if available (for sharded zarr3), otherwise use shard_shape
+        # This ensures stopping criteria are based on actual chunk size, not shard size
+        chunk_shape = inner_chunk_shape if inner_chunk_shape is not None else shard_shape
+
+        # Get dtype size
+        dtype_str = metadata.get('data_type', 'uint16')
+        dtype = np.dtype(dtype_str)
+        dtype_size = dtype.itemsize
+
+        # Extract voxel sizes from root zarr.json
+        # s0_path is like "/path/dataset.zarr/s0", root is parent
+        root_path = os.path.dirname(s0_path)
+        root_zarr_json = os.path.join(root_path, "zarr.json")
+        voxel_sizes = None
+
+        if os.path.exists(root_zarr_json):
+            with open(root_zarr_json, 'r') as f:
+                root_metadata = json.load(f)
+                # Look for OME-NGFF multiscales metadata
+                if 'attributes' in root_metadata and 'multiscales' in root_metadata['attributes']:
+                    multiscales = root_metadata['attributes']['multiscales'][0]
+                    if 'datasets' in multiscales and len(multiscales['datasets']) > 0:
+                        # Get s0 transformations
+                        s0_dataset = multiscales['datasets'][0]
+                        if 'coordinateTransformations' in s0_dataset:
+                            for transform in s0_dataset['coordinateTransformations']:
+                                if transform['type'] == 'scale':
+                                    voxel_sizes = transform['scale']
+                                    break
+
+    else:  # zarr2
+        # Read s0 shape, chunks, dtype
+        with open(zarr2_metadata_path, 'r') as f:
+            metadata = json.load(f)
+        shape = metadata.get('shape')
+        chunk_shape = metadata.get('chunks')
+
+        # Zarr2 doesn't have sharding, so set to None
+        shard_shape = chunk_shape  # Use chunk as shard for consistency
+        inner_chunk_shape = None
+
+        # Get dtype size
+        dtype_str = metadata.get('dtype', '<u2')  # default uint16
+        dtype = np.dtype(dtype_str)
+        dtype_size = dtype.itemsize
+
+        # Try to get dimension names from .zattrs
+        zattrs_path = os.path.join(s0_path, ".zattrs")
+        axes_names = None
+        if os.path.exists(zattrs_path):
+            with open(zattrs_path, 'r') as f:
+                attrs = json.load(f)
+                axes_names = attrs.get('_ARRAY_DIMENSIONS')
+
+        # Extract voxel sizes from multiscale .zattrs
+        # s0_path is like "/path/dataset.zarr/multiscale/s0", multiscale is parent
+        multiscale_path = os.path.dirname(s0_path)
+        multiscale_zattrs = os.path.join(multiscale_path, ".zattrs")
+        voxel_sizes = None
+        if os.path.exists(multiscale_zattrs):
+            with open(multiscale_zattrs, 'r') as f:
+                attrs = json.load(f)
+                if 'multiscales' in attrs and len(attrs['multiscales']) > 0:
+                    multiscales = attrs['multiscales'][0]
+                    if 'datasets' in multiscales and len(multiscales['datasets']) > 0:
+                        s0_dataset = multiscales['datasets'][0]
+                        if 'coordinateTransformations' in s0_dataset:
+                            for transform in s0_dataset['coordinateTransformations']:
+                                if transform['type'] == 'scale':
+                                    voxel_sizes = transform['scale']
+                                    break
+
+    # Validate metadata
+    if not shape:
+        raise ValueError(f"Could not extract shape from {s0_path}")
+
+    if not voxel_sizes:
+        voxel_sizes = [1.0] * len(shape)
+        print(f"Warning: Could not extract voxel sizes, using default: {voxel_sizes}")
+
+    if not axes_names:
+        axes_names = ['z', 'y', 'x'][-len(shape):]
+        print(f"Warning: Could not extract axes_names, using default: {axes_names}")
+
+    if not chunk_shape:
+        chunk_shape = [32] * len(shape)
+        print(f"Warning: Could not extract chunk_shape, using default: {chunk_shape}")
+
+    # Calculate number of levels needed with new stopping criteria
+    num_levels = calculate_num_multiscale_levels(
+        shape, axes_names, voxel_sizes,
+        chunk_shape=chunk_shape,
+        dtype_size=dtype_size,
+        min_array_nbytes=min_array_nbytes,
+        min_array_shape=min_array_shape,
+        shard_shape=shard_shape  # Rule 5: Stop when array < shard
+    )
+
+    # Pre-calculate all factors and keep shard/chunk shapes constant
+    pyramid_plan = []
+    current_voxel_sizes = voxel_sizes.copy()
+    current_shape = shape.copy()
+
+    # Keep original shard and chunk shapes constant across all levels (Mark's recommendation)
+    original_shard_shape = shard_shape.copy() if shard_shape else None
+    original_inner_chunk_shape = inner_chunk_shape.copy() if inner_chunk_shape else None
+
+    for level in range(1, num_levels + 1):
+        # Calculate anisotropic factor for this level
+        factor = calculate_anisotropic_downsample_factors(current_voxel_sizes, axes_names)
+
+        # Predict next level's voxel sizes (without creating data!)
+        predicted_voxel_sizes = [v * f for v, f in zip(current_voxel_sizes, factor)]
+
+        # Predict next level's array shape
+        predicted_shape = [max(1, s // f) for s, f in zip(current_shape, factor)]
+
+        # Keep chunk and shard shapes constant across all levels (Mark's recommendation)
+        # "The easiest would be to just keep the shard and chunk shape constant the whole time."
+        scaled_chunk = original_inner_chunk_shape.copy() if original_inner_chunk_shape else None
+        scaled_shard = original_shard_shape.copy() if original_shard_shape else None
+
+        pyramid_plan.append({
+            "level": level,
+            "factor": factor,
+            "predicted_voxel_sizes": predicted_voxel_sizes,
+            "predicted_shape": predicted_shape,
+            "shard_shape": scaled_shard,
+            "chunk_shape": scaled_chunk
+        })
+
+        # Update for next iteration (only voxel sizes and shape change, not chunk/shard)
+        current_voxel_sizes = predicted_voxel_sizes
+        current_shape = predicted_shape
+
+    return {
+        'format': format_type,
+        'shape': shape,
+        'voxel_sizes': voxel_sizes,
+        'axes_names': axes_names,
+        'chunk_shape': chunk_shape,
+        'shard_shape': shard_shape,
+        'inner_chunk_shape': inner_chunk_shape,
+        'dtype_size': dtype_size,
+        'num_levels': num_levels,
+        'pyramid_plan': pyramid_plan
+    }
+
+
+def generate_cli_coordinator_script(output_path, pyramid_plan, args):
+    """
+    Generate coordinator script for cluster auto-multiscale from existing s0.
+
+    Args:
+        output_path: Zarr dataset path (contains s0/)
+        pyramid_plan: Output from calculate_pyramid_plan()
+        args: CLI arguments (cores, wall_time, project, etc.)
+
+    Returns:
+        Bash script as string
+    """
+    import sys
+
+    # Pick downsample task based on format
+    format_type = pyramid_plan.get('format', 'zarr3')
+    downsample_task = "downsample_shard_zarr3" if format_type == 'zarr3' else "downsample_zarr2"
+
+    # Paths to run tensorswitch
+    tensorswitch_dir = os.path.dirname(os.path.dirname(__file__))
+    python_path = sys.executable
+    submit_cmd = f"cd {tensorswitch_dir} && {python_path} -m tensorswitch"
+
+    # Build command arguments
+    # Auto-detect sharding from s0 metadata (if inner_chunk_shape exists, s0 uses sharding)
+    use_shard = 1 if pyramid_plan.get('inner_chunk_shape') is not None else 0
+    # Use num_volumes=1 to avoid race conditions with linear chunk indexing vs 3D shard boundaries
+    base_args = f"--downsample 1 --use_shard {use_shard} --memory_limit {args.memory_limit} --cores {args.cores} --wall_time {args.wall_time} --project {args.project} --num_volumes 1"
+
+    if hasattr(args, 'custom_shard_shape') and args.custom_shard_shape:
+        base_args += f" --custom_shard_shape {args.custom_shard_shape}"
+    if hasattr(args, 'custom_chunk_shape') and args.custom_chunk_shape:
+        base_args += f" --custom_chunk_shape {args.custom_chunk_shape}"
+
+    num_levels = pyramid_plan.get('num_levels', 0)
+    levels_info = pyramid_plan.get('pyramid_plan', [])
+
+    script = f"""#!/bin/bash
+set -e
+
+echo "Auto-multiscale: {output_path} (s1 to s{num_levels})"
+
+extract_job_ids() {{
+    grep -oP 'Job <\\K[0-9]+(?=>)' || true
+}}
+
+submit_and_wait() {{
+    local level=$1
+    local task=$2
+    local base_path=$3
+    local output_path=$4
+    shift 4
+    local extra_args="$@"
+
+    output=$({submit_cmd} \\
+        --task $task \\
+        --base_path "$base_path" \\
+        --output_path "$output_path" \\
+        --level $level \\
+        {base_args} \\
+        $extra_args \\
+        --submit 2>&1)
+
+    job_ids=$(echo "$output" | extract_job_ids | tr '\\n' ' ')
+
+    if [ -z "$job_ids" ]; then
+        echo "ERROR: No job IDs for s$level"
+        exit 1
+    fi
+
+    echo "Submitting s$level... Jobs: $job_ids"
+
+    wait_condition=""
+    for job_id in $job_ids; do
+        if [ -z "$wait_condition" ]; then
+            wait_condition="done($job_id)"
+        else
+            wait_condition="$wait_condition && done($job_id)"
+        fi
+    done
+
+    bwait -w "$wait_condition" 2>&1 || true
+    echo "s$level done"
+}}
+
+"""
+
+    # Add each level with its anisotropic factor and scaled shard/chunk shapes
+    for level_info in levels_info:
+        level = level_info['level']
+        factor = level_info['factor']
+        factor_str = ",".join(map(str, factor))
+        prev_level_path = os.path.join(output_path, f"s{level-1}")
+
+        # Build extra args with shard/chunk shapes if available
+        extra_args = f"--anisotropic_factors \"{factor_str}\""
+        if level_info.get('shard_shape'):
+            shard_str = ",".join(map(str, level_info['shard_shape']))
+            extra_args += f" --custom_shard_shape \"{shard_str}\""
+        if level_info.get('chunk_shape'):
+            chunk_str = ",".join(map(str, level_info['chunk_shape']))
+            extra_args += f" --custom_chunk_shape \"{chunk_str}\""
+
+        script += f"""submit_and_wait {level} "{downsample_task}" "{prev_level_path}" "{output_path}" {extra_args}
+"""
+
+    script += f"""
+echo "All levels complete: {output_path}"
+"""
+
+    return script
+
+
+def generate_auto_multiscale(output_path, min_dimension=256, use_shard=True, memory_limit=50,
+                             custom_shard_shape=None, custom_chunk_shape=None, is_submit_mode=False):
+    """
+    Automatically generate multiscale pyramid levels using Yurii Zubov's anisotropic algorithm.
+
+    Args:
+        output_path: Path to the zarr dataset (contains s0/)
+        min_dimension: Minimum spatial dimension for stopping (default: 256)
+        use_shard: Whether to use sharding for zarr3 (default: True)
+        memory_limit: Memory limit percentage (default: 50)
+        custom_shard_shape: Optional custom shard shape list
+        custom_chunk_shape: Optional custom chunk shape list
+        is_submit_mode: Whether jobs should be submitted to cluster (True) or run locally (False)
+
+    Credit: Yurii Zubov (Janelia CellMap Team) for the anisotropic downsampling algorithm
+    """
+    import json
+
+    print("\n" + "="*80)
+    print("AUTO-MULTISCALE GENERATION (Yurii Zubov's Anisotropic Algorithm)")
+    print("="*80)
+
+    # Detect format: zarr3 (has s0/zarr.json) or zarr2 (has multiscale/s0/.zarray)
+    zarr3_metadata_path = os.path.join(output_path, "s0", "zarr.json")
+    zarr2_metadata_path = os.path.join(output_path, "multiscale", "s0", ".zarray")
+
+    is_zarr3 = os.path.exists(zarr3_metadata_path)
+    is_zarr2 = os.path.exists(zarr2_metadata_path)
+
+    if not is_zarr3 and not is_zarr2:
+        print(f"ERROR: Cannot find zarr metadata at {output_path}")
+        print("Expected either:")
+        print(f"  - Zarr3: {zarr3_metadata_path}")
+        print(f"  - Zarr2: {zarr2_metadata_path}")
+        return
+
+    format_type = "zarr3" if is_zarr3 else "zarr2"
+    print(f"Detected format: {format_type}")
+
+    # Read metadata based on format
+    if is_zarr3:
+        with open(zarr3_metadata_path, 'r') as f:
+            metadata = json.load(f)
+        shape = metadata.get('shape')
+        dimension_names = metadata.get('dimension_names')
+
+        # Extract voxel sizes from root zarr.json
+        root_zarr_json = os.path.join(output_path, "zarr.json")
+        voxel_sizes = None
+
+        if os.path.exists(root_zarr_json):
+            with open(root_zarr_json, 'r') as f:
+                root_metadata = json.load(f)
+                # Look for OME-NGFF multiscales metadata
+                if 'attributes' in root_metadata and 'multiscales' in root_metadata['attributes']:
+                    multiscales = root_metadata['attributes']['multiscales'][0]
+                    if 'datasets' in multiscales and len(multiscales['datasets']) > 0:
+                        # Get s0 transformations
+                        s0_dataset = multiscales['datasets'][0]
+                        if 'coordinateTransformations' in s0_dataset:
+                            for transform in s0_dataset['coordinateTransformations']:
+                                if transform['type'] == 'scale':
+                                    voxel_sizes = transform['scale']
+                                    break
+    else:  # zarr2
+        with open(zarr2_metadata_path, 'r') as f:
+            metadata = json.load(f)
+        shape = metadata.get('shape')
+
+        # Try to get dimension_names from .zattrs
+        zattrs_path = os.path.join(output_path, "multiscale", "s0", ".zattrs")
+        dimension_names = None
+        if os.path.exists(zattrs_path):
+            with open(zattrs_path, 'r') as f:
+                attrs = json.load(f)
+                dimension_names = attrs.get('_ARRAY_DIMENSIONS')
+
+        # Extract voxel sizes from multiscale .zattrs
+        multiscale_zattrs = os.path.join(output_path, "multiscale", ".zattrs")
+        voxel_sizes = None
+        if os.path.exists(multiscale_zattrs):
+            with open(multiscale_zattrs, 'r') as f:
+                attrs = json.load(f)
+                if 'multiscales' in attrs and len(attrs['multiscales']) > 0:
+                    multiscales = attrs['multiscales'][0]
+                    if 'datasets' in multiscales and len(multiscales['datasets']) > 0:
+                        s0_dataset = multiscales['datasets'][0]
+                        if 'coordinateTransformations' in s0_dataset:
+                            for transform in s0_dataset['coordinateTransformations']:
+                                if transform['type'] == 'scale':
+                                    voxel_sizes = transform['scale']
+                                    break
+
+    if not voxel_sizes:
+        print("Warning: Could not extract voxel sizes from metadata")
+        # Use default uniform voxel sizes
+        voxel_sizes = [1.0] * len(shape)
+
+    if not dimension_names:
+        print("Warning: Could not extract dimension_names from metadata")
+        # Guess based on shape
+        if len(shape) == 3:
+            dimension_names = ['z', 'y', 'x']
+        elif len(shape) == 4:
+            dimension_names = ['c', 'z', 'y', 'x']
+        elif len(shape) == 5:
+            dimension_names = ['t', 'c', 'z', 'y', 'x']
+        else:
+            dimension_names = [f'dim{i}' for i in range(len(shape))]
+
+    print(f"s0 Shape: {shape}")
+    print(f"s0 Dimension names: {dimension_names}")
+    print(f"s0 Voxel sizes: {voxel_sizes}")
+
+    # Calculate pyramid levels
+    num_levels, level_info = calculate_num_multiscale_levels(
+        shape=shape,
+        axes_names=dimension_names,
+        voxel_sizes=voxel_sizes,
+        min_dimension=min_dimension,
+        use_anisotropic=True
+    )
+
+    print(f"\nCalculated {num_levels} levels total (including s0)")
+    print("\nPyramid Plan:")
+    for info in level_info:
+        level = info['level']
+        level_shape = info['shape']
+        level_voxels = info['voxel_sizes']
+        factors = info['factors']
+
+        if level == 0:
+            print(f"  s{level}: shape={level_shape}, voxel_sizes={[f'{v:.2f}' for v in level_voxels]}")
+        else:
+            print(f"  s{level}: shape={level_shape}, voxel_sizes={[f'{v:.2f}' for v in level_voxels]}, factors={factors}")
+
+    if is_submit_mode:
+        print("\n" + "="*80)
+        print("CLUSTER SUBMISSION MODE - TODO: Coordinator Script")
+        print("="*80)
+        print("NOTE: Auto-multiscale in cluster mode requires a coordinator script")
+        print("      because s0 jobs run asynchronously. For now, please:")
+        print("      1. Wait for s0 jobs to complete")
+        print("      2. Run auto-multiscale locally to generate remaining levels")
+        print("\nTODO: Implement coordinator script that:")
+        print("  - Monitors s0 job completion")
+        print("  - Reads s0 metadata after completion")
+        print("  - Submits s1, s2, s3... jobs sequentially")
+        print("="*80 + "\n")
+        return
+
+    # Local execution mode - generate all levels sequentially
+    print("\n" + "="*80)
+    print("LOCAL EXECUTION MODE - Generating levels sequentially")
+    print("="*80)
+
+    # Import task modules here to avoid circular imports
+    from .tasks import downsample_shard_zarr3, downsample_zarr2
+
+    for info in level_info[1:]:  # Skip s0 (already created)
+        level = info['level']
+        factors = info['factors']
+
+        print(f"\n--- Generating s{level} with factors {factors} ---")
+
+        # Determine input path (previous level)
+        prev_level = level - 1
+
+        if is_zarr3:
+            input_path = os.path.join(output_path, f"s{prev_level}")
+
+            # Call zarr3 downsample task
+            downsample_shard_zarr3.process(
+                base_path=input_path,
+                output_path=output_path,
+                level=level,
+                start_idx=0,
+                stop_idx=None,
+                downsample=True,
+                use_shard=use_shard,
+                memory_limit=memory_limit,
+                custom_shard_shape=custom_shard_shape,
+                custom_chunk_shape=custom_chunk_shape,
+                anisotropic_factors=factors
+            )
+        else:  # zarr2
+            input_path = os.path.join(output_path, "multiscale", f"s{prev_level}")
+
+            # Call zarr2 downsample task
+            downsample_zarr2.process(
+                base_path=input_path,
+                output_path=output_path,
+                level=level,
+                start_idx=0,
+                stop_idx=None,
+                downsample=True,
+                memory_limit=memory_limit,
+                custom_chunk_shape=custom_chunk_shape,
+                anisotropic_factors=factors
+            )
+
+        print(f"✓ Completed s{level}")
+
+    print("\n" + "="*80)
+    print(f"AUTO-MULTISCALE COMPLETE - Generated s0 through s{num_levels-1}")
+    print("="*80 + "\n")
 
 
