@@ -17,7 +17,7 @@ from .utils import (get_total_chunks, downsample_spec, zarr3_store_spec, get_chu
                     load_tiff_stack, load_nd2_stack, load_ims_stack, update_ome_metadata_if_needed,
                     calculate_num_multiscale_levels, calculate_anisotropic_downsample_factors,
                     generate_auto_multiscale, calculate_pyramid_plan, generate_cli_coordinator_script)
-from .tasks import (downsample_shard_zarr3, n5_to_n5, n5_to_zarr2, tiff_to_zarr3_s0,
+from .tasks import (downsample_shard_zarr3, n5_to_n5, n5_to_zarr2, n5_to_zarr3_s0, tiff_to_zarr3_s0,
                     nd2_to_zarr3_s0, ims_to_zarr3_s0, nd2_to_zarr2_s0, ims_to_zarr2_s0,
                     tiff_to_zarr2_s0, downsample_zarr2, precomputed_to_n5)
 from .dask_utils import submit_dask_job, submit_dask_wrapper_job
@@ -121,7 +121,31 @@ def get_total_chunks_for_task(args, use_v2_encoding=True):
 
     input_driver = "n5" if args.base_path.startswith("http") else get_input_driver(args.base_path)
 
-    if args.task == "tiff_to_zarr3_s0" and input_driver == "tiff":
+    if args.task == "n5_to_zarr3_s0":
+        # Open N5 to get shape
+        from .utils import n5_store_spec
+        n5_store = ts.open(n5_store_spec(args.base_path)).result()
+        shape = n5_store.shape
+        dtype = str(n5_store.dtype.numpy_dtype)
+
+        store_spec = zarr3_store_spec(
+            path=args.output_path,
+            shape=shape,
+            dtype=dtype,
+            use_shard=bool(args.use_shard),
+            level_path=f"s{args.level}",
+            use_ome_structure=bool(args.use_ome_structure),
+            custom_shard_shape=custom_shard_shape,
+            custom_chunk_shape=custom_chunk_shape,
+            use_v2_encoding=use_v2_encoding
+        )
+        temp_store = ts.open(store_spec, create=True, delete_existing=True).result()
+
+        # For sharded arrays, count by write_chunk (shard shape), not read_chunk (inner chunks)
+        # write_chunk = shard size (1024³), read_chunk = inner chunk size (32³)
+        total_chunks = get_total_chunks_from_store(temp_store, chunk_shape=temp_store.chunk_layout.write_chunk.shape)
+
+    elif args.task == "tiff_to_zarr3_s0" and input_driver == "tiff":
         volume = load_tiff_stack(args.base_path)
         store_spec = zarr3_store_spec(
             path=args.output_path,
@@ -279,7 +303,9 @@ def submit_job(args, use_v2_encoding=True):
 
     # Calculate chunks per shard for shard-aligned distribution
     chunks_per_shard = 1  # Default: no sharding
-    if bool(args.use_shard) and args.custom_shard_shape and args.custom_chunk_shape:
+    # Note: n5_to_zarr3_s0 already processes by shard domains (write_chunk), not inner chunks
+    # So skip shard-aligned calculation to avoid double-counting (598 shards != 598/32768 shards)
+    if args.task != "n5_to_zarr3_s0" and bool(args.use_shard) and args.custom_shard_shape and args.custom_chunk_shape:
         # Parse shard and chunk shapes
         shard_shape = [int(x) for x in args.custom_shard_shape.split(',')]
         chunk_shape = [int(x) for x in args.custom_chunk_shape.split(',')]
@@ -364,7 +390,7 @@ def submit_job(args, use_v2_encoding=True):
 
 def main():
     parser = argparse.ArgumentParser(description="Unified Pipeline Manager")
-    parser.add_argument("--task", required=True, choices=["n5_to_zarr2", "n5_to_n5", "downsample_shard_zarr3", "tiff_to_zarr3_s0", "nd2_to_zarr3_s0", "ims_to_zarr3_s0", "nd2_to_zarr2_s0", "ims_to_zarr2_s0", "tiff_to_zarr2_s0", "downsample_zarr2", "precomputed_to_n5"])
+    parser.add_argument("--task", required=True, choices=["n5_to_zarr2", "n5_to_zarr3_s0", "n5_to_n5", "downsample_shard_zarr3", "tiff_to_zarr3_s0", "nd2_to_zarr3_s0", "ims_to_zarr3_s0", "nd2_to_zarr2_s0", "ims_to_zarr2_s0", "tiff_to_zarr2_s0", "downsample_zarr2", "precomputed_to_n5"])
     parser.add_argument("--base_path", required=True, help="Input dataset path")
     parser.add_argument("--output_path", required=True, help="Output dataset path (only needed for conversions)")
     parser.add_argument("--level", type=int, default=0, help="Levels to process")
@@ -538,6 +564,8 @@ def main():
             n5_to_n5.convert(args.base_path, args.output_path, args.num_volumes, args.level, args.start_idx, args.stop_idx, args.memory_limit, custom_chunk_shape)
         elif args.task == "n5_to_zarr2":
             n5_to_zarr2.convert(args.base_path, args.output_path, args.level, args.start_idx, args.stop_idx, args.memory_limit)
+        elif args.task == "n5_to_zarr3_s0":
+            n5_to_zarr3_s0.convert(args.base_path, args.output_path, args.level, args.start_idx, args.stop_idx, args.memory_limit, bool(args.use_shard), bool(args.use_ome_structure), custom_shard_shape, custom_chunk_shape, use_v2_encoding)
         elif args.task == "downsample_shard_zarr3":
             downsample_shard_zarr3.process(args.base_path, args.output_path, args.level, args.start_idx, args.stop_idx, bool(args.downsample), bool(args.use_shard), args.memory_limit, custom_shard_shape, custom_chunk_shape, anisotropic_factors)
         elif args.task == "tiff_to_zarr3_s0":
