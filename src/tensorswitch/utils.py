@@ -134,7 +134,7 @@ def zarr2_store_spec(zarr_level_path, shape, chunks):
     }
 
 
-def zarr3_store_spec(path, shape, dtype, use_shard=True, level_path="s0", use_ome_structure=True, custom_shard_shape=None, custom_chunk_shape=None, use_v2_encoding=False):
+def zarr3_store_spec(path, shape, dtype, use_shard=True, level_path="s0", use_ome_structure=True, custom_shard_shape=None, custom_chunk_shape=None, use_v2_encoding=False, use_fortran_order=False):
     if use_shard:
         # Use custom chunk shape if provided, otherwise default
         inner_chunk_shape = custom_chunk_shape if custom_chunk_shape is not None else [32, 32, 32]
@@ -155,15 +155,21 @@ def zarr3_store_spec(path, shape, dtype, use_shard=True, level_path="s0", use_om
         else:
             adjusted_inner_chunk = inner_chunk_shape
         
+        # Build inner codecs for sharding (with optional transpose for F-order)
+        inner_codecs = []
+        if use_fortran_order:
+            inner_codecs.append({'name': 'transpose', 'configuration': {'order': 'F'}})
+        inner_codecs.extend([
+            {'name': 'bytes', 'configuration': {'endian': 'little'}},
+            {'name': 'zstd', 'configuration': {'level': 5}}
+        ])
+
         codecs = [
             {
                 'name': 'sharding_indexed',
                 'configuration': {
                     'chunk_shape': adjusted_inner_chunk,
-                    'codecs': [
-                        {'name': 'bytes', 'configuration': {'endian': 'little'}},
-                        {'name': 'zstd', 'configuration': {'level': 5}}
-                    ],
+                    'codecs': inner_codecs,
                     'index_codecs': [
                         {'name': 'bytes', 'configuration': {'endian': 'little'}},
                         {'name': 'crc32c'}
@@ -192,10 +198,14 @@ def zarr3_store_spec(path, shape, dtype, use_shard=True, level_path="s0", use_om
         else:
             chunk_shape = [1024, 1024, 1024]
     else:
-        codecs = [
+        # Non-sharded codecs (with optional transpose for F-order)
+        codecs = []
+        if use_fortran_order:
+            codecs.append({'name': 'transpose', 'configuration': {'order': 'F'}})
+        codecs.extend([
             {'name': 'bytes', 'configuration': {'endian': 'little'}},
             {'name': 'zstd', 'configuration': {'level': 1}}
-        ]
+        ])
         # Handle 5D to 1D arrays, assuming order
         # TODO: Make this depend on axes metadata detection
         if len(shape) == 5:
