@@ -280,6 +280,117 @@ def downsample_spec(base_spec, array_shape=None, dimension_names=None, custom_fa
         'downsample_method': 'mode'
     }
 
+def precreate_shard_directories(output_path, level, output_shape, shard_shape, use_ome_structure=True):
+    """
+    Pre-create all shard directory structures to avoid race conditions with parallel workers.
+
+    This function should be called ONCE before submitting parallel jobs, not by each worker.
+    Workers can check if directories exist and skip redundant creation.
+
+    Args:
+        output_path: Base zarr dataset path (e.g., /path/to/data.zarr)
+        level: Target level number (0 for s0, 1 for s1, etc.)
+        output_shape: Expected output array shape (e.g., [23500, 6500, 1000] for ZYX)
+        shard_shape: Shard shape matching output dimensions (e.g., [1024, 1024, 1024])
+        use_ome_structure: Whether to use OME-NGFF structure with s{level} subdirectories
+
+    Returns:
+        int: Number of directories created
+
+    Example:
+        # For s1 with shape [23500, 6500, 1000] and shard [1024, 1024, 1024]
+        precreate_shard_directories(
+            "/data/image.zarr",
+            level=1,
+            output_shape=[23500, 6500, 1000],
+            shard_shape=[1024, 1024, 1024]
+        )
+    """
+    import time
+
+    print("\n" + "="*80)
+    print(f"PRE-CREATING SHARD DIRECTORIES FOR s{level}")
+    print("="*80)
+
+    # Convert to lists if needed
+    if not isinstance(output_shape, list):
+        output_shape = list(output_shape)
+    if not isinstance(shard_shape, list):
+        shard_shape = list(shard_shape)
+
+    # Adjust shard shape to match array dimensions if needed
+    if len(output_shape) == 4 and len(shard_shape) == 3:
+        shard_shape = [1] + shard_shape  # CZYX
+    elif len(output_shape) == 4 and len(shard_shape) == 2:
+        shard_shape = [1, 1] + shard_shape  # CZYX with YX shards
+    elif len(output_shape) == 3 and len(shard_shape) == 2:
+        shard_shape = [1] + shard_shape  # CYX or ZYX
+    elif len(output_shape) == 5 and len(shard_shape) == 3:
+        shard_shape = [1, 1] + shard_shape  # TCZYX
+    elif len(output_shape) == 5 and len(shard_shape) == 2:
+        shard_shape = [1, 1, 1] + shard_shape  # TCZYX with YX shards
+
+    # Calculate number of shards in each dimension
+    num_shards = [
+        (output_shape[i] + shard_shape[i] - 1) // shard_shape[i]
+        for i in range(len(output_shape))
+    ]
+
+    total_dirs = np.prod([num_shards[i] for i in range(min(len(num_shards)-1, 3))])  # Skip last X dimension
+
+    print(f"Output shape: {output_shape}")
+    print(f"Shard shape: {shard_shape}")
+    print(f"Number of shards per dimension: {num_shards}")
+    print(f"Total directories to create: {total_dirs}")
+
+    # Determine base path
+    if use_ome_structure:
+        base_shard_path = os.path.join(output_path, f"s{level}", "c")
+    else:
+        base_shard_path = os.path.join(output_path, "c")
+
+    print(f"Base shard path: {base_shard_path}")
+
+    # Create all shard parent directories
+    created = 0
+    start_time = time.time()
+
+    if len(num_shards) == 4:  # CZYX
+        for c in range(num_shards[0]):
+            for z in range(num_shards[1]):
+                for y in range(num_shards[2]):
+                    dir_path = os.path.join(base_shard_path, str(c), str(z), str(y))
+                    os.makedirs(dir_path, exist_ok=True)
+                    created += 1
+                    if created % 100 == 0:
+                        print(f"  Progress: {created}/{total_dirs} ({100*created/total_dirs:.1f}%)")
+    elif len(num_shards) == 3:  # ZYX or CYX
+        for dim0 in range(num_shards[0]):
+            for dim1 in range(num_shards[1]):
+                dir_path = os.path.join(base_shard_path, str(dim0), str(dim1))
+                os.makedirs(dir_path, exist_ok=True)
+                created += 1
+                if created % 100 == 0:
+                    print(f"  Progress: {created}/{total_dirs} ({100*created/total_dirs:.1f}%)")
+    elif len(num_shards) == 5:  # TCZYX
+        for t in range(num_shards[0]):
+            for c in range(num_shards[1]):
+                for z in range(num_shards[2]):
+                    for y in range(num_shards[3]):
+                        dir_path = os.path.join(base_shard_path, str(t), str(c), str(z), str(y))
+                        os.makedirs(dir_path, exist_ok=True)
+                        created += 1
+                        if created % 100 == 0:
+                            print(f"  Progress: {created}/{total_dirs} ({100*created/total_dirs:.1f}%)")
+
+    elapsed = time.time() - start_time
+    rate = created / elapsed if elapsed > 0 else 0
+    print(f"\n✓ Created {created} shard directories in {elapsed:.2f} seconds ({rate:.1f} dirs/sec)")
+    print("="*80 + "\n")
+
+    return created
+
+
 def create_output_store(spec):
     with ts.Transaction() as txn:
         store = ts.open(spec, create=True, open=True, delete_existing=False).result()
@@ -948,6 +1059,45 @@ def extract_ims_metadata(ims_file):
     except Exception as e:
         print(f"Warning: Could not extract metadata from {ims_file}: {e}")
         return {}, None
+
+def extract_n5_voxel_sizes(n5_attrs, level=0):
+    """
+    Extract voxel sizes from N5 attributes.json.
+
+    Args:
+        n5_attrs: Parsed N5 attributes.json dictionary
+        level: Scale level (0, 1, 2, etc.)
+
+    Returns:
+        tuple: (voxel_sizes_um, dataset_name)
+            voxel_sizes_um: [x, y, z] in micrometers, or None if not found
+            dataset_name: Name from N5 multiscales, or None
+    """
+    if not n5_attrs or 'multiscales' not in n5_attrs:
+        return None, None
+
+    try:
+        multiscales = n5_attrs['multiscales'][0]
+        dataset_name = multiscales.get('name', None)
+
+        # Find the dataset for this level
+        datasets = multiscales.get('datasets', [])
+        if level >= len(datasets):
+            return None, dataset_name
+
+        transform = datasets[level].get('transform', {})
+        voxel_sizes_nm = transform.get('scale', None)
+
+        if voxel_sizes_nm:
+            # Convert nm to micrometers
+            voxel_sizes_um = [v / 1000.0 for v in voxel_sizes_nm]
+            return voxel_sizes_um, dataset_name
+
+    except Exception as e:
+        print(f"Warning: Could not extract voxel sizes from N5: {e}")
+
+    return None, None
+
 
 def convert_ims_to_zarr3_metadata(ims_file, array_shape, voxel_sizes=None):
     """Convert IMS metadata to zarr3 OME-ZARR format."""
