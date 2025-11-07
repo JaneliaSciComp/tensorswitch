@@ -102,6 +102,9 @@ def convert(base_path, output_path, level=0, start_idx=0, stop_idx=None,
     # Create Zarr3 output
     level_path = f"s{level}" if use_ome_structure else None
 
+    # Get use_fortran_order from kwargs (defaults to False)
+    use_fortran_order = kwargs.get('use_fortran_order', False)
+
     store_spec = zarr3_store_spec(
         path=output_path,
         shape=shape,
@@ -111,7 +114,8 @@ def convert(base_path, output_path, level=0, start_idx=0, stop_idx=None,
         use_ome_structure=use_ome_structure,
         custom_shard_shape=custom_shard_shape,
         custom_chunk_shape=custom_chunk_shape,
-        use_v2_encoding=use_v2_encoding
+        use_v2_encoding=use_v2_encoding,
+        use_fortran_order=use_fortran_order
     )
     store_spec['context'] = context
 

@@ -618,6 +618,7 @@ def main():
     parser.add_argument("--downsample", type=int, default=0, choices=[0, 1], help="Enable downsampling (default: 1)")
     parser.add_argument("--use_shard", type=int, default=0, choices=[0, 1], help="Use sharded format (for downsample)")
     parser.add_argument("--use_ome_structure", type=int, default=1, choices=[0, 1], help="Use OME-ZARR multiscale structure (s0 subdirectory)")
+    parser.add_argument("--use_fortran_order", type=int, default=0, choices=[0, 1], help="Use Fortran (F) order instead of C order (adds transpose codec)")
     parser.add_argument("--submit", action="store_true", help="Submit to the cluster scheduler")
     parser.add_argument("--memory_limit", type=int, default=50, help="memory limit percentage" )
     parser.add_argument("--project", default="None", help="Project to charge")
@@ -783,14 +784,14 @@ def main():
         elif args.task == "n5_to_zarr2":
             n5_to_zarr2.convert(args.base_path, args.output_path, args.level, args.start_idx, args.stop_idx, args.memory_limit)
         elif args.task == "n5_to_zarr3_s0":
-            n5_to_zarr3_s0.convert(args.base_path, args.output_path, args.level, args.start_idx, args.stop_idx, args.memory_limit, bool(args.use_shard), bool(args.use_ome_structure), custom_shard_shape, custom_chunk_shape, use_v2_encoding)
+            n5_to_zarr3_s0.convert(args.base_path, args.output_path, args.level, args.start_idx, args.stop_idx, args.memory_limit, bool(args.use_shard), bool(args.use_ome_structure), custom_shard_shape, custom_chunk_shape, use_v2_encoding, use_fortran_order=bool(args.use_fortran_order))
         elif args.task == "downsample_shard_zarr3":
             # Parse shard_coord if provided
             shard_coord_list = None
             if args.shard_coord:
                 shard_coord_list = [int(x) for x in args.shard_coord.split(',')]
 
-            downsample_shard_zarr3.process(args.base_path, args.output_path, args.level, args.start_idx, args.stop_idx, bool(args.downsample), bool(args.use_shard), args.memory_limit, custom_shard_shape, custom_chunk_shape, anisotropic_factors, shard_coord=shard_coord_list)
+            downsample_shard_zarr3.process(args.base_path, args.output_path, args.level, args.start_idx, args.stop_idx, bool(args.downsample), bool(args.use_shard), args.memory_limit, custom_shard_shape, custom_chunk_shape, anisotropic_factors, shard_coord=shard_coord_list, use_fortran_order=bool(args.use_fortran_order))
 
             # Store downsampling factors in metadata if this is the first worker (shard [0,0,0])
             # This enables precise voxel size calculation in update_ome_metadata_if_needed
