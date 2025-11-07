@@ -834,8 +834,8 @@ def write_zarr3_group_metadata(output_path, metadata):
 def update_ome_multiscale_metadata(zarr_path, max_level=4):
     """Update OME-ZARR metadata to include all multiscale levels s0 through max_level.
 
-    Calculates correct anisotropic scale factors by reading actual array shapes
-    from each level's metadata instead of assuming isotropic 2x downsampling.
+    Uses downsampling factors from custom metadata if available (precise method),
+    otherwise falls back to calculating from dimension ratios (backward compatible).
     """
     import numpy as np
 
@@ -849,37 +849,60 @@ def update_ome_multiscale_metadata(zarr_path, max_level=4):
     multiscales = metadata["attributes"]["ome"]["multiscales"][0]
     s0_scale_factors = multiscales["datasets"][0]["coordinateTransformations"][0]["scale"]
 
-    # Read s0 shape for calculating actual downsampling factors
-    s0_metadata_path = os.path.join(zarr_path, "s0", "zarr.json")
-    with open(s0_metadata_path, 'r') as f:
-        s0_meta = json.load(f)
-    s0_shape = s0_meta.get('shape')
+    # Check if downsampling factors are available in custom metadata (PREFERRED METHOD)
+    downsampling_factors = metadata.get("attributes", {}).get("custom", {}).get("downsampling_factors", None)
+
+    if downsampling_factors:
+        print("✓ Using downsampling factors from custom metadata (precise method)")
+        use_factors = True
+        previous_scale = s0_scale_factors
+    else:
+        print("⚠ No downsampling factors found - using dimension ratio method (may have rounding imprecision)")
+        use_factors = False
+        # Read s0 shape for fallback method
+        s0_metadata_path = os.path.join(zarr_path, "s0", "zarr.json")
+        with open(s0_metadata_path, 'r') as f:
+            s0_meta = json.load(f)
+        s0_shape = s0_meta.get('shape')
 
     # Build datasets for all levels with multiscale paths
     datasets = []
+
     for level in range(max_level + 1):
+        level_metadata_path = os.path.join(zarr_path, f"s{level}", "zarr.json")
+
+        if not os.path.exists(level_metadata_path):
+            print(f"Warning: s{level}/zarr.json not found, skipping level {level}")
+            break
+
         if level == 0:
             # s0 uses original scale factors
             current_scale = s0_scale_factors
         else:
-            # Read this level's shape to calculate actual downsampling factor per dimension
-            level_metadata_path = os.path.join(zarr_path, f"s{level}", "zarr.json")
+            if use_factors:
+                # METHOD 1 (PREFERRED): Use exact downsampling factors from metadata
+                level_factors = downsampling_factors.get(f"s{level}")
+                if not level_factors:
+                    print(f"Warning: No factors for s{level}, falling back to ratio method for remaining levels")
+                    use_factors = False
+                else:
+                    # Multiply parent voxel size by downsampling factors
+                    # Example: s2 [0.04, 0.04, 0.05] * factors [2,2,2] = s3 [0.08, 0.08, 0.1]
+                    current_scale = [previous_scale[i] * level_factors[i] for i in range(len(previous_scale))]
+                    voxel_nm = [s * 1000 for s in current_scale]
+                    print(f"  s{level}: factors={level_factors} → voxel_size={voxel_nm} nm")
 
-            if not os.path.exists(level_metadata_path):
-                print(f"Warning: s{level}/zarr.json not found, skipping level {level}")
-                break
+            if not use_factors:
+                # METHOD 2 (FALLBACK): Calculate from dimension ratios (backward compatible)
+                with open(level_metadata_path, 'r') as f:
+                    level_meta = json.load(f)
+                level_shape = level_meta.get('shape')
 
-            with open(level_metadata_path, 'r') as f:
-                level_meta = json.load(f)
-            level_shape = level_meta.get('shape')
-
-            # Calculate actual downsampling factor per dimension
-            # factor = s0_shape / level_shape (e.g., [4/4, 17993/8997, 10274/5137] ≈ [1, 2, 2])
-            factors = [s0_shape[i] / level_shape[i] for i in range(len(s0_shape))]
-
-            # Apply factors to s0 scale to get current level's scale
-            # (voxel size increases proportionally to downsampling)
-            current_scale = [s0_scale_factors[i] * factors[i] for i in range(len(s0_scale_factors))]
+                # Calculate cumulative factor from s0 to current level
+                factors = [s0_shape[i] / level_shape[i] for i in range(len(s0_shape))]
+                current_scale = [s0_scale_factors[i] * factors[i] for i in range(len(s0_scale_factors))]
+                voxel_nm = [s * 1000 for s in current_scale]
+                print(f"  s{level}: ratio_factors={[round(f, 2) for f in factors]} → voxel_size={voxel_nm} nm")
 
         datasets.append({
             "path": f"s{level}",  # Relative path at root level
@@ -889,6 +912,10 @@ def update_ome_multiscale_metadata(zarr_path, max_level=4):
             }]
         })
 
+        # Update previous_scale for next iteration (used by factor method)
+        if use_factors:
+            previous_scale = current_scale
+
     # Update multiscales datasets
     multiscales["datasets"] = datasets
 
@@ -896,7 +923,7 @@ def update_ome_multiscale_metadata(zarr_path, max_level=4):
     with open(zarr_json_path, 'w') as f:
         json.dump(metadata, f, indent=2)
 
-    print(f"Updated OME metadata for {zarr_path} with levels s0-s{max_level}")
+    print(f"✓ Updated OME metadata for {zarr_path} with levels s0-s{max_level}")
 
 def update_ome_multiscale_metadata_zarr2(zarr_path, max_level=4):
     """Update OME-ZARR metadata for zarr2 format (.zattrs files) to include all multiscale levels."""

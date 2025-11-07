@@ -158,6 +158,39 @@ def convert(base_path, output_path, level=0, start_idx=0, stop_idx=None,
         elapsed = time.time() - start_time
         print(f"Created {total_dirs} directories in {elapsed:.2f}s")
 
+    # Create root zarr.json with OME-NGFF metadata if using OME structure and this is level 0
+    if use_ome_structure and level == 0:
+        try:
+            print("Creating root zarr.json with OME-NGFF metadata...")
+
+            # Build pixel_sizes dict for create_zarr3_ome_metadata
+            pixel_sizes = None
+            if voxel_sizes_um and len(voxel_sizes_um) >= 3:
+                # N5 uses [x, y, z] order, OME-NGFF also uses [x, y, z] in the scale array
+                # But our axes are [z, y, x], so we need to match properly
+                pixel_sizes = {
+                    'x': voxel_sizes_um[0],
+                    'y': voxel_sizes_um[1],
+                    'z': voxel_sizes_um[2]
+                }
+                print(f"Using voxel sizes from N5: x={pixel_sizes['x']}, y={pixel_sizes['y']}, z={pixel_sizes['z']} µm")
+
+            # Create OME metadata structure
+            zarr3_metadata = create_zarr3_ome_metadata(
+                ome_xml=None,  # N5 doesn't have OME-XML
+                array_shape=shape,
+                image_name=dataset_name or os.path.basename(output_path),
+                pixel_sizes=pixel_sizes
+            )
+
+            # Write root zarr.json
+            write_zarr3_group_metadata(output_path, zarr3_metadata)
+            print("✓ Root zarr.json created with OME-NGFF metadata")
+
+        except Exception as e:
+            print(f"Warning: Could not create root zarr.json: {e}")
+            print("  Conversion will continue, but root metadata will be missing")
+
     # Calculate chunks
     chunk_shape = zarr3_store.chunk_layout.write_chunk.shape
     total_chunks = get_total_chunks_from_store(zarr3_store, chunk_shape=chunk_shape)

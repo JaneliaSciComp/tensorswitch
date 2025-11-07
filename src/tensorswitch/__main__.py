@@ -255,9 +255,34 @@ def get_total_chunks_for_task(args, use_v2_encoding=True):
             else:
                 input_path = os.path.join(args.base_path, f"s{prev_level}")
 
+            # Open input store to get input shape
             downsample_store = ts.open({"driver": "zarr3", "kvstore": {"driver": "file", "path": input_path}}).result()
-            chunk_shape = downsample_store.chunk_layout.read_chunk.shape
-            total_chunks = get_total_chunks_from_store(downsample_store, chunk_shape=chunk_shape)
+            input_shape = downsample_store.shape
+
+            # Parse anisotropic factors (default to [2,2,2] if not provided)
+            if hasattr(args, 'anisotropic_factors') and args.anisotropic_factors:
+                aniso_factors = [int(x) for x in args.anisotropic_factors.split(',')]
+            else:
+                aniso_factors = [2, 2, 2]
+
+            # Calculate OUTPUT shape (input / factors)
+            import math
+            output_shape = [
+                math.ceil(input_shape[i] / aniso_factors[i])
+                for i in range(len(input_shape))
+            ]
+
+            # Use custom_chunk_shape if provided, otherwise use input's chunk shape
+            if custom_chunk_shape:
+                chunk_shape = custom_chunk_shape
+            else:
+                chunk_shape = downsample_store.chunk_layout.read_chunk.shape
+
+            # Calculate total chunks based on OUTPUT shape, not input shape!
+            total_chunks = math.prod([
+                (output_shape[i] + chunk_shape[i] - 1) // chunk_shape[i]
+                for i in range(len(output_shape))
+            ])
         else:
             total_chunks = get_total_chunks(args.base_path)
 
@@ -332,6 +357,8 @@ def submit_job(args, use_v2_encoding=True):
 
     # Calculate chunks per shard for shard-aligned distribution
     chunks_per_shard = 1  # Default: no sharding
+    total_3d_shards = None  # Will be calculated if using 3D sharding
+
     # Note: n5_to_zarr3_s0 already processes by shard domains (write_chunk), not inner chunks
     # So skip shard-aligned calculation to avoid double-counting (598 shards != 598/32768 shards)
     if args.task != "n5_to_zarr3_s0" and bool(args.use_shard) and args.custom_shard_shape and args.custom_chunk_shape:
@@ -346,76 +373,237 @@ def submit_job(args, use_v2_encoding=True):
 
         print(f"Shard-aligned distribution: {chunks_per_shard} chunks per shard")
 
-    # Calculate total shards (round up)
-    total_shards = (total_chunks + chunks_per_shard - 1) // chunks_per_shard
+        # Calculate 3D shard count from output shape (more accurate than linear chunk count)
+        if volume_shape:
+            import math
+            total_3d_shards = math.prod([
+                (volume_shape[i] + shard_shape[i] - 1) // shard_shape[i]
+                for i in range(len(volume_shape))
+            ])
+            print(f"3D shard count: {total_3d_shards} (from output shape {volume_shape})")
+
+    # Calculate total shards
+    # Use 3D shard count if available (more accurate for spatial distribution)
+    # Otherwise fall back to linear chunk-based count
+    if total_3d_shards:
+        total_shards = total_3d_shards
+    else:
+        total_shards = (total_chunks + chunks_per_shard - 1) // chunks_per_shard
 
     # The number of volumes can be at most total_shards
     num_volumes = min(total_shards, args.num_volumes)
+    print(f"Distributing {total_chunks:,} chunks across {num_volumes} workers ({total_shards} shards total)")
 
-    for i in range(num_volumes):
-        # Distribute by complete shards
-        start_shard = i * (total_shards // num_volumes)
-        if i == num_volumes - 1:
-            stop_shard = total_shards
-        else:
-            stop_shard = (i + 1) * (total_shards // num_volumes)
+    # For 3D sharded arrays, distribute by explicit 3D shard coordinates
+    # to ensure no overlap (linear distribution doesn't map cleanly to 3D shards)
+    if total_3d_shards and volume_shape:
+        import math
 
-        # Convert shard indices to chunk indices
-        start_idx = start_shard * chunks_per_shard
-        stop_idx = min(stop_shard * chunks_per_shard, total_chunks)
+        # Parse shapes
+        shard_shape = [int(x) for x in args.custom_shard_shape.split(',')]
+        chunk_shape = [int(x) for x in args.custom_chunk_shape.split(',')]
 
-        print(f"vol{i}: shards {start_shard}–{stop_shard} → chunks {start_idx}–{stop_idx}")
-
-        # Extract setup number from base_path if any
-        # Build job name with optional prefix
-        prefix = f"{args.job_prefix}_" if args.job_prefix else ""
-        match = re.search(r"setup(\d+)", args.base_path)
-        if match:
-            setup_number = match.group(1)
-            job_name = f"{prefix}{args.task}_setup{setup_number}_s{args.level}_vol{i}"
-        else:
-            job_name = f"{prefix}{args.task}_s{args.level}_vol{i}"
-
-
-        command = [
-            "bsub",
-            "-J", job_name,
-            "-n", args.cores,
-            "-W", args.wall_time,
-            "-P", args.project,
-            "-g", "/scicompsoft/chend/tensorstore",
-            "-o", f"{output_dir}/output__{job_name}_%J.log",
-            "-e", f"{output_dir}/error__{job_name}_%J.log",
-            sys.executable,
-            "-m", "tensorswitch",
+        # Calculate 3D shard grid dimensions
+        shard_grid = [
+            (volume_shape[i] + shard_shape[i] - 1) // shard_shape[i]
+            for i in range(len(volume_shape))
         ]
 
-        string_args = ["task", "base_path", "output_path", "custom_shard_shape", "custom_chunk_shape", "dual_zarr_approach", "anisotropic_factors"]
-        int_args = ["level", "downsample", "use_shard", "use_ome_structure", "memory_limit"]
-        boolean_flags = ["use_dask_jobqueue"]
+        # Calculate chunk grid dimensions
+        chunk_grid = [
+            (volume_shape[i] + chunk_shape[i] - 1) // chunk_shape[i]
+            for i in range(len(volume_shape))
+        ]
 
-        # Add string and integer arguments
-        for arg in string_args + int_args:
-            value = getattr(args, arg)
-            if value is not None and str(value) != "None":
-                command += ["--"+arg, str(value)]
+        print(f"Using 3D shard-based distribution: shard grid {shard_grid}, chunk grid {chunk_grid}")
 
-        # Add boolean flags (only if True)
-        for arg in boolean_flags:
-            if getattr(args, arg, False):
-                command += ["--"+arg]
+        # Generate all 3D shard coordinates (z, y, x order)
+        all_shard_coords = []
+        for z in range(shard_grid[0]):
+            for y in range(shard_grid[1]):
+                for x in range(shard_grid[2]):
+                    all_shard_coords.append([z, y, x])
 
-        command += ["--start_idx", str(start_idx)]
-        if stop_idx is not None:
-            command += ["--stop_idx", str(stop_idx)]
-        
-        print(command)
+        # Distribute shards among workers
+        shards_per_worker = len(all_shard_coords) // num_volumes
 
-        subprocess.run(command)
-        print(f"Submitted {job_name}, volume={i}, chunks={start_idx}-{stop_idx}")
+        for i in range(num_volumes):
+            # Get this worker's assigned 3D shard coordinates
+            start_shard_idx = i * shards_per_worker
+            if i == num_volumes - 1:
+                end_shard_idx = len(all_shard_coords)
+            else:
+                end_shard_idx = (i + 1) * shards_per_worker
 
-        # Small delay between job submissions to avoid overwhelming the scheduler
-        time.sleep(0.1)
+            assigned_shards = all_shard_coords[start_shard_idx:end_shard_idx]
+
+            # Calculate chunk ranges for all assigned shards
+            chunk_indices = []
+            for shard_coord in assigned_shards:
+                # Calculate chunk range within this 3D shard
+                # Each shard contains: chunks_per_shard_dim[i] chunks in dimension i
+                chunks_per_shard_dim = [
+                    shard_shape[j] // chunk_shape[j]
+                    for j in range(len(shard_shape))
+                ]
+
+                # Base chunk coordinate for this shard
+                base_chunk_coord = [
+                    shard_coord[j] * chunks_per_shard_dim[j]
+                    for j in range(len(shard_coord))
+                ]
+
+                # Generate all chunk coordinates within this shard
+                for dz in range(chunks_per_shard_dim[0]):
+                    for dy in range(chunks_per_shard_dim[1]):
+                        for dx in range(chunks_per_shard_dim[2]):
+                            chunk_coord = [
+                                base_chunk_coord[0] + dz,
+                                base_chunk_coord[1] + dy,
+                                base_chunk_coord[2] + dx
+                            ]
+
+                            # Skip if chunk is outside data bounds
+                            if (chunk_coord[0] >= chunk_grid[0] or
+                                chunk_coord[1] >= chunk_grid[1] or
+                                chunk_coord[2] >= chunk_grid[2]):
+                                continue
+
+                            # Convert 3D chunk coordinate to linear index
+                            linear_idx = (
+                                chunk_coord[0] * chunk_grid[1] * chunk_grid[2] +
+                                chunk_coord[1] * chunk_grid[2] +
+                                chunk_coord[2]
+                            )
+                            chunk_indices.append(linear_idx)
+
+            # Get min/max chunk indices for this worker
+            if chunk_indices:
+                start_idx = min(chunk_indices)
+                stop_idx = max(chunk_indices) + 1
+            else:
+                start_idx = 0
+                stop_idx = 0
+
+            shard_desc = f"{len(assigned_shards)} shard(s): {assigned_shards[0]}" + (f"...{assigned_shards[-1]}" if len(assigned_shards) > 1 else "")
+            print(f"vol{i}: {shard_desc}")
+
+            # Extract setup number from base_path if any
+            # Build job name with optional prefix
+            prefix = f"{args.job_prefix}_" if args.job_prefix else ""
+            match = re.search(r"setup(\d+)", args.base_path)
+            if match:
+                setup_number = match.group(1)
+                job_name = f"{prefix}{args.task}_setup{setup_number}_s{args.level}_vol{i}"
+            else:
+                job_name = f"{prefix}{args.task}_s{args.level}_vol{i}"
+
+
+            command = [
+                "bsub",
+                "-J", job_name,
+                "-n", args.cores,
+                "-W", args.wall_time,
+                "-P", args.project,
+                "-g", "/scicompsoft/chend/tensorstore",
+                "-o", f"{output_dir}/output__{job_name}_%J.log",
+                "-e", f"{output_dir}/error__{job_name}_%J.log",
+                sys.executable,
+                "-m", "tensorswitch",
+            ]
+
+            string_args = ["task", "base_path", "output_path", "custom_shard_shape", "custom_chunk_shape", "dual_zarr_approach", "anisotropic_factors"]
+            int_args = ["level", "downsample", "use_shard", "use_ome_structure", "memory_limit"]
+            boolean_flags = ["use_dask_jobqueue"]
+
+            # Add string and integer arguments
+            for arg in string_args + int_args:
+                value = getattr(args, arg)
+                if value is not None and str(value) != "None":
+                    command += ["--"+arg, str(value)]
+
+            # Add boolean flags (only if True)
+            for arg in boolean_flags:
+                if getattr(args, arg, False):
+                    command += ["--"+arg]
+
+            # Pass shard coordinate instead of chunk indices for 3D sharded distribution
+            shard_coord_str = ",".join(map(str, assigned_shards[0]))
+            command += ["--shard_coord", shard_coord_str]
+
+            print(command)
+
+            subprocess.run(command)
+            print(f"Submitted {job_name}, volume={i}, shard={assigned_shards[0]}")
+
+            # Small delay between job submissions to avoid overwhelming the scheduler
+            time.sleep(0.1)
+
+    else:
+        # Fall back to linear distribution for non-3D or non-sharded cases
+        for i in range(num_volumes):
+            # Distribute by complete shards
+            start_shard = i * (total_shards // num_volumes)
+            if i == num_volumes - 1:
+                stop_shard = total_shards
+            else:
+                stop_shard = (i + 1) * (total_shards // num_volumes)
+
+            # Convert shard indices to chunk indices
+            start_idx = start_shard * chunks_per_shard
+            stop_idx = min(stop_shard * chunks_per_shard, total_chunks)
+
+            print(f"vol{i}: shards {start_shard}–{stop_shard} → chunks {start_idx}–{stop_idx}")
+
+            # Extract setup number from base_path if any
+            # Build job name with optional prefix
+            prefix = f"{args.job_prefix}_" if args.job_prefix else ""
+            match = re.search(r"setup(\d+)", args.base_path)
+            if match:
+                setup_number = match.group(1)
+                job_name = f"{prefix}{args.task}_setup{setup_number}_s{args.level}_vol{i}"
+            else:
+                job_name = f"{prefix}{args.task}_s{args.level}_vol{i}"
+
+            command = [
+                "bsub",
+                "-J", job_name,
+                "-n", args.cores,
+                "-W", args.wall_time,
+                "-P", args.project,
+                "-g", "/scicompsoft/chend/tensorstore",
+                "-o", f"{output_dir}/output__{job_name}_%J.log",
+                "-e", f"{output_dir}/error__{job_name}_%J.log",
+                sys.executable,
+                "-m", "tensorswitch",
+            ]
+
+            string_args = ["task", "base_path", "output_path", "custom_shard_shape", "custom_chunk_shape", "dual_zarr_approach", "anisotropic_factors"]
+            int_args = ["level", "downsample", "use_shard", "use_ome_structure", "memory_limit"]
+            boolean_flags = ["use_dask_jobqueue"]
+
+            # Add string and integer arguments
+            for arg in string_args + int_args:
+                value = getattr(args, arg)
+                if value is not None and str(value) != "None":
+                    command += ["--"+arg, str(value)]
+
+            # Add boolean flags (only if True)
+            for arg in boolean_flags:
+                if getattr(args, arg, False):
+                    command += ["--"+arg]
+
+            command += ["--start_idx", str(start_idx)]
+            if stop_idx is not None:
+                command += ["--stop_idx", str(stop_idx)]
+
+            print(command)
+
+            subprocess.run(command)
+            print(f"Submitted {job_name}, volume={i}, chunks={start_idx}-{stop_idx}")
+
+            # Small delay between job submissions to avoid overwhelming the scheduler
+            time.sleep(0.1)
 
 def main():
     parser = argparse.ArgumentParser(description="Unified Pipeline Manager")
@@ -425,6 +613,7 @@ def main():
     parser.add_argument("--level", type=int, default=0, help="Levels to process")
     parser.add_argument("--start_idx", type=int, default=0, help="Chunk start index (for local processing)")
     parser.add_argument("--stop_idx", type=int, help="Chunk stop index (for local processing)")
+    parser.add_argument("--shard_coord", type=str, help="3D shard coordinate as comma-separated values (e.g., '5,0,0') - alternative to start/stop_idx for sharded arrays")
     parser.add_argument("--num_volumes", type=int, default=8, help="Number of volumes per level (for cluster jobs)")
     parser.add_argument("--downsample", type=int, default=0, choices=[0, 1], help="Enable downsampling (default: 1)")
     parser.add_argument("--use_shard", type=int, default=0, choices=[0, 1], help="Use sharded format (for downsample)")
@@ -596,7 +785,40 @@ def main():
         elif args.task == "n5_to_zarr3_s0":
             n5_to_zarr3_s0.convert(args.base_path, args.output_path, args.level, args.start_idx, args.stop_idx, args.memory_limit, bool(args.use_shard), bool(args.use_ome_structure), custom_shard_shape, custom_chunk_shape, use_v2_encoding)
         elif args.task == "downsample_shard_zarr3":
-            downsample_shard_zarr3.process(args.base_path, args.output_path, args.level, args.start_idx, args.stop_idx, bool(args.downsample), bool(args.use_shard), args.memory_limit, custom_shard_shape, custom_chunk_shape, anisotropic_factors)
+            # Parse shard_coord if provided
+            shard_coord_list = None
+            if args.shard_coord:
+                shard_coord_list = [int(x) for x in args.shard_coord.split(',')]
+
+            downsample_shard_zarr3.process(args.base_path, args.output_path, args.level, args.start_idx, args.stop_idx, bool(args.downsample), bool(args.use_shard), args.memory_limit, custom_shard_shape, custom_chunk_shape, anisotropic_factors, shard_coord=shard_coord_list)
+
+            # Store downsampling factors in metadata if this is the first worker (shard [0,0,0])
+            # This enables precise voxel size calculation in update_ome_metadata_if_needed
+            if shard_coord_list is None or shard_coord_list == [0, 0, 0]:
+                if anisotropic_factors:
+                    try:
+                        import json
+                        zarr_json_path = os.path.join(args.output_path, "zarr.json")
+                        if os.path.exists(zarr_json_path):
+                            with open(zarr_json_path, 'r') as f:
+                                metadata = json.load(f)
+
+                            # Initialize custom metadata if not present
+                            if "custom" not in metadata.get("attributes", {}):
+                                metadata["attributes"]["custom"] = {}
+                            if "downsampling_factors" not in metadata["attributes"]["custom"]:
+                                metadata["attributes"]["custom"]["downsampling_factors"] = {}
+
+                            # Store factors for this level
+                            metadata["attributes"]["custom"]["downsampling_factors"][f"s{args.level}"] = anisotropic_factors
+
+                            # Write back
+                            with open(zarr_json_path, 'w') as f:
+                                json.dump(metadata, f, indent=2)
+
+                            print(f"✓ Stored downsampling factors for s{args.level}: {anisotropic_factors}")
+                    except Exception as e:
+                        print(f"Warning: Could not store downsampling factors: {e}")
         elif args.task == "tiff_to_zarr3_s0":
             tiff_to_zarr3_s0.process(args.base_path, args.output_path, bool(args.use_shard), args.memory_limit, args.start_idx, args.stop_idx, bool(args.use_ome_structure), custom_shard_shape, custom_chunk_shape, create_dual_metadata, use_v2_encoding)
         elif args.task == "nd2_to_zarr3_s0":

@@ -46,6 +46,84 @@ def create_lsf_cluster(
     return cluster
 
 
+def process_shard_task(shard_task):
+    """Process all chunks within a 3D shard on a Dask worker."""
+    # Add tensorswitch to path
+    sys.path.insert(0, shard_task['tensorswitch_path'])
+
+    # Task parameters
+    task_type = shard_task['task']
+    base_path = shard_task['base_path']
+    output_path = shard_task['output_path']
+    shard_coord = shard_task['shard_coord']
+    chunk_indices = shard_task['chunk_indices']
+    use_shard = shard_task['use_shard']
+    use_ome_structure = shard_task['use_ome_structure']
+
+    print(f"Worker processing shard {shard_coord} ({len(chunk_indices)} chunks) for task {task_type}")
+
+    try:
+        if task_type == "nd2_to_zarr3_s0":
+            volume = load_nd2_stack(base_path)
+            store_spec = zarr3_store_spec(
+                path=output_path,
+                shape=volume.shape,
+                dtype=str(volume.dtype),
+                use_shard=use_shard,
+                use_ome_structure=use_ome_structure,
+                custom_shard_shape=shard_task.get('custom_shard_shape'),
+                custom_chunk_shape=shard_task.get('custom_chunk_shape')
+            )
+            store = ts.open(store_spec, open=True).result()
+
+        elif task_type == "tiff_to_zarr3_s0":
+            volume = load_tiff_stack(base_path)
+            store_spec = zarr3_store_spec(
+                path=output_path,
+                shape=volume.shape,
+                dtype=str(volume.dtype),
+                use_shard=use_shard,
+                use_ome_structure=use_ome_structure,
+                custom_shard_shape=shard_task.get('custom_shard_shape'),
+                custom_chunk_shape=shard_task.get('custom_chunk_shape')
+            )
+            store = ts.open(store_spec, open=True).result()
+
+        else:
+            print(f"Unsupported task type for shard processing: {task_type}")
+            return False
+
+        # Process all chunks in this shard
+        chunk_shape = store.chunk_layout.write_chunk.shape
+        successful_chunks = 0
+
+        for chunk_idx in chunk_indices:
+            try:
+                chunk_domains = list(get_chunk_domains(chunk_shape, store, linear_indices_to_process=[chunk_idx]))
+                if not chunk_domains:
+                    continue
+
+                domain = chunk_domains[0]
+                slices = tuple(slice(min, max) for (min, max) in zip(domain.inclusive_min, domain.exclusive_max))
+                slice_data = volume[slices]
+
+                # Write chunk
+                task = store[domain].write(slice_data.compute())
+                task.result()
+                successful_chunks += 1
+
+            except Exception as e:
+                print(f"Error processing chunk {chunk_idx} in shard {shard_coord}: {e}")
+                continue
+
+        print(f"Successfully processed shard {shard_coord}: {successful_chunks}/{len(chunk_indices)} chunks")
+        return successful_chunks == len(chunk_indices)
+
+    except Exception as e:
+        print(f"Error processing shard {shard_coord}: {e}")
+        return False
+
+
 def process_chunk_task(chunk_task):
     """Process a single chunk on a Dask worker."""
     # Add tensorswitch to path
@@ -202,31 +280,143 @@ def submit_dask_job(args, total_chunks):
 
             store = ts.open(store_spec, create=True, delete_existing=True).result()
 
-        # Create individual chunk tasks
-        print(f"Creating {total_chunks} chunk tasks...")
-        chunk_tasks = []
+        # Determine if we should use 3D shard-based distribution
+        # (for sharded arrays to avoid concurrent writes to same shard)
+        use_3d_shard_distribution = (
+            bool(args.use_shard) and
+            custom_shard_shape is not None and
+            custom_chunk_shape is not None
+        )
+
         tensorswitch_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-        for chunk_idx in range(total_chunks):
-            chunk_task = {
-                'task': args.task,
-                'base_path': args.base_path,
-                'output_path': args.output_path,
-                'chunk_idx': chunk_idx,
-                'use_shard': bool(args.use_shard),
-                'use_ome_structure': bool(args.use_ome_structure),
-                'custom_shard_shape': custom_shard_shape,
-                'custom_chunk_shape': custom_chunk_shape,
-                'tensorswitch_path': tensorswitch_path
-            }
-            chunk_tasks.append(chunk_task)
+        if use_3d_shard_distribution:
+            # Get volume shape for 3D shard calculation
+            if args.task == "nd2_to_zarr3_s0":
+                volume_shape = volume.shape
+            elif args.task == "tiff_to_zarr3_s0":
+                volume_shape = volume.shape
+            else:
+                # For downsampling, need to get output shape
+                # This is handled in the main code, so we fall back to linear for now
+                use_3d_shard_distribution = False
+                volume_shape = None
 
-        # Submit chunk tasks to workers
-        print(f"Submitting {len(chunk_tasks)} chunk tasks to {args.num_volumes} workers...")
-        futures = []
-        for chunk_task in chunk_tasks:
-            future = client.submit(process_chunk_task, chunk_task)
-            futures.append(future)
+            if use_3d_shard_distribution and volume_shape:
+                import math
+
+                # Calculate 3D shard grid
+                shard_grid = [
+                    (volume_shape[i] + custom_shard_shape[i] - 1) // custom_shard_shape[i]
+                    for i in range(len(volume_shape))
+                ]
+
+                # Calculate chunk grid
+                chunk_grid = [
+                    (volume_shape[i] + custom_chunk_shape[i] - 1) // custom_chunk_shape[i]
+                    for i in range(len(volume_shape))
+                ]
+
+                # Generate all 3D shard coordinates
+                all_shard_coords = []
+                for z in range(shard_grid[0]):
+                    for y in range(shard_grid[1]):
+                        for x in range(shard_grid[2]):
+                            all_shard_coords.append([z, y, x])
+
+                print(f"Using 3D shard-based distribution: {len(all_shard_coords)} shards (grid: {shard_grid})")
+                print(f"Creating {len(all_shard_coords)} shard tasks...")
+
+                # Create tasks per shard (not per chunk)
+                shard_tasks = []
+                for shard_coord in all_shard_coords:
+                    # Calculate all chunk indices within this 3D shard
+                    chunks_per_shard_dim = [
+                        custom_shard_shape[j] // custom_chunk_shape[j]
+                        for j in range(len(custom_shard_shape))
+                    ]
+
+                    # Base chunk coordinate for this shard
+                    base_chunk_coord = [
+                        shard_coord[j] * chunks_per_shard_dim[j]
+                        for j in range(len(shard_coord))
+                    ]
+
+                    # Generate all chunk indices within this shard
+                    chunk_indices = []
+                    for dz in range(chunks_per_shard_dim[0]):
+                        for dy in range(chunks_per_shard_dim[1]):
+                            for dx in range(chunks_per_shard_dim[2]):
+                                chunk_coord = [
+                                    base_chunk_coord[0] + dz,
+                                    base_chunk_coord[1] + dy,
+                                    base_chunk_coord[2] + dx
+                                ]
+
+                                # Skip if chunk is outside data bounds
+                                if (chunk_coord[0] >= chunk_grid[0] or
+                                    chunk_coord[1] >= chunk_grid[1] or
+                                    chunk_coord[2] >= chunk_grid[2]):
+                                    continue
+
+                                # Convert 3D chunk coordinate to linear index
+                                linear_idx = (
+                                    chunk_coord[0] * chunk_grid[1] * chunk_grid[2] +
+                                    chunk_coord[1] * chunk_grid[2] +
+                                    chunk_coord[2]
+                                )
+                                chunk_indices.append(linear_idx)
+
+                    shard_task = {
+                        'task': args.task,
+                        'base_path': args.base_path,
+                        'output_path': args.output_path,
+                        'shard_coord': shard_coord,
+                        'chunk_indices': chunk_indices,  # All chunks in this shard
+                        'use_shard': bool(args.use_shard),
+                        'use_ome_structure': bool(args.use_ome_structure),
+                        'custom_shard_shape': custom_shard_shape,
+                        'custom_chunk_shape': custom_chunk_shape,
+                        'tensorswitch_path': tensorswitch_path,
+                        'use_3d_shard': True
+                    }
+                    shard_tasks.append(shard_task)
+
+                # Submit shard tasks to workers
+                print(f"Submitting {len(shard_tasks)} shard tasks to {args.num_volumes} workers...")
+                futures = []
+                for shard_task in shard_tasks:
+                    future = client.submit(process_shard_task, shard_task)
+                    futures.append(future)
+            else:
+                use_3d_shard_distribution = False
+
+        if not use_3d_shard_distribution:
+            # Fall back to linear chunk distribution
+            print(f"Creating {total_chunks} chunk tasks (linear distribution)...")
+            chunk_tasks = []
+
+            for chunk_idx in range(total_chunks):
+                chunk_task = {
+                    'task': args.task,
+                    'base_path': args.base_path,
+                    'output_path': args.output_path,
+                    'chunk_idx': chunk_idx,
+                    'use_shard': bool(args.use_shard),
+                    'use_ome_structure': bool(args.use_ome_structure),
+                    'custom_shard_shape': custom_shard_shape,
+                    'custom_chunk_shape': custom_chunk_shape,
+                    'tensorswitch_path': tensorswitch_path,
+                    'use_3d_shard': False
+                }
+                chunk_tasks.append(chunk_task)
+
+            # Submit chunk tasks to workers
+            print(f"Submitting {len(chunk_tasks)} chunk tasks to {args.num_volumes} workers...")
+            futures = []
+            for chunk_task in chunk_tasks:
+                future = client.submit(process_chunk_task, chunk_task)
+                futures.append(future)
 
         print("Waiting for chunk tasks to complete...")
         results = client.gather(futures)
