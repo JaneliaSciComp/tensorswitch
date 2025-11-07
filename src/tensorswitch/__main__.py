@@ -16,7 +16,8 @@ from .utils import (get_total_chunks, downsample_spec, zarr3_store_spec, get_chu
                     estimate_total_chunks_for_tiff, get_input_driver, get_total_chunks_from_store,
                     load_tiff_stack, load_nd2_stack, load_ims_stack, update_ome_metadata_if_needed,
                     calculate_num_multiscale_levels, calculate_anisotropic_downsample_factors,
-                    generate_auto_multiscale, calculate_pyramid_plan, generate_cli_coordinator_script)
+                    generate_auto_multiscale, calculate_pyramid_plan, generate_cli_coordinator_script,
+                    precreate_shard_directories as precreate_shard_directories_universal)
 from .tasks import (downsample_shard_zarr3, n5_to_n5, n5_to_zarr2, n5_to_zarr3_s0, tiff_to_zarr3_s0,
                     nd2_to_zarr3_s0, ims_to_zarr3_s0, nd2_to_zarr2_s0, ims_to_zarr2_s0,
                     tiff_to_zarr2_s0, downsample_zarr2, precomputed_to_n5)
@@ -285,13 +286,41 @@ def submit_job(args, use_v2_encoding=True):
         volume = load_ims_stack(args.base_path)
         volume_shape = volume.shape
     elif args.task == "downsample_shard_zarr3":
-        # For downsampling, get shape from the source zarr
+        # For downsampling, get shape from the source zarr and calculate output shape
         store = ts.open({'driver': 'zarr3', 'kvstore': {'driver': 'file', 'path': args.base_path}}).result()
-        volume_shape = store.shape
+        source_shape = store.shape
+
+        # Calculate downsampled output shape
+        if args.anisotropic_factors:
+            factors = [int(x) for x in args.anisotropic_factors.split(',')]
+        else:
+            # Default 2x downsampling in all spatial dimensions
+            factors = [2, 2, 2]
+
+        # Apply downsampling factors to calculate output shape
+        if len(source_shape) == 3:  # ZYX
+            volume_shape = tuple(s // f for s, f in zip(source_shape, factors))
+        elif len(source_shape) == 4:  # CZYX - don't downsample channel dimension
+            volume_shape = (source_shape[0],) + tuple(s // f for s, f in zip(source_shape[1:], factors))
+        else:
+            volume_shape = source_shape  # Fallback
+
+        print(f"Downsample: source shape {source_shape} -> output shape {volume_shape} (factors: {factors})")
 
     # Pre-create all shard directories BEFORE submitting any jobs
     if volume_shape is not None and args.task in ["tiff_to_zarr3_s0", "nd2_to_zarr3_s0", "ims_to_zarr3_s0"]:
         precreate_shard_directories(args, volume_shape, use_v2_encoding)
+    elif volume_shape is not None and args.task == "downsample_shard_zarr3":
+        # For downsample tasks, use the universal function from utils
+        if bool(args.use_shard) and args.custom_shard_shape:
+            shard_shape = [int(x) for x in args.custom_shard_shape.split(',')]
+            precreate_shard_directories_universal(
+                output_path=args.output_path,
+                level=args.level,
+                output_shape=list(volume_shape),
+                shard_shape=shard_shape,
+                use_ome_structure=bool(args.use_ome_structure)
+            )
 
     # Check if using Dask JobQueue
     if hasattr(args, 'use_dask_jobqueue') and args.use_dask_jobqueue:

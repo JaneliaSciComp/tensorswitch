@@ -5,7 +5,7 @@ import psutil
 import numpy as np
 from ..utils import (get_chunk_domains, n5_store_spec, zarr3_store_spec,
                     create_output_store, commit_tasks, get_total_chunks_from_store,
-                    fetch_remote_json)
+                    fetch_remote_json, create_zarr3_ome_metadata, write_zarr3_group_metadata)
 
 def convert(base_path, output_path, level=0, start_idx=0, stop_idx=None,
            memory_limit=50, use_shard=True, use_ome_structure=True,
@@ -56,6 +56,39 @@ def convert(base_path, output_path, level=0, start_idx=0, stop_idx=None,
                     print(f"Downsampling factors: {source_attrs['downsamplingFactors']}")
     except Exception as e:
         print(f"Warning: Could not read N5 attributes: {e}")
+
+    # Extract voxel sizes from N5 metadata
+    voxel_sizes_um = None
+    dataset_name = None
+    if source_attrs and 'multiscales' in source_attrs:
+        try:
+            multiscales = source_attrs['multiscales'][0]
+            dataset_name = multiscales.get('name', 'N5_dataset')
+
+            # Find the dataset for this level
+            datasets = multiscales.get('datasets', [])
+            if level < len(datasets):
+                transform = datasets[level].get('transform', {})
+                voxel_sizes_nm = transform.get('scale', None)
+
+                if voxel_sizes_nm:
+                    # Convert nm to micrometers
+                    voxel_sizes_um = [v / 1000.0 for v in voxel_sizes_nm]
+                    print(f"Voxel sizes (from N5): {voxel_sizes_nm} nm = {voxel_sizes_um} µm")
+
+                    # Detect anisotropic voxels and warn
+                    if len(voxel_sizes_um) >= 3:
+                        xy_res = voxel_sizes_um[0]  # Assuming x is first in N5 (reverse of zarr)
+                        z_res = voxel_sizes_um[2]
+                        anisotropy_ratio = z_res / xy_res
+
+                        if anisotropy_ratio > 2.0:
+                            print(f"⚠️  ANISOTROPIC VOXELS DETECTED: {xy_res}×{voxel_sizes_um[1]}×{z_res} µm")
+                            print(f"   Anisotropy ratio (Z/XY): {anisotropy_ratio:.2f}×")
+                            print(f"   For first downsampling, consider: 2×2×1 (preserve Z resolution)")
+                            print(f"   After voxels become ~isotropic, use uniform 2×2×2")
+        except Exception as e:
+            print(f"Warning: Could not extract voxel sizes from N5 metadata: {e}")
 
     # Set WebKnossos defaults
     if custom_chunk_shape is None:
