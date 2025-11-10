@@ -3,11 +3,15 @@
 TensorSwitch GUI Launcher
 
 Simple script to start the TensorSwitch web GUI.
+Implements Jupyter-style per-user deployment pattern.
 """
 
 import panel as pn
 import os
 import sys
+import socket
+import random
+import argparse
 from pathlib import Path
 
 # Add project root to path for development
@@ -37,11 +41,89 @@ except ImportError as e:
         sys.exit(1)
 
 
+def find_free_port(start=30000, end=40000, max_tries=100):
+    """
+    Find a free port in the specified range.
+
+    Similar to Jupyter's port selection, but uses range 30000-40000
+    as recommended by Goran for multi-user cluster environments.
+
+    Args:
+        start: Starting port number (default: 30000)
+        end: Ending port number (default: 40000)
+        max_tries: Maximum number of attempts (default: 100)
+
+    Returns:
+        int: Available port number
+
+    Raises:
+        RuntimeError: If no free port found after max_tries attempts
+    """
+    for _ in range(max_tries):
+        port = random.randint(start, end)
+        try:
+            # Try to bind to the port
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.bind(('', port))
+            sock.close()
+            return port
+        except OSError:
+            # Port is already in use, try another
+            continue
+
+    raise RuntimeError(f"Could not find a free port after {max_tries} attempts in range {start}-{end}")
+
+
+def get_hostname():
+    """
+    Get the full hostname of the current machine.
+
+    Returns:
+        str: Hostname (e.g., 'login1.int.janelia.org' or 'localhost')
+    """
+    try:
+        hostname = socket.gethostname()
+        # If hostname is just short name, try to get FQDN
+        if '.' not in hostname:
+            hostname = socket.getfqdn()
+        return hostname
+    except Exception:
+        return 'localhost'
+
+
 def main():
     """Launch the TensorSwitch GUI."""
 
-    print("Starting TensorSwitch GUI...")
-    print("Project directory:", project_root)
+    # Parse command-line arguments
+    parser = argparse.ArgumentParser(
+        description='Launch TensorSwitch GUI - Data format conversion tool',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Auto-select random port (30000-40000)
+  python -m tensorswitch.gui.launch_gui
+
+  # Specify custom port
+  python -m tensorswitch.gui.launch_gui --port 35000
+
+  # Specify host and port
+  python -m tensorswitch.gui.launch_gui --host 0.0.0.0 --port 35000
+        """
+    )
+    parser.add_argument(
+        '--port',
+        type=int,
+        default=None,
+        help='Port to run server on (default: auto-select from 30000-40000)'
+    )
+    parser.add_argument(
+        '--host',
+        type=str,
+        default='0.0.0.0',
+        help='Host to bind to (default: 0.0.0.0 for external access)'
+    )
+
+    args = parser.parse_args()
 
     # Set environment variables
     os.environ.setdefault('PANEL_ALLOW_WEBSOCKET_ORIGIN', '*')
@@ -54,23 +136,35 @@ def main():
         # Create the simple app
         app = create_simple_app()
 
-        # Get port from environment or use default
-        port = int(os.environ.get('TENSORSWITCH_GUI_PORT', 5000))
+        # Find a free port or use specified port
+        if args.port:
+            port = args.port
+        else:
+            port = find_free_port(start=30000, end=40000)
 
-        print(f"\nTensorSwitch GUI is starting on port {port}...")
-        print(f"For JupyterHub users: http://[your-host]:{port}")
-        print(f"For local users: http://localhost:{port}")
-        print("Press Ctrl+C to stop the server")
+        # Get hostname
+        hostname = get_hostname()
+
+        # Print Jupyter-style startup message
         print("\n" + "="*60)
+        print("TensorSwitch GUI Started!")
+        print("="*60)
+        print("\nTensorSwitch Server is running at:\n")
+        print(f"  http://{hostname}:{port}")
+        print("\nCopy and paste this URL into your browser")
+        print("\nUse Control-C to stop this server")
+        print("="*60 + "\n")
 
         # Serve the app
         pn.serve(
             app,
             port=port,
+            address=args.host,
             allow_websocket_origin=["*"],
-            show=False,  # Don't auto-open for server environments
+            show=False,  # Don't auto-open browser (user will copy URL)
             autoreload=False,  # Disable for production
-            title="TensorSwitch GUI"
+            title="TensorSwitch GUI",
+            websocket_origin=f"{hostname}:{port}"
         )
 
     except KeyboardInterrupt:
