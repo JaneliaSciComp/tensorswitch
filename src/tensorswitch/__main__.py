@@ -346,6 +346,51 @@ def submit_job(args, use_v2_encoding=True):
                 shard_shape=shard_shape,
                 use_ome_structure=bool(args.use_ome_structure)
             )
+    elif args.task == "n5_to_zarr3_s0":
+        # For N5 conversion, pre-create metadata and directories if F-order or sharding is enabled
+        if bool(args.use_shard) and args.custom_shard_shape:
+            from tensorswitch.utils import get_kvstore_spec, precreate_zarr3_metadata_safely
+
+            # Read N5 metadata to get shape and dtype
+            print("Reading N5 metadata for pre-creation...")
+            n5_kvstore = get_kvstore_spec(args.base_path)
+            n5_store = ts.open({
+                'driver': 'n5',
+                'kvstore': n5_kvstore,
+                'recheck_cached_data': False,
+                'recheck_cached_metadata': False
+            }).result()
+
+            volume_shape = n5_store.shape
+            n5_dtype = n5_store.dtype.name
+            n5_store = None  # Close
+
+            # Parse shapes
+            shard_shape = [int(x) for x in args.custom_shard_shape.split(',')]
+            chunk_shape = [int(x) for x in args.custom_chunk_shape.split(',')]
+
+            # Pre-create shard directories
+            precreate_shard_directories_universal(
+                output_path=args.output_path,
+                level=args.level,
+                output_shape=list(volume_shape),
+                shard_shape=shard_shape,
+                use_ome_structure=bool(args.use_ome_structure)
+            )
+
+            # Pre-create zarr.json metadata (PRIMARY PROTECTION - happens ONCE before workers)
+            precreate_zarr3_metadata_safely(
+                output_path=args.output_path,
+                level=args.level,
+                shape=volume_shape,
+                dtype=n5_dtype,
+                use_shard=True,
+                shard_shape=shard_shape,
+                chunk_shape=chunk_shape,
+                use_ome_structure=bool(args.use_ome_structure),
+                use_fortran_order=bool(args.use_fortran_order),
+                use_v2_encoding=use_v2_encoding
+            )
 
     # Check if using Dask JobQueue
     if hasattr(args, 'use_dask_jobqueue') and args.use_dask_jobqueue:
@@ -513,7 +558,7 @@ def submit_job(args, use_v2_encoding=True):
             ]
 
             string_args = ["task", "base_path", "output_path", "custom_shard_shape", "custom_chunk_shape", "dual_zarr_approach", "anisotropic_factors"]
-            int_args = ["level", "downsample", "use_shard", "use_ome_structure", "memory_limit"]
+            int_args = ["level", "downsample", "use_shard", "use_ome_structure", "memory_limit", "use_fortran_order"]
             boolean_flags = ["use_dask_jobqueue"]
 
             # Add string and integer arguments
@@ -528,16 +573,22 @@ def submit_job(args, use_v2_encoding=True):
                     command += ["--"+arg]
 
             # Pass shard coordinate instead of chunk indices for 3D sharded distribution
-            shard_coord_str = ",".join(map(str, assigned_shards[0]))
-            command += ["--shard_coord", shard_coord_str]
+            # Submit one job per shard coordinate to ensure all shards are processed
+            for shard_idx, shard_coord in enumerate(assigned_shards):
+                shard_coord_str = ",".join(map(str, shard_coord))
+                shard_command = command + ["--shard_coord", shard_coord_str]
 
-            print(command)
+                # Update job name to include shard index
+                shard_job_name = f"{job_name}_shard{shard_idx}"
+                shard_command[shard_command.index(job_name)] = shard_job_name
 
-            subprocess.run(command)
-            print(f"Submitted {job_name}, volume={i}, shard={assigned_shards[0]}")
+                # print(shard_command)  # Uncomment for debugging
 
-            # Small delay between job submissions to avoid overwhelming the scheduler
-            time.sleep(0.1)
+                subprocess.run(shard_command)
+                print(f"Submitted {shard_job_name}, volume={i}, shard={shard_coord}")
+
+                # Small delay between job submissions to avoid overwhelming the scheduler
+                time.sleep(0.05)
 
     else:
         # Fall back to linear distribution for non-3D or non-sharded cases
@@ -579,7 +630,7 @@ def submit_job(args, use_v2_encoding=True):
             ]
 
             string_args = ["task", "base_path", "output_path", "custom_shard_shape", "custom_chunk_shape", "dual_zarr_approach", "anisotropic_factors"]
-            int_args = ["level", "downsample", "use_shard", "use_ome_structure", "memory_limit"]
+            int_args = ["level", "downsample", "use_shard", "use_ome_structure", "memory_limit", "use_fortran_order"]
             boolean_flags = ["use_dask_jobqueue"]
 
             # Add string and integer arguments
@@ -615,7 +666,7 @@ def main():
     parser.add_argument("--stop_idx", type=int, help="Chunk stop index (for local processing)")
     parser.add_argument("--shard_coord", type=str, help="3D shard coordinate as comma-separated values (e.g., '5,0,0') - alternative to start/stop_idx for sharded arrays")
     parser.add_argument("--num_volumes", type=int, default=8, help="Number of volumes per level (for cluster jobs)")
-    parser.add_argument("--downsample", type=int, default=0, choices=[0, 1], help="Enable downsampling (default: 1)")
+    parser.add_argument("--downsample", type=int, default=1, choices=[0, 1], help="Enable downsampling (default: 1)")
     parser.add_argument("--use_shard", type=int, default=0, choices=[0, 1], help="Use sharded format (for downsample)")
     parser.add_argument("--use_ome_structure", type=int, default=1, choices=[0, 1], help="Use OME-ZARR multiscale structure (s0 subdirectory)")
     parser.add_argument("--use_fortran_order", type=int, default=0, choices=[0, 1], help="Use Fortran (F) order instead of C order (adds transpose codec)")
