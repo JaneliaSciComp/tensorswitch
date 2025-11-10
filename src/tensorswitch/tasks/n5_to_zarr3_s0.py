@@ -60,6 +60,8 @@ def convert(base_path, output_path, level=0, start_idx=0, stop_idx=None,
     # Extract voxel sizes from N5 metadata
     voxel_sizes_um = None
     dataset_name = None
+
+    # Try to extract from multiscales metadata (BigStitcher-Spark style)
     if source_attrs and 'multiscales' in source_attrs:
         try:
             multiscales = source_attrs['multiscales'][0]
@@ -74,21 +76,42 @@ def convert(base_path, output_path, level=0, start_idx=0, stop_idx=None,
                 if voxel_sizes_nm:
                     # Convert nm to micrometers
                     voxel_sizes_um = [v / 1000.0 for v in voxel_sizes_nm]
-                    print(f"Voxel sizes (from N5): {voxel_sizes_nm} nm = {voxel_sizes_um} µm")
-
-                    # Detect anisotropic voxels and warn
-                    if len(voxel_sizes_um) >= 3:
-                        xy_res = voxel_sizes_um[0]  # Assuming x is first in N5 (reverse of zarr)
-                        z_res = voxel_sizes_um[2]
-                        anisotropy_ratio = z_res / xy_res
-
-                        if anisotropy_ratio > 2.0:
-                            print(f"⚠️  ANISOTROPIC VOXELS DETECTED: {xy_res}×{voxel_sizes_um[1]}×{z_res} µm")
-                            print(f"   Anisotropy ratio (Z/XY): {anisotropy_ratio:.2f}×")
-                            print(f"   For first downsampling, consider: 2×2×1 (preserve Z resolution)")
-                            print(f"   After voxels become ~isotropic, use uniform 2×2×2")
+                    print(f"Voxel sizes (from N5 multiscales): {voxel_sizes_nm} nm = {voxel_sizes_um} µm")
         except Exception as e:
-            print(f"Warning: Could not extract voxel sizes from N5 metadata: {e}")
+            print(f"Warning: Could not extract voxel sizes from N5 multiscales metadata: {e}")
+
+    # Fallback: Try to extract from pixelResolution attribute
+    if voxel_sizes_um is None and source_attrs and 'pixelResolution' in source_attrs:
+        try:
+            pixel_res = source_attrs['pixelResolution']
+            unit = pixel_res.get('unit', 'nm')
+            dimensions = pixel_res.get('dimensions', None)
+
+            if dimensions:
+                # Convert to micrometers based on unit
+                if unit == 'nm' or unit == 'nanometer':
+                    voxel_sizes_um = [d / 1000.0 for d in dimensions]
+                elif unit == 'um' or unit == 'micrometer' or unit == 'µm':
+                    voxel_sizes_um = dimensions
+                else:
+                    print(f"Warning: Unknown unit '{unit}' in pixelResolution, assuming nm")
+                    voxel_sizes_um = [d / 1000.0 for d in dimensions]
+
+                print(f"Voxel sizes (from N5 pixelResolution): {dimensions} {unit} = {voxel_sizes_um} µm")
+        except Exception as e:
+            print(f"Warning: Could not extract voxel sizes from N5 pixelResolution: {e}")
+
+    # Detect anisotropic voxels and warn (if voxel sizes were found)
+    if voxel_sizes_um and len(voxel_sizes_um) >= 3:
+        xy_res = voxel_sizes_um[0]  # Assuming x is first in N5
+        z_res = voxel_sizes_um[2]
+        anisotropy_ratio = z_res / xy_res
+
+        if anisotropy_ratio > 2.0:
+            print(f"⚠️  ANISOTROPIC VOXELS DETECTED: {xy_res}×{voxel_sizes_um[1]}×{z_res} µm")
+            print(f"   Anisotropy ratio (Z/XY): {anisotropy_ratio:.2f}×")
+            print(f"   For first downsampling, consider: 2×2×1 (preserve Z resolution)")
+            print(f"   After voxels become ~isotropic, use uniform 2×2×2")
 
     # Set WebKnossos defaults
     if custom_chunk_shape is None:
@@ -118,6 +141,27 @@ def convert(base_path, output_path, level=0, start_idx=0, stop_idx=None,
         use_fortran_order=use_fortran_order
     )
     store_spec['context'] = context
+
+    # SAFETY NET: Check if metadata needs pre-creation (backup for direct calls)
+    # This should normally be handled by submit_job() in __main__.py
+    if use_fortran_order:
+        metadata_path = os.path.join(output_path, level_path or f"s{level}", "zarr.json")
+        if not os.path.exists(metadata_path):
+            # Metadata wasn't pre-created by main process - create it now
+            from tensorswitch.utils import precreate_zarr3_metadata_safely
+            print("⚠ Metadata not pre-created - creating now (task-level safety net)")
+            precreate_zarr3_metadata_safely(
+                output_path=output_path,
+                level=level,
+                shape=shape,
+                dtype=dtype,
+                use_shard=use_shard,
+                shard_shape=custom_shard_shape,
+                chunk_shape=custom_chunk_shape,
+                use_ome_structure=use_ome_structure,
+                use_fortran_order=use_fortran_order,
+                use_v2_encoding=use_v2_encoding
+            )
 
     zarr3_store = ts.open(store_spec, create=True, open=True, delete_existing=False).result()
 

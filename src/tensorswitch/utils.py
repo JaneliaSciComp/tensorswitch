@@ -158,7 +158,10 @@ def zarr3_store_spec(path, shape, dtype, use_shard=True, level_path="s0", use_om
         # Build inner codecs for sharding (with optional transpose for F-order)
         inner_codecs = []
         if use_fortran_order:
-            inner_codecs.append({'name': 'transpose', 'configuration': {'order': 'F'}})
+            # Use explicit dimension reversal [n-1, ..., 1, 0] as recommended by Zarr specs
+            # For 3D: [2, 1, 0], for 4D: [3, 2, 1, 0], etc.
+            transpose_order = list(range(len(shape) - 1, -1, -1))
+            inner_codecs.append({'name': 'transpose', 'configuration': {'order': transpose_order}})
         inner_codecs.extend([
             {'name': 'bytes', 'configuration': {'endian': 'little'}},
             {'name': 'zstd', 'configuration': {'level': 5}}
@@ -201,7 +204,10 @@ def zarr3_store_spec(path, shape, dtype, use_shard=True, level_path="s0", use_om
         # Non-sharded codecs (with optional transpose for F-order)
         codecs = []
         if use_fortran_order:
-            codecs.append({'name': 'transpose', 'configuration': {'order': 'F'}})
+            # Use explicit dimension reversal [n-1, ..., 1, 0] as recommended by Zarr specs
+            # For 3D: [2, 1, 0], for 4D: [3, 2, 1, 0], etc.
+            transpose_order = list(range(len(shape) - 1, -1, -1))
+            codecs.append({'name': 'transpose', 'configuration': {'order': transpose_order}})
         codecs.extend([
             {'name': 'bytes', 'configuration': {'endian': 'little'}},
             {'name': 'zstd', 'configuration': {'level': 1}}
@@ -289,6 +295,67 @@ def downsample_spec(base_spec, array_shape=None, dimension_names=None, custom_fa
         'downsample_factors': downsample_factors,
         'downsample_method': 'mode'
     }
+
+def precreate_zarr3_metadata_safely(output_path, level, shape, dtype, use_shard,
+                                    shard_shape, chunk_shape, use_ome_structure=True,
+                                    use_fortran_order=False, use_v2_encoding=False,
+                                    force_precreate=False):
+    """
+    Pre-create zarr.json metadata to avoid worker race conditions.
+
+    Should be called before parallel job submission when:
+    - use_fortran_order=True (non-default codec that differs from C-order)
+    - force_precreate=True (other codec customizations)
+    - Any scenario where workers might create conflicting metadata
+
+    Args:
+        output_path: Base output path for the dataset
+        level: Level number (e.g., 0 for s0, 1 for s1)
+        shape: Array shape tuple
+        dtype: Data type string (e.g., 'uint8', 'uint64')
+        use_shard: Whether sharding is enabled
+        shard_shape: Shard dimensions (e.g., [1024, 1024, 1024])
+        chunk_shape: Chunk dimensions (e.g., [32, 32, 32])
+        use_ome_structure: Whether to use OME-NGFF structure (s0, s1, etc.)
+        use_fortran_order: Whether to use Fortran (F) order instead of C order
+        use_v2_encoding: Whether to use v2 chunk key encoding
+        force_precreate: Force pre-creation even for standard C-order
+
+    Returns:
+        bool: True if metadata was created, False if skipped (not needed)
+    """
+    import tensorstore as ts
+    import os
+
+    # Skip pre-creation for standard C-order (no risk of codec mismatch)
+    if not (use_fortran_order or force_precreate):
+        return False
+
+    level_path = f"s{level}" if use_ome_structure else None
+
+    # Create the store spec
+    store_spec = zarr3_store_spec(
+        path=output_path,
+        shape=shape,
+        dtype=dtype,
+        use_shard=use_shard,
+        level_path=level_path or f"s{level}",
+        use_ome_structure=use_ome_structure,
+        custom_shard_shape=shard_shape,
+        custom_chunk_shape=chunk_shape,
+        use_v2_encoding=use_v2_encoding,
+        use_fortran_order=use_fortran_order
+    )
+
+    # Create metadata (no data written, just zarr.json)
+    store = ts.open(store_spec, create=True, delete_existing=True).result()
+    store = None  # Close immediately to release resources
+
+    metadata_path = os.path.join(output_path, level_path or f"s{level}", "zarr.json")
+    print(f"✓ Pre-created Zarr3 metadata at: {metadata_path}")
+    print(f"  Reason: {'F-order codec' if use_fortran_order else 'Forced pre-creation'}")
+
+    return True
 
 def precreate_shard_directories(output_path, level, output_shape, shard_shape, use_ome_structure=True):
     """
