@@ -148,6 +148,15 @@ def get_total_chunks_for_task(args, use_v2_encoding=True):
 
     elif args.task == "tiff_to_zarr3_s0" and input_driver == "tiff":
         volume = load_tiff_stack(args.base_path)
+
+        # Apply WebKnossos defaults if not specified (same as in process() function)
+        if custom_chunk_shape is None:
+            custom_chunk_shape = [32, 32, 32]
+            print(f"Using WebKnossos default chunk shape: {custom_chunk_shape}")
+        if custom_shard_shape is None and bool(args.use_shard):
+            custom_shard_shape = [1024, 1024, 1024]
+            print(f"Using WebKnossos default shard shape: {custom_shard_shape}")
+
         store_spec = zarr3_store_spec(
             path=args.output_path,
             shape=volume.shape,
@@ -160,23 +169,9 @@ def get_total_chunks_for_task(args, use_v2_encoding=True):
         )
         temp_store = ts.open(store_spec, create=True, delete_existing=True).result()
 
-        # Handle custom shapes for chunk counting
-        if custom_shard_shape:
-            if len(volume.shape) == 3 and len(custom_shard_shape) == 2:
-                chunk_shape_for_counting = [1] + custom_shard_shape  # 2D images: CYX with YX shards
-            elif len(volume.shape) == 4 and len(custom_shard_shape) == 3:
-                chunk_shape_for_counting = [1] + custom_shard_shape
-            elif len(volume.shape) == 4 and len(custom_shard_shape) == 2:
-                chunk_shape_for_counting = [1, 1] + custom_shard_shape  # 2D images: CZYX with YX shards
-            elif len(volume.shape) == 5 and len(custom_shard_shape) == 3:
-                chunk_shape_for_counting = [1, 1] + custom_shard_shape
-            elif len(volume.shape) == 5 and len(custom_shard_shape) == 2:
-                chunk_shape_for_counting = [1, 1, 1] + custom_shard_shape  # 2D images: TCZYX with YX shards
-            else:
-                chunk_shape_for_counting = custom_shard_shape
-            total_chunks = get_total_chunks_from_store(temp_store, chunk_shape_for_counting)
-        else:
-            total_chunks = get_total_chunks_from_store(temp_store)
+        # For sharded arrays, count by write_chunk (shard shape), not read_chunk (inner chunks)
+        # This matches the N5 approach and correctly handles WebKnossos defaults
+        total_chunks = get_total_chunks_from_store(temp_store, chunk_shape=temp_store.chunk_layout.write_chunk.shape)
 
     elif args.task == "nd2_to_zarr3_s0":
         volume = load_nd2_stack(args.base_path)
@@ -872,7 +867,7 @@ def main():
                     except Exception as e:
                         print(f"Warning: Could not store downsampling factors: {e}")
         elif args.task == "tiff_to_zarr3_s0":
-            tiff_to_zarr3_s0.process(args.base_path, args.output_path, bool(args.use_shard), args.memory_limit, args.start_idx, args.stop_idx, bool(args.use_ome_structure), custom_shard_shape, custom_chunk_shape, create_dual_metadata, use_v2_encoding)
+            tiff_to_zarr3_s0.process(args.base_path, args.output_path, bool(args.use_shard), args.memory_limit, args.start_idx, args.stop_idx, bool(args.use_ome_structure), custom_shard_shape, custom_chunk_shape, create_dual_metadata, use_v2_encoding, use_fortran_order=bool(args.use_fortran_order))
         elif args.task == "nd2_to_zarr3_s0":
             nd2_to_zarr3_s0.process(args.base_path, args.output_path, bool(args.use_shard), args.memory_limit, args.start_idx, args.stop_idx, bool(args.use_ome_structure), custom_shard_shape, custom_chunk_shape, create_dual_metadata, use_v2_encoding)
         elif args.task == "ims_to_zarr3_s0":
