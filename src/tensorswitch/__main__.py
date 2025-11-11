@@ -430,8 +430,26 @@ def submit_job(args, use_v2_encoding=True):
     else:
         total_shards = (total_chunks + chunks_per_shard - 1) // chunks_per_shard
 
-    # The number of volumes can be at most total_shards
-    num_volumes = min(total_shards, args.num_volumes)
+    # Auto-calculate optimal num_volumes if user didn't override default
+    if args.num_volumes == 8:  # User didn't specify (using default)
+        # Target: 2-3 shards per worker for good parallelism
+        # For small datasets (<= 3 shards): 1 worker
+        # For medium datasets (4-12 shards): 3-4 workers
+        # For large datasets (>12 shards): aim for 3 shards/worker
+        if total_shards <= 3:
+            optimal_workers = 1
+        elif total_shards <= 12:
+            optimal_workers = min(4, total_shards)
+        else:
+            optimal_workers = max(3, total_shards // 3)
+
+        num_volumes = optimal_workers
+        print(f"Auto-calculated optimal workers: {num_volumes} for {total_shards} shards (~{total_shards/num_volumes:.1f} shards/worker)")
+    else:
+        # User specified num_volumes, respect it but cap at total_shards
+        num_volumes = min(total_shards, args.num_volumes)
+        print(f"Using user-specified workers: {num_volumes}")
+
     print(f"Distributing {total_chunks:,} chunks across {num_volumes} workers ({total_shards} shards total)")
 
     # For 3D sharded arrays, distribute by explicit 3D shard coordinates
