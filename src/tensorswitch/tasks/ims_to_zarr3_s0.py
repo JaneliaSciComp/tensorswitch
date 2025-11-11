@@ -54,7 +54,7 @@ def update_zarr_ome_xml_ims(zarr_root_path, source_ims_path):
     except Exception as e:
         print(f"Could not extract IMS metadata: {e}")
 
-def process(base_path, output_path, use_shard=False, memory_limit=50, start_idx=0, stop_idx=None, use_ome_structure=True, create_dual_metadata=True, use_v2_encoding=True):
+def process(base_path, output_path, use_shard=False, memory_limit=50, start_idx=0, stop_idx=None, use_ome_structure=True, custom_shard_shape=None, custom_chunk_shape=None, create_dual_metadata=True, use_v2_encoding=True):
     print(f"Loading IMS file from: {base_path}", flush=True)
 
     volume, h5_file = load_ims_stack(base_path)
@@ -82,6 +82,14 @@ def process(base_path, output_path, use_shard=False, memory_limit=50, start_idx=
     cache = Cache(8 * 1024**3)  # 8 GiB = 8 × 1024³ = 8,589,934,592 bytes
     cache.register()
 
+    # Set WebKnossos defaults if not specified
+    if custom_chunk_shape is None:
+        custom_chunk_shape = [32, 32, 32]
+        print(f"Using WebKnossos default chunk shape: {custom_chunk_shape}")
+    if custom_shard_shape is None and use_shard:
+        custom_shard_shape = [1024, 1024, 1024]
+        print(f"Using WebKnossos default shard shape: {custom_shard_shape}")
+
     # Create or open the output Zarr3 store
     store_spec = zarr3_store_spec(
         path=output_path,
@@ -90,6 +98,8 @@ def process(base_path, output_path, use_shard=False, memory_limit=50, start_idx=
         use_shard=use_shard,
         level_path="s0",
         use_ome_structure=use_ome_structure,
+        custom_shard_shape=custom_shard_shape,
+        custom_chunk_shape=custom_chunk_shape,
         use_v2_encoding=use_v2_encoding
     )
 

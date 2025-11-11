@@ -71,6 +71,14 @@ def process(base_path, output_path, use_shard=False, memory_limit=50, start_idx=
     cache = Cache(8 * 1024**3)  # 8 GiB = 8 × 1024³ = 8,589,934,592 bytes
     cache.register()
 
+    # Set WebKnossos defaults if not specified
+    if custom_chunk_shape is None:
+        custom_chunk_shape = [32, 32, 32]
+        print(f"Using WebKnossos default chunk shape: {custom_chunk_shape}")
+    if custom_shard_shape is None and use_shard:
+        custom_shard_shape = [1024, 1024, 1024]
+        print(f"Using WebKnossos default shard shape: {custom_shard_shape}")
+
     # Create or open the output Zarr3 store
     store_spec = zarr3_store_spec(
         path=output_path,
