@@ -5,12 +5,13 @@ import psutil
 import numpy as np
 from ..utils import (get_chunk_domains, n5_store_spec, zarr3_store_spec,
                     create_output_store, commit_tasks, get_total_chunks_from_store,
-                    fetch_remote_json, create_zarr3_ome_metadata, write_zarr3_group_metadata)
+                    fetch_remote_json, create_zarr3_ome_metadata, write_zarr3_group_metadata,
+                    write_dual_zarr_metadata, detect_anisotropic_voxels)
 
 def convert(base_path, output_path, level=0, start_idx=0, stop_idx=None,
            memory_limit=50, use_shard=True, use_ome_structure=True,
            custom_shard_shape=None, custom_chunk_shape=None,
-           use_v2_encoding=True, **kwargs):
+           use_v2_encoding=True, create_dual_metadata=False, **kwargs):
     """Convert N5 to Zarr3 with sharding."""
 
     print(f"N5 to Zarr3 conversion")
@@ -103,15 +104,9 @@ def convert(base_path, output_path, level=0, start_idx=0, stop_idx=None,
 
     # Detect anisotropic voxels and warn (if voxel sizes were found)
     if voxel_sizes_um and len(voxel_sizes_um) >= 3:
-        xy_res = voxel_sizes_um[0]  # Assuming x is first in N5
-        z_res = voxel_sizes_um[2]
-        anisotropy_ratio = z_res / xy_res
-
-        if anisotropy_ratio > 2.0:
-            print(f"⚠️  ANISOTROPIC VOXELS DETECTED: {xy_res}×{voxel_sizes_um[1]}×{z_res} µm")
-            print(f"   Anisotropy ratio (Z/XY): {anisotropy_ratio:.2f}×")
-            print(f"   For first downsampling, consider: 2×2×1 (preserve Z resolution)")
-            print(f"   After voxels become ~isotropic, use uniform 2×2×2")
+        # N5 uses [x, y, z] order, convert to dict for unified function
+        voxel_sizes_dict = {'x': voxel_sizes_um[0], 'y': voxel_sizes_um[1], 'z': voxel_sizes_um[2]}
+        detect_anisotropic_voxels(voxel_sizes_dict, shape)
 
     # Set WebKnossos defaults
     if custom_chunk_shape is None:
@@ -290,15 +285,28 @@ def convert(base_path, output_path, level=0, start_idx=0, stop_idx=None,
     elapsed = time.time() - start_time
     print(f"Complete: {processed} chunks in {elapsed:.1f}s ({processed/elapsed:.1f} chunks/s)")
 
+    # Create dual zarr v2/v3 metadata if requested and using OME structure
+    if create_dual_metadata and use_ome_structure:
+        print("Creating dual metadata...", flush=True)
+        try:
+            success = write_dual_zarr_metadata(output_path, base_path)
+            if success:
+                print("Dual metadata created", flush=True)
+            else:
+                print("Warning: Failed to create dual metadata", flush=True)
+        except Exception as e:
+            print(f"Warning: Could not create dual metadata: {e}", flush=True)
+
 
 def process(base_path, output_path, level=0, start_idx=0, stop_idx=None,
            memory_limit=50, use_shard=True, use_ome_structure=True,
            custom_shard_shape=None, custom_chunk_shape=None,
-           use_v2_encoding=True, **kwargs):
+           use_v2_encoding=True, create_dual_metadata=False, **kwargs):
     """Alias for convert()."""
     return convert(base_path=base_path, output_path=output_path, level=level,
                   start_idx=start_idx, stop_idx=stop_idx, memory_limit=memory_limit,
                   use_shard=use_shard, use_ome_structure=use_ome_structure,
                   custom_shard_shape=custom_shard_shape,
                   custom_chunk_shape=custom_chunk_shape,
-                  use_v2_encoding=use_v2_encoding, **kwargs)
+                  use_v2_encoding=use_v2_encoding, create_dual_metadata=create_dual_metadata,
+                  **kwargs)

@@ -848,7 +848,7 @@ def main():
         elif args.task == "n5_to_zarr2":
             n5_to_zarr2.convert(args.base_path, args.output_path, args.level, args.start_idx, args.stop_idx, args.memory_limit)
         elif args.task == "n5_to_zarr3_s0":
-            n5_to_zarr3_s0.convert(args.base_path, args.output_path, args.level, args.start_idx, args.stop_idx, args.memory_limit, bool(args.use_shard), bool(args.use_ome_structure), custom_shard_shape, custom_chunk_shape, use_v2_encoding, use_fortran_order=bool(args.use_fortran_order))
+            n5_to_zarr3_s0.convert(args.base_path, args.output_path, args.level, args.start_idx, args.stop_idx, args.memory_limit, bool(args.use_shard), bool(args.use_ome_structure), custom_shard_shape, custom_chunk_shape, use_v2_encoding, create_dual_metadata, use_fortran_order=bool(args.use_fortran_order))
         elif args.task == "downsample_shard_zarr3":
             # Parse shard_coord if provided
             shard_coord_list = None
@@ -887,9 +887,9 @@ def main():
         elif args.task == "tiff_to_zarr3_s0":
             tiff_to_zarr3_s0.process(args.base_path, args.output_path, bool(args.use_shard), args.memory_limit, args.start_idx, args.stop_idx, bool(args.use_ome_structure), custom_shard_shape, custom_chunk_shape, create_dual_metadata, use_v2_encoding, use_fortran_order=bool(args.use_fortran_order))
         elif args.task == "nd2_to_zarr3_s0":
-            nd2_to_zarr3_s0.process(args.base_path, args.output_path, bool(args.use_shard), args.memory_limit, args.start_idx, args.stop_idx, bool(args.use_ome_structure), custom_shard_shape, custom_chunk_shape, create_dual_metadata, use_v2_encoding)
+            nd2_to_zarr3_s0.process(args.base_path, args.output_path, bool(args.use_shard), args.memory_limit, args.start_idx, args.stop_idx, bool(args.use_ome_structure), custom_shard_shape, custom_chunk_shape, create_dual_metadata, use_v2_encoding, use_fortran_order=bool(args.use_fortran_order))
         elif args.task == "ims_to_zarr3_s0":
-            ims_to_zarr3_s0.process(args.base_path, args.output_path, bool(args.use_shard), args.memory_limit, args.start_idx, args.stop_idx, bool(args.use_ome_structure), create_dual_metadata, use_v2_encoding)
+            ims_to_zarr3_s0.process(args.base_path, args.output_path, bool(args.use_shard), args.memory_limit, args.start_idx, args.stop_idx, bool(args.use_ome_structure), custom_shard_shape, custom_chunk_shape, create_dual_metadata, use_v2_encoding, use_fortran_order=bool(args.use_fortran_order))
         elif args.task == "nd2_to_zarr2_s0":
             nd2_to_zarr2_s0.process(args.base_path, args.output_path, args.memory_limit, args.start_idx, args.stop_idx, bool(args.use_ome_structure), custom_shard_shape, custom_chunk_shape)
         elif args.task == "ims_to_zarr2_s0":
