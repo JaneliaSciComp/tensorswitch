@@ -35,6 +35,14 @@ def process(base_path, output_path, level, start_idx=0, stop_idx=None, downsampl
 
     zarr_store = ts.open(zarr_store_spec).result()
 
+    # Set WebKnossos defaults if not specified
+    if custom_chunk_shape is None:
+        custom_chunk_shape = [32, 32, 32]
+        print(f"Using WebKnossos default chunk shape: {custom_chunk_shape}")
+    if custom_shard_shape is None and use_shard:
+        custom_shard_shape = [1024, 1024, 1024]
+        print(f"Using WebKnossos default shard shape: {custom_shard_shape}")
+
     if downsample and level > 0:
         # Extract dimension_names from the zarr store for proper downsampling
         dimension_names = None
