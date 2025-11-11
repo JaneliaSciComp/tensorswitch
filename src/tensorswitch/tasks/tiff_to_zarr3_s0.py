@@ -25,8 +25,8 @@ def update_zarr_ome_xml(multiscale_path, source_tiff_path):
         metadata = json.load(f)
     
     # Extract OME XML from source TIFF
-    ome_xml = extract_tiff_ome_metadata(source_tiff_path)
-    
+    ome_xml, _ = extract_tiff_ome_metadata(source_tiff_path)  # Unpack tuple (ome_xml, voxel_sizes)
+
     if ome_xml:
         # Add ome_xml to metadata at top level (like your update_metadata.py fix)
         metadata['attributes']['ome_xml'] = ome_xml
