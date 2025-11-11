@@ -330,6 +330,122 @@ def detect_anisotropic_voxels(voxel_sizes, array_shape, threshold=2.0):
 
     return anisotropy_ratio
 
+def update_zarr_metadata_from_source(zarr_root_path, source_file_path, source_type='auto'):
+    """
+    Update zarr.json with source-specific metadata (unified function for TIFF/ND2/IMS).
+
+    This function replaces the separate update_zarr_ome_xml*() functions and preserves
+    all their capabilities:
+    - TIFF: Extracts OME XML, stores as 'ome_xml', removes old nested location
+    - ND2: Extracts OME XML, stores as 'ome_xml', removes old nested location
+    - IMS: Extracts IMS metadata, stores as 'ims_metadata', updates voxel sizes in coordinateTransformations
+
+    Args:
+        zarr_root_path: Path to zarr root directory (containing zarr.json)
+        source_file_path: Path to source file (TIFF/ND2/IMS)
+        source_type: 'tiff', 'nd2', 'ims', or 'auto' (auto-detect from extension)
+
+    Returns:
+        bool: True if metadata was updated successfully, False otherwise
+    """
+    import os
+    import json
+
+    # Auto-detect source type from file extension
+    if source_type == 'auto':
+        ext = os.path.splitext(source_file_path)[1].lower()
+        source_type_map = {
+            '.tif': 'tiff',
+            '.tiff': 'tiff',
+            '.nd2': 'nd2',
+            '.ims': 'ims'
+        }
+        source_type = source_type_map.get(ext)
+        if not source_type:
+            raise ValueError(f"Cannot auto-detect source type from extension: {ext}")
+
+    # Validate zarr.json exists
+    zarr_json_path = os.path.join(zarr_root_path, 'zarr.json')
+    if not os.path.exists(zarr_json_path):
+        raise ValueError(f"zarr.json not found in {zarr_root_path}")
+
+    # Read current metadata
+    with open(zarr_json_path, 'r') as f:
+        metadata = json.load(f)
+
+    # Extract source-specific metadata
+    if source_type == 'tiff':
+        # Extract OME XML from TIFF
+        metadata_value, voxel_sizes = extract_tiff_ome_metadata(source_file_path)
+        metadata_key = 'ome_xml'
+        needs_voxel_update = False
+
+    elif source_type == 'nd2':
+        # Extract OME XML from ND2
+        metadata_value, voxel_sizes = extract_nd2_ome_metadata(source_file_path)
+        metadata_key = 'ome_xml'
+        needs_voxel_update = False
+
+    elif source_type == 'ims':
+        # Extract IMS-specific metadata
+        metadata_value, voxel_sizes = extract_ims_metadata(source_file_path)
+        metadata_key = 'ims_metadata'
+        needs_voxel_update = True  # IMS needs coordinateTransformations update
+
+    else:
+        raise ValueError(f"Unsupported source_type: {source_type}. Must be 'tiff', 'nd2', or 'ims'")
+
+    # Update metadata if extraction was successful
+    if metadata_value:
+        # Store metadata in format-specific key
+        metadata['attributes'][metadata_key] = metadata_value
+
+        # TIFF/ND2 only: Remove old nested ome_xml location if it exists
+        if source_type in ['tiff', 'nd2']:
+            if metadata.get('attributes', {}).get('ome', {}).get('ome_xml'):
+                metadata['attributes']['ome'].pop('ome_xml', None)
+
+        # IMS only: Update voxel sizes in coordinateTransformations
+        if needs_voxel_update and voxel_sizes and len(voxel_sizes) >= 3:
+            try:
+                if 'ome' in metadata.get('attributes', {}):
+                    multiscales = metadata['attributes']['ome'].get('multiscales', [])
+                    if multiscales and 'datasets' in multiscales[0]:
+                        datasets = multiscales[0]['datasets']
+                        if datasets and 'coordinateTransformations' in datasets[0]:
+                            transforms = datasets[0]['coordinateTransformations']
+                            for transform in transforms:
+                                if transform.get('type') == 'scale' and len(voxel_sizes) >= 3:
+                                    # IMS provides XYZ, convert to ZYX for zarr
+                                    if len(transform.get('scale', [])) >= 3:
+                                        transform['scale'] = [voxel_sizes[2], voxel_sizes[1], voxel_sizes[0]]
+            except Exception as e:
+                print(f"Warning: Could not update voxel sizes in coordinateTransformations: {e}")
+
+        # Write back to zarr.json
+        with open(zarr_json_path, 'w') as f:
+            json.dump(metadata, f, indent=2)
+
+        # Print success message (format-specific)
+        if source_type == 'tiff':
+            print(f"Successfully moved ome_xml to top-level attributes in {zarr_json_path}")
+        elif source_type == 'nd2':
+            print(f"Successfully moved ome_xml to top-level attributes in {zarr_json_path}")
+        elif source_type == 'ims':
+            print(f"Successfully added IMS metadata to {zarr_json_path}")
+
+        return True
+    else:
+        # Print failure message (format-specific)
+        if source_type == 'tiff':
+            print("No OME XML found in source TIFF")
+        elif source_type == 'nd2':
+            print("No OME XML found in source ND2")
+        elif source_type == 'ims':
+            print("No enhanced IMS metadata found")
+
+        return False
+
 def precreate_zarr3_metadata_safely(output_path, level, shape, dtype, use_shard,
                                     shard_shape, chunk_shape, use_ome_structure=True,
                                     use_fortran_order=False, use_v2_encoding=False,

@@ -2,7 +2,8 @@ from dask.cache import Cache
 from ..utils import (load_tiff_stack, zarr3_store_spec, get_chunk_domains, commit_tasks,
                     get_total_chunks_from_store, extract_tiff_ome_metadata,
                     convert_ome_to_zarr3_metadata, write_zarr3_group_metadata,
-                    write_dual_zarr_metadata, detect_anisotropic_voxels)
+                    write_dual_zarr_metadata, detect_anisotropic_voxels,
+                    update_zarr_metadata_from_source)
 import tensorstore as ts
 import numpy as np
 import psutil
@@ -12,36 +13,6 @@ import tifffile
 import dask.array as da
 import os
 import json
-
-def update_zarr_ome_xml(multiscale_path, source_tiff_path):
-    """Update zarr.json with OME XML from source TIFF (like update_metadata.py --check-ome-xml)"""
-    zarr_json_path = os.path.join(multiscale_path, 'zarr.json')
-    
-    if not os.path.exists(zarr_json_path):
-        raise ValueError(f"zarr.json not found in {multiscale_path}")
-    
-    # Read current metadata
-    with open(zarr_json_path, 'r') as f:
-        metadata = json.load(f)
-    
-    # Extract OME XML from source TIFF
-    ome_xml, _ = extract_tiff_ome_metadata(source_tiff_path)  # Unpack tuple (ome_xml, voxel_sizes)
-
-    if ome_xml:
-        # Add ome_xml to metadata at top level (like your update_metadata.py fix)
-        metadata['attributes']['ome_xml'] = ome_xml
-        
-        # Remove old ome_xml under ['ome']['ome_xml'] if it exists
-        if (metadata.get('attributes', {}).get('ome', {}).get('ome_xml')):
-            metadata['attributes']['ome'].pop('ome_xml', None)
-        
-        # Write back to zarr.json
-        with open(zarr_json_path, 'w') as f:
-            json.dump(metadata, f, indent=2)
-            
-        print(f"Successfully moved ome_xml to top-level attributes in {zarr_json_path}")
-    else:
-        print("No OME XML found in source TIFF")
 
 def process(base_path, output_path, use_shard=False, memory_limit=50, start_idx=0, stop_idx=None, use_ome_structure=True, custom_shard_shape=None, custom_chunk_shape=None, create_dual_metadata=True, use_v2_encoding=True, use_fortran_order=False):
     print(f"Loading TIFF stack from: {base_path}", flush=True)
@@ -229,7 +200,7 @@ def process(base_path, output_path, use_shard=False, memory_limit=50, start_idx=
             # Update metadata with OME XML from source TIFF (like update_metadata.py --check-ome-xml)
             try:
                 print("Updating zarr.json with enhanced OME XML metadata...", flush=True)
-                update_zarr_ome_xml(output_path, base_path)
+                update_zarr_metadata_from_source(output_path, base_path, source_type='tiff')
                 print("Enhanced OME XML metadata updated successfully", flush=True)
             except Exception as e:
                 print(f"Warning: Could not update enhanced OME XML metadata: {e}", flush=True)
