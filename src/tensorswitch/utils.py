@@ -296,6 +296,40 @@ def downsample_spec(base_spec, array_shape=None, dimension_names=None, custom_fa
         'downsample_method': 'mode'
     }
 
+def detect_anisotropic_voxels(voxel_sizes, array_shape, threshold=2.0):
+    """
+    Detect anisotropic voxels and print dimension-aware warnings with recommendations.
+
+    Args:
+        voxel_sizes: dict with 'x', 'y', 'z' keys in micrometers
+        array_shape: tuple of array dimensions (e.g., (512, 1024, 1024) for ZYX)
+        threshold: anisotropy ratio threshold for warning (default 2.0)
+
+    Returns:
+        float: anisotropy ratio (Z/XY)
+    """
+    z_res = voxel_sizes.get('z', 1.0)
+    xy_res = voxel_sizes.get('x', 1.0)
+    anisotropy_ratio = z_res / xy_res if xy_res > 0 else 1.0
+
+    if anisotropy_ratio > threshold:
+        print(f"⚠️  ANISOTROPIC VOXELS DETECTED: {xy_res:.4f}×{voxel_sizes.get('y', xy_res):.4f}×{z_res:.4f} µm")
+        print(f"   Anisotropy ratio (Z/XY): {anisotropy_ratio:.2f}×")
+
+        # Calculate recommendation based on array dimensions
+        if len(array_shape) == 3:  # ZYX
+            recommended_factors = "1,2,2"
+        elif len(array_shape) == 4:  # CZYX
+            recommended_factors = "1,1,2,2"
+        elif len(array_shape) == 5:  # TCZYX
+            recommended_factors = "1,1,1,2,2"
+        else:
+            recommended_factors = "1,2,2"  # fallback
+
+        print(f"   For first downsampling, consider: --anisotropic_factors {recommended_factors} (preserve Z resolution)")
+
+    return anisotropy_ratio
+
 def precreate_zarr3_metadata_safely(output_path, level, shape, dtype, use_shard,
                                     shard_shape, chunk_shape, use_ome_structure=True,
                                     use_fortran_order=False, use_v2_encoding=False,
@@ -736,17 +770,42 @@ def estimate_total_chunks_for_tiff(input_path, chunk_shape=(64, 64, 64)):
     return total_chunks
 
 def extract_nd2_ome_metadata(nd2_file):
-    """Extract OME metadata from ND2 file."""
+    """
+    Extract OME metadata and voxel sizes from ND2 file.
+
+    Args:
+        nd2_file: Path to ND2 file
+
+    Returns:
+        tuple: (ome_xml, voxel_sizes)
+            ome_xml: OME-XML string or None
+            voxel_sizes: {'x': float, 'y': float, 'z': float} in micrometers, or None
+    """
     if not os.path.isfile(nd2_file):
         raise ValueError(f"ND2 file does not exist: {nd2_file}")
-    
+
     with nd2.ND2File(nd2_file) as f:
         ome_xml = f.ome_metadata().to_xml()
+
+        # Extract voxel sizes from OME metadata
+        voxel_sizes = None
         if ome_xml:
-            # Return the raw XML string
-            return ome_xml
-        else:
-            return None
+            try:
+                from ome_types import from_xml
+                ome = from_xml(ome_xml)
+                if ome.images and ome.images[0].pixels:
+                    pixels = ome.images[0].pixels
+                    # OME uses micrometers as the default unit
+                    voxel_sizes = {
+                        'x': float(pixels.physical_size_x) if pixels.physical_size_x else 1.0,
+                        'y': float(pixels.physical_size_y) if pixels.physical_size_y else 1.0,
+                        'z': float(pixels.physical_size_z) if pixels.physical_size_z else 1.0
+                    }
+            except Exception as e:
+                print(f"Warning: Could not extract voxel sizes from ND2 OME metadata: {e}")
+                voxel_sizes = None
+
+        return ome_xml, voxel_sizes
 
 def extract_tiff_ome_metadata(tiff_file):
     """

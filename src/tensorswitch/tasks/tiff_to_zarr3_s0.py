@@ -2,7 +2,7 @@ from dask.cache import Cache
 from ..utils import (load_tiff_stack, zarr3_store_spec, get_chunk_domains, commit_tasks,
                     get_total_chunks_from_store, extract_tiff_ome_metadata,
                     convert_ome_to_zarr3_metadata, write_zarr3_group_metadata,
-                    write_dual_zarr_metadata)
+                    write_dual_zarr_metadata, detect_anisotropic_voxels)
 import tensorstore as ts
 import numpy as np
 import psutil
@@ -74,18 +74,8 @@ def process(base_path, output_path, use_shard=False, memory_limit=50, start_idx=
     ome_xml_from_tiff, voxel_sizes_um = extract_tiff_ome_metadata(base_path)
     if voxel_sizes_um:
         print(f"Extracted voxel sizes: x={voxel_sizes_um['x']:.4f}, y={voxel_sizes_um['y']:.4f}, z={voxel_sizes_um['z']:.4f} µm")
-
         # Detect anisotropic voxels and warn
-        if len(volume.shape) >= 3:
-            z_res = voxel_sizes_um.get('z', 1.0)
-            xy_res = voxel_sizes_um.get('x', 1.0)
-            anisotropy_ratio = z_res / xy_res
-
-            if anisotropy_ratio > 2.0:
-                print(f"⚠️  ANISOTROPIC VOXELS DETECTED: {xy_res:.4f}×{voxel_sizes_um.get('y', 1.0):.4f}×{z_res:.4f} µm")
-                print(f"   Anisotropy ratio (Z/XY): {anisotropy_ratio:.2f}×")
-                print(f"   For first downsampling, consider: --anisotropic_factors 2,2,1 (preserve Z resolution)")
-                print(f"   After voxels become ~isotropic, use uniform 2,2,2")
+        detect_anisotropic_voxels(voxel_sizes_um, volume.shape)
     else:
         print("Note: Could not extract voxel sizes from TIFF metadata")
         ome_xml_from_tiff = None

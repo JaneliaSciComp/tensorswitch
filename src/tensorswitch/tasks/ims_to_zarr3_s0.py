@@ -2,7 +2,7 @@ from dask.cache import Cache
 from ..utils import (load_ims_stack, zarr3_store_spec, get_chunk_domains, commit_tasks,
                     get_total_chunks_from_store, extract_ims_metadata,
                     convert_ims_to_zarr3_metadata, write_zarr3_group_metadata,
-                    write_dual_zarr_metadata)
+                    write_dual_zarr_metadata, detect_anisotropic_voxels)
 import tensorstore as ts
 import numpy as np
 import psutil
@@ -54,7 +54,7 @@ def update_zarr_ome_xml_ims(zarr_root_path, source_ims_path):
     except Exception as e:
         print(f"Could not extract IMS metadata: {e}")
 
-def process(base_path, output_path, use_shard=False, memory_limit=50, start_idx=0, stop_idx=None, use_ome_structure=True, custom_shard_shape=None, custom_chunk_shape=None, create_dual_metadata=True, use_v2_encoding=True):
+def process(base_path, output_path, use_shard=False, memory_limit=50, start_idx=0, stop_idx=None, use_ome_structure=True, custom_shard_shape=None, custom_chunk_shape=None, create_dual_metadata=True, use_v2_encoding=True, use_fortran_order=False):
     print(f"Loading IMS file from: {base_path}", flush=True)
 
     volume, h5_file = load_ims_stack(base_path)
@@ -82,6 +82,16 @@ def process(base_path, output_path, use_shard=False, memory_limit=50, start_idx=
     cache = Cache(8 * 1024**3)  # 8 GiB = 8 × 1024³ = 8,589,934,592 bytes
     cache.register()
 
+    # Extract voxel sizes from IMS metadata
+    ims_metadata, voxel_sizes = extract_ims_metadata(base_path)
+    if voxel_sizes and len(voxel_sizes) >= 3:
+        voxel_sizes_um = {'x': voxel_sizes[0], 'y': voxel_sizes[1], 'z': voxel_sizes[2]}
+        print(f"Extracted voxel sizes: x={voxel_sizes_um['x']:.4f}, y={voxel_sizes_um['y']:.4f}, z={voxel_sizes_um['z']:.4f} µm")
+        # Detect anisotropic voxels and warn
+        detect_anisotropic_voxels(voxel_sizes_um, volume.shape)
+    else:
+        print("Note: Could not extract voxel sizes from IMS metadata")
+
     # Set WebKnossos defaults if not specified
     if custom_chunk_shape is None:
         custom_chunk_shape = [32, 32, 32]
@@ -100,7 +110,8 @@ def process(base_path, output_path, use_shard=False, memory_limit=50, start_idx=
         use_ome_structure=use_ome_structure,
         custom_shard_shape=custom_shard_shape,
         custom_chunk_shape=custom_chunk_shape,
-        use_v2_encoding=use_v2_encoding
+        use_v2_encoding=use_v2_encoding,
+        use_fortran_order=use_fortran_order
     )
 
     store = ts.open(store_spec, create=True, open=True, delete_existing=False).result()

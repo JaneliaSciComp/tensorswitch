@@ -2,7 +2,7 @@ from dask.cache import Cache
 from ..utils import (load_nd2_stack, zarr3_store_spec, get_chunk_domains, commit_tasks,
                     get_total_chunks_from_store, extract_nd2_ome_metadata,
                     convert_ome_to_zarr3_metadata, write_zarr3_group_metadata,
-                    write_dual_zarr_metadata)
+                    write_dual_zarr_metadata, detect_anisotropic_voxels)
 import tensorstore as ts
 import numpy as np
 import psutil
@@ -16,16 +16,16 @@ import json
 def update_zarr_ome_xml_nd2(zarr_root_path, source_nd2_path):
     """Update zarr.json with OME XML from source ND2 (like update_metadata.py --check-ome-xml)"""
     zarr_json_path = os.path.join(zarr_root_path, 'zarr.json')
-    
+
     if not os.path.exists(zarr_json_path):
         raise ValueError(f"zarr.json not found in {zarr_root_path}")
-    
+
     # Read current metadata
     with open(zarr_json_path, 'r') as f:
         metadata = json.load(f)
-    
-    # Extract OME XML from source ND2
-    ome_xml = extract_nd2_ome_metadata(source_nd2_path)
+
+    # Extract OME XML from source ND2 (now returns tuple)
+    ome_xml, _ = extract_nd2_ome_metadata(source_nd2_path)
     
     if ome_xml:
         # Add ome_xml to metadata at top level (like your update_metadata.py fix)
@@ -43,7 +43,7 @@ def update_zarr_ome_xml_nd2(zarr_root_path, source_nd2_path):
     else:
         print("No OME XML found in source ND2")
 
-def process(base_path, output_path, use_shard=False, memory_limit=50, start_idx=0, stop_idx=None, use_ome_structure=True, custom_shard_shape=None, custom_chunk_shape=None, create_dual_metadata=True, use_v2_encoding=True):
+def process(base_path, output_path, use_shard=False, memory_limit=50, start_idx=0, stop_idx=None, use_ome_structure=True, custom_shard_shape=None, custom_chunk_shape=None, create_dual_metadata=True, use_v2_encoding=True, use_fortran_order=False):
     print(f"Loading ND2 file from: {base_path}", flush=True)
 
     volume = load_nd2_stack(base_path)
@@ -71,6 +71,16 @@ def process(base_path, output_path, use_shard=False, memory_limit=50, start_idx=
     cache = Cache(8 * 1024**3)  # 8 GiB = 8 × 1024³ = 8,589,934,592 bytes
     cache.register()
 
+    # Extract voxel sizes from ND2 metadata
+    ome_xml_from_nd2, voxel_sizes_um = extract_nd2_ome_metadata(base_path)
+    if voxel_sizes_um:
+        print(f"Extracted voxel sizes: x={voxel_sizes_um['x']:.4f}, y={voxel_sizes_um['y']:.4f}, z={voxel_sizes_um['z']:.4f} µm")
+        # Detect anisotropic voxels and warn
+        detect_anisotropic_voxels(voxel_sizes_um, volume.shape)
+    else:
+        print("Note: Could not extract voxel sizes from ND2 metadata")
+        ome_xml_from_nd2 = None
+
     # Set WebKnossos defaults if not specified
     if custom_chunk_shape is None:
         custom_chunk_shape = [32, 32, 32]
@@ -89,7 +99,8 @@ def process(base_path, output_path, use_shard=False, memory_limit=50, start_idx=
         use_ome_structure=use_ome_structure,
         custom_shard_shape=custom_shard_shape,
         custom_chunk_shape=custom_chunk_shape,
-        use_v2_encoding=use_v2_encoding
+        use_v2_encoding=use_v2_encoding,
+        use_fortran_order=use_fortran_order
     )
 
     store = ts.open(store_spec, create=True, open=True, delete_existing=False).result()
@@ -132,11 +143,11 @@ def process(base_path, output_path, use_shard=False, memory_limit=50, start_idx=
     if use_ome_structure:
         print("Writing OME-Zarr metadata...", flush=True)
         try:
-            ome_metadata = extract_nd2_ome_metadata(base_path)
+            # Use already extracted metadata (ome_xml_from_nd2, voxel_sizes_um)
             # Extract image name from file path
             image_name = os.path.splitext(os.path.basename(base_path))[0]
-            
-            zarr3_metadata = convert_ome_to_zarr3_metadata(ome_metadata, volume.shape, image_name)
+
+            zarr3_metadata = convert_ome_to_zarr3_metadata(ome_xml_from_nd2, volume.shape, image_name)
             # Write zarr.json to root (no multiscale folder)
             write_zarr3_group_metadata(output_path, zarr3_metadata)
             print("OME-Zarr metadata written successfully", flush=True)
