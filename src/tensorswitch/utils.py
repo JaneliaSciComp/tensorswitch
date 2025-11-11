@@ -749,21 +749,144 @@ def extract_nd2_ome_metadata(nd2_file):
             return None
 
 def extract_tiff_ome_metadata(tiff_file):
-    """Extract OME metadata from TIFF file."""
+    """
+    Extract metadata from TIFF file (OME-TIFF or ImageJ TIFF).
+
+    Supports:
+    - OME-TIFF: Extracts OME-XML metadata
+    - ImageJ TIFF: Extracts voxel sizes from ImageJ metadata
+
+    Args:
+        tiff_file: Path to TIFF file
+
+    Returns:
+        tuple: (ome_xml, voxel_sizes)
+            ome_xml: OME-XML string or None
+            voxel_sizes: {'x': float, 'y': float, 'z': float} in micrometers, or None
+    """
     if not os.path.isfile(tiff_file):
         raise ValueError(f"TIFF file does not exist: {tiff_file}")
-    
+
     try:
         with tifffile.TiffFile(tiff_file) as tif:
-            # Try to get OME-XML from TIFF tags
+            ome_xml = None
+            voxel_sizes = None
+
+            # Try to get OME-XML from TIFF tags (OME-TIFF)
             if tif.ome_metadata:
-                return tif.ome_metadata
-            else:
-                # If no OME metadata, return None (will create minimal metadata)
-                return None
+                ome_xml = tif.ome_metadata
+                # For OME-TIFF, voxel sizes will be extracted from OME-XML by converter
+                return ome_xml, None
+
+            # Fall back to ImageJ TIFF metadata
+            if tif.is_imagej and tif.imagej_metadata:
+                imagej_metadata = tif.imagej_metadata
+
+                # Extract Z-spacing and unit
+                z_spacing = imagej_metadata.get('spacing')
+                unit = imagej_metadata.get('unit', 'micron')
+
+                if z_spacing is not None:
+                    # Convert unit to micrometers
+                    unit_lower = unit.lower()
+                    if unit_lower in ['micron', 'um', 'µm', 'micrometer']:
+                        z_spacing_um = float(z_spacing)
+                    elif unit_lower in ['nm', 'nanometer']:
+                        z_spacing_um = float(z_spacing) / 1000.0
+                    elif unit_lower in ['mm', 'millimeter']:
+                        z_spacing_um = float(z_spacing) * 1000.0
+                    else:
+                        print(f"Warning: Unknown unit '{unit}', assuming micrometers")
+                        z_spacing_um = float(z_spacing)
+
+                    # Try to extract XY resolution from TIFF tags
+                    xy_resolution_um = None
+                    try:
+                        # Get first page to check resolution tags
+                        page = tif.pages[0]
+                        if hasattr(page, 'tags'):
+                            # XResolution and YResolution are typically in pixels per unit
+                            # Resolution units: 1 = None, 2 = inch, 3 = centimeter
+                            x_res_tag = page.tags.get('XResolution')
+                            y_res_tag = page.tags.get('YResolution')
+                            res_unit_tag = page.tags.get('ResolutionUnit')
+
+                            if x_res_tag and y_res_tag and res_unit_tag:
+                                # Extract values (usually stored as rational numbers)
+                                x_res = x_res_tag.value
+                                y_res = y_res_tag.value
+                                res_unit = res_unit_tag.value
+
+                                # Convert rational to float if needed
+                                if isinstance(x_res, tuple):
+                                    x_res = x_res[0] / x_res[1] if x_res[1] != 0 else x_res[0]
+                                if isinstance(y_res, tuple):
+                                    y_res = y_res[0] / y_res[1] if y_res[1] != 0 else y_res[0]
+
+                                # Convert to micrometers
+                                if res_unit == 2:  # inch
+                                    # pixels/inch → µm/pixel
+                                    x_spacing_um = 25400.0 / x_res if x_res != 0 else None
+                                    y_spacing_um = 25400.0 / y_res if y_res != 0 else None
+                                elif res_unit == 3:  # centimeter
+                                    # pixels/cm → µm/pixel
+                                    x_spacing_um = 10000.0 / x_res if x_res != 0 else None
+                                    y_spacing_um = 10000.0 / y_res if y_res != 0 else None
+                                elif res_unit == 1:  # None/undefined - try to infer
+                                    # Heuristic: If value is in range 0.1-100, likely pixels/µm
+                                    # If > 100, likely pixels/inch or pixels/mm
+                                    if 0.1 <= x_res <= 100 and 0.1 <= y_res <= 100:
+                                        # Assume pixels/micrometer
+                                        x_spacing_um = 1.0 / x_res if x_res != 0 else None
+                                        y_spacing_um = 1.0 / y_res if y_res != 0 else None
+                                        print(f"ResolutionUnit undefined, assuming pixels/µm: {x_res:.2f} → {x_spacing_um:.4f} µm")
+                                    elif x_res > 100 and y_res > 100:
+                                        # Assume pixels/inch (common for scanners)
+                                        x_spacing_um = 25400.0 / x_res if x_res != 0 else None
+                                        y_spacing_um = 25400.0 / y_res if y_res != 0 else None
+                                        print(f"ResolutionUnit undefined, assuming pixels/inch: {x_res:.2f} → {x_spacing_um:.4f} µm")
+                                    else:
+                                        x_spacing_um = None
+                                        y_spacing_um = None
+                                else:
+                                    # Unknown unit, can't convert
+                                    x_spacing_um = None
+                                    y_spacing_um = None
+
+                                if x_spacing_um and y_spacing_um:
+                                    xy_resolution_um = (x_spacing_um + y_spacing_um) / 2.0  # Average XY
+                                    print(f"Extracted XY resolution from TIFF tags: {xy_resolution_um:.4f} µm")
+                    except Exception as e:
+                        print(f"Note: Could not extract XY resolution from TIFF tags: {e}")
+
+                    # If XY resolution not found, use heuristic
+                    if xy_resolution_um is None:
+                        # Heuristic: If Z-spacing is very different from typical XY (e.g., > 2x),
+                        # use 1.0 µm as a reasonable default for XY
+                        if z_spacing_um > 2.0:
+                            xy_resolution_um = 1.0
+                            print(f"XY resolution not found, using default: {xy_resolution_um} µm")
+                        else:
+                            # Z is close to typical XY resolution, use same value
+                            xy_resolution_um = z_spacing_um
+                            print(f"XY resolution not found, using Z-spacing as estimate: {xy_resolution_um} µm")
+
+                    voxel_sizes = {
+                        'x': xy_resolution_um,
+                        'y': xy_resolution_um,
+                        'z': z_spacing_um
+                    }
+                    print(f"Extracted voxel sizes from ImageJ TIFF: x={xy_resolution_um:.4f}, y={xy_resolution_um:.4f}, z={z_spacing_um:.4f} µm")
+                    return None, voxel_sizes
+                else:
+                    print("Warning: ImageJ TIFF found but no 'spacing' field in metadata")
+
+            # Neither OME nor ImageJ metadata found
+            return None, None
+
     except Exception as e:
-        print(f"Warning: Could not extract OME metadata from TIFF: {e}")
-        return None
+        print(f"Warning: Could not extract metadata from TIFF: {e}")
+        return None, None
 
 def convert_ome_to_zarr3_metadata(ome_metadata, array_shape, image_name=None):
     """Convert OME metadata to zarr3 OME-ZARR format."""

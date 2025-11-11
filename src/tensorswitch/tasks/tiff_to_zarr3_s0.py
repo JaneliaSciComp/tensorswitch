@@ -43,8 +43,16 @@ def update_zarr_ome_xml(multiscale_path, source_tiff_path):
     else:
         print("No OME XML found in source TIFF")
 
-def process(base_path, output_path, use_shard=False, memory_limit=50, start_idx=0, stop_idx=None, use_ome_structure=True, custom_shard_shape=None, custom_chunk_shape=None, create_dual_metadata=True, use_v2_encoding=True):
+def process(base_path, output_path, use_shard=False, memory_limit=50, start_idx=0, stop_idx=None, use_ome_structure=True, custom_shard_shape=None, custom_chunk_shape=None, create_dual_metadata=True, use_v2_encoding=True, use_fortran_order=False):
     print(f"Loading TIFF stack from: {base_path}", flush=True)
+
+    # Set WebKnossos-compatible defaults if not specified
+    if custom_chunk_shape is None:
+        custom_chunk_shape = [32, 32, 32]
+        print(f"Using WebKnossos default chunk shape: {custom_chunk_shape}")
+    if custom_shard_shape is None and use_shard:
+        custom_shard_shape = [1024, 1024, 1024]
+        print(f"Using WebKnossos default shard shape: {custom_shard_shape}")
 
     volume = load_tiff_stack(base_path)
     print(f"Original volume shape: {volume.shape}, dtype: {volume.dtype}", flush=True)
@@ -62,6 +70,26 @@ def process(base_path, output_path, use_shard=False, memory_limit=50, start_idx=
         print(f"Y (height): {volume.shape[2]}")
         print(f"X (width): {volume.shape[3]}")
 
+    # Extract voxel sizes from TIFF metadata (OME-TIFF or ImageJ TIFF)
+    ome_xml_from_tiff, voxel_sizes_um = extract_tiff_ome_metadata(base_path)
+    if voxel_sizes_um:
+        print(f"Extracted voxel sizes: x={voxel_sizes_um['x']:.4f}, y={voxel_sizes_um['y']:.4f}, z={voxel_sizes_um['z']:.4f} µm")
+
+        # Detect anisotropic voxels and warn
+        if len(volume.shape) >= 3:
+            z_res = voxel_sizes_um.get('z', 1.0)
+            xy_res = voxel_sizes_um.get('x', 1.0)
+            anisotropy_ratio = z_res / xy_res
+
+            if anisotropy_ratio > 2.0:
+                print(f"⚠️  ANISOTROPIC VOXELS DETECTED: {xy_res:.4f}×{voxel_sizes_um.get('y', 1.0):.4f}×{z_res:.4f} µm")
+                print(f"   Anisotropy ratio (Z/XY): {anisotropy_ratio:.2f}×")
+                print(f"   For first downsampling, consider: --anisotropic_factors 2,2,1 (preserve Z resolution)")
+                print(f"   After voxels become ~isotropic, use uniform 2,2,2")
+    else:
+        print("Note: Could not extract voxel sizes from TIFF metadata")
+        ome_xml_from_tiff = None
+
     # Enable Dask opportunistic cache with 8 GB RAM
     cache = Cache(8 * 1024**3)  # 8 GiB = 8 × 1024³ = 8,589,934,592 bytes
     cache.register()
@@ -76,7 +104,8 @@ def process(base_path, output_path, use_shard=False, memory_limit=50, start_idx=
         use_ome_structure=use_ome_structure,
         custom_shard_shape=custom_shard_shape,
         custom_chunk_shape=custom_chunk_shape,
-        use_v2_encoding=use_v2_encoding
+        use_v2_encoding=use_v2_encoding,
+        use_fortran_order=use_fortran_order
     )
 
     store = ts.open(store_spec, create=True, open=True, delete_existing=False).result()
@@ -177,12 +206,32 @@ def process(base_path, output_path, use_shard=False, memory_limit=50, start_idx=
     if use_ome_structure:
         print("Writing OME-Zarr metadata...", flush=True)
         try:
-            # Extract basic metadata from TIFF file
-            ome_metadata = extract_tiff_ome_metadata(base_path)
+            # Use already extracted metadata (ome_xml_from_tiff, voxel_sizes_um)
             # Extract image name from file path
             image_name = os.path.splitext(os.path.basename(base_path))[0]
-            
-            zarr3_metadata = convert_ome_to_zarr3_metadata(ome_metadata, volume.shape, image_name)
+
+            # Convert OME metadata to zarr3 format
+            zarr3_metadata = convert_ome_to_zarr3_metadata(ome_xml_from_tiff, volume.shape, image_name)
+
+            # Update with extracted voxel sizes if available
+            if voxel_sizes_um:
+                # Update coordinate transformations in metadata
+                if 'attributes' in zarr3_metadata and 'ome' in zarr3_metadata['attributes']:
+                    multiscales = zarr3_metadata['attributes']['ome'].get('multiscales', [])
+                    if multiscales and 'datasets' in multiscales[0]:
+                        datasets = multiscales[0]['datasets']
+                        if datasets and 'coordinateTransformations' in datasets[0]:
+                            transforms = datasets[0]['coordinateTransformations']
+                            for transform in transforms:
+                                if transform.get('type') == 'scale':
+                                    # Update scale with actual voxel sizes (ZYX order for 3D)
+                                    if len(volume.shape) == 3:
+                                        transform['scale'] = [voxel_sizes_um['z'], voxel_sizes_um['y'], voxel_sizes_um['x']]
+                                        print(f"Updated metadata with voxel sizes: {transform['scale']}")
+                                    elif len(volume.shape) == 4:  # CZYX
+                                        transform['scale'] = [1.0, voxel_sizes_um['z'], voxel_sizes_um['y'], voxel_sizes_um['x']]
+                                        print(f"Updated metadata with voxel sizes: {transform['scale']}")
+
             # Write zarr.json to root (no multiscale folder)
             write_zarr3_group_metadata(output_path, zarr3_metadata)
             print("OME-Zarr metadata written successfully", flush=True)
