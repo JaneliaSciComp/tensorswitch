@@ -4,20 +4,53 @@ This package provides a unified entry point for managing N5/Zarr dataset convers
 
 ## Features
 
+### Core Features
 - **Web GUI Interface**: Production-ready web interface for scientists (no programming required)
 - **AI Assistant**: Integrated OpenAI-powered assistant with context-aware responses and conversion guidance
 - **Cost Estimation**: Real-time cluster resource cost estimates (AI + cluster billing) before job submission
 - **Command-Line Interface**: Full-featured CLI for automated workflows
 - **Advanced Dask JobQueue**: Hybrid Dask-LSF execution with automatic scaling and error recovery
 - **Smart Workflow System**: Auto-detect input formats and intelligently plan conversions
-- **Enhanced OME-ZARR Metadata**: Automatic preservation of rich metadata from TIFF, ND2, and IMS files
-- **Dual Zarr Format Support**: Create files compatible with both Zarr v2 and v3 tools
-- **Remote Data Support**: Direct conversion from HTTP, Google Cloud Storage (GCS), and S3-served datasets
 - **Lab Path Integration**: Built-in HHMI lab storage paths (131 labs, 126 projects)
-- **Cluster Integration**: LSF job submission with resource management and real-time monitoring
-- **Multiple Format Support**: Complete Zarr2, Zarr3, N5, TIFF, ND2, and IMS conversions
-- **Optimized N5 Compression**: Native zstd compression for better compatibility and performance
+- **Remote Data Support**: Direct conversion from HTTP, Google Cloud Storage (GCS), and S3-served datasets
 - **Comprehensive Test Suite**: 31 verified tests covering CLI, GUI, and OME-Zarr workflows
+
+### Format Support (12 Conversion Tasks)
+- **TIFF → Zarr2/Zarr3/N5**: Full s0 level conversion with enhanced OME-Zarr metadata and ImageJ voxel extraction
+- **ND2 → Zarr2/Zarr3**: Native ND2 support with OME metadata preservation
+- **IMS → Zarr2/Zarr3**: Imaris file format support with HDF5 metadata extraction
+- **N5 → Zarr2/Zarr3**: High-performance N5 conversion with dual metadata and voxel size preservation
+- **Precomputed → N5**: Neuroglancer Precomputed format support
+- **Zarr2/Zarr3 Downsampling**: Multi-resolution pyramid generation with anisotropic factors
+- **N5 → N5**: N5-to-N5 conversion with compression optimization
+
+### Metadata & Compliance
+- **Enhanced OME-ZARR Metadata**: Automatic preservation of rich metadata from TIFF, ND2, and IMS files
+- **Unified Metadata System**: Single `update_zarr_metadata_from_source()` function for all formats
+- **Dual Zarr Format Support**: Create files compatible with both Zarr v2 and v3 tools
+- **OME-NGFF v0.4/v0.5 Compliant**: Full specification compliance for WebKnossos and Neuroglancer
+
+### Performance & Optimization (Recent Updates)
+- **Auto-Multiscale Pyramid Generation**: Automatic multi-resolution pyramid with smart stopping conditions
+  - Uses Yurii Zubov's anisotropic downsampling algorithm (Janelia CellMap Team)
+  - Supports both Zarr2 and Zarr3 formats
+  - Cluster and local execution modes with CLI coordinator script generation
+  - Smart stopping: array size thresholds, dimension minimums, WebKnossos <4% drift compliance
+- **Anisotropic Downsampling**: Intelligent factor calculation preserving Z-resolution
+  - Dimension-aware detection (3D/4D/5D arrays)
+  - Automatic recommendations (e.g., "1,2,2" for 2.5× anisotropy)
+  - Yurii Zubov's algorithm: maintains voxel aspect ratio within 0.5-2.0× range
+- **Automatic Worker Calculation**: Optimal cluster distribution (~3 shards/worker, 1-50 workers)
+- **WebKnossos Defaults**: Optimal [32,32,32] chunks and [1024,1024,1024] shards
+- **Fortran Order Support**: Transpose codec `[2,1,0]` for optimal WebKnossos access (ND2/IMS/N5)
+- **Shard Pre-creation**: Race-condition-free inline directory pre-creation
+- **3D Shard Distribution**: Coordinate-based job distribution (no overlap, all shards covered)
+- **Optimized N5 Compression**: Native zstd with blosc fallback
+
+### Zarr2 & Zarr3 Feature Parity (January 2025)
+- **Zarr2 Feature Parity**: All Zarr2 scripts now have anisotropic detection and WebKnossos defaults
+- **Code Quality**: ~320 lines eliminated through refactoring and unification
+- **Bug Fixes**: Fixed critical ND2→Zarr2 tuple unpacking bug
 
 ## Folder Structure
 
@@ -30,20 +63,21 @@ tensorswitch/
 │   └── tensorswitch
 │       ├── __init__.py
 │       ├── __main__.py                   # Main dispatcher script
-│       ├── tasks
+│       ├── tasks                         # 12 conversion tasks
 │       │   ├── __init__.py
-│       │   ├── downsample_shard_zarr3.py # Downsample using shards
-│       │   ├── downsample_zarr2.py       # Downsample existing Zarr V2 datasets
-│       │   ├── n5_to_n5.py               # N5 to N5 conversion logic
-|       |   ├── precomputed_to_n5.py      # Neuroglancer Precomputed to N5 
-│       │   ├── n5_to_zarr2.py            # N5 to Zarr V2 conversion logic
-│       │   ├── tiff_to_zarr2_s0.py       # TIFF to Zarr V2 level s0 with OME-Zarr metadata
-│       │   ├── tiff_to_zarr3_s0.py       # TIFF to Zarr V3 level s0 with OME-Zarr metadata
-│       │   ├── nd2_to_zarr2_s0.py        # ND2 to Zarr V2 level s0 with OME-Zarr metadata
-│       │   ├── nd2_to_zarr3_s0.py        # ND2 to Zarr V3 level s0 with OME-Zarr metadata
-│       │   ├── ims_to_zarr2_s0.py        # IMS to Zarr V2 level s0 with OME-Zarr metadata
-│       │   ├── ims_to_zarr3_s0.py        # IMS to Zarr V3 level s0 with OME-Zarr metadata
-│       ├── utils.py                      # Common utilities and OME-Zarr metadata functions
+│       │   ├── downsample_shard_zarr3.py # Downsample Zarr V3 using shards (with auto-multiscale)
+│       │   ├── downsample_zarr2.py       # Downsample Zarr V2 datasets (with auto-multiscale)
+│       │   ├── n5_to_n5.py               # N5 to N5 conversion with rechunking
+│       │   ├── n5_to_zarr2.py            # N5 to Zarr V2 conversion
+│       │   ├── n5_to_zarr3_s0.py         # N5 to Zarr V3 s0 with dual metadata and Fortran order
+│       │   ├── precomputed_to_n5.py      # Neuroglancer Precomputed to N5 conversion
+│       │   ├── tiff_to_zarr2_s0.py       # TIFF to Zarr V2 s0 with OME-Zarr metadata
+│       │   ├── tiff_to_zarr3_s0.py       # TIFF to Zarr V3 s0 with OME-Zarr metadata
+│       │   ├── nd2_to_zarr2_s0.py        # ND2 to Zarr V2 s0 with OME-Zarr metadata
+│       │   ├── nd2_to_zarr3_s0.py        # ND2 to Zarr V3 s0 with OME-Zarr metadata and Fortran order
+│       │   ├── ims_to_zarr2_s0.py        # IMS to Zarr V2 s0 with OME-Zarr metadata
+│       │   └── ims_to_zarr3_s0.py        # IMS to Zarr V3 s0 with OME-Zarr metadata and Fortran order
+│       ├── utils.py                      # Common utilities, OME-Zarr metadata, auto-multiscale
 │       ├── dask_utils.py                 # Dask JobQueue integration for cluster execution
 │       └── gui/                          # Web GUI interface
 │           ├── app.py                    # Main GUI application
@@ -483,6 +517,49 @@ python -m tensorswitch --task tiff_to_zarr2_s0 --base_path /path/to/tiff_folder 
 #### Convert TIFF to Zarr v3 s0 with automatic OME metadata
 ```bash
 python -m tensorswitch --task tiff_to_zarr3_s0 --base_path /path/to/tiff_folder --output_path /path/to/zarr3 --use_shard 0 --use_ome_structure 1
+```
+
+#### Auto-Multiscale: Automatic pyramid generation (local mode)
+```bash
+# Convert TIFF to Zarr3 s0 with auto-multiscale enabled
+python -m tensorswitch --task tiff_to_zarr3_s0 \
+  --base_path /path/to/input.tif \
+  --output_path /path/to/output.zarr \
+  --use_shard 1 \
+  --auto_multiscale
+
+# This will:
+# 1. Create s0 level
+# 2. Automatically generate s1, s2, s3, ... until thumbnail-sized
+# 3. Use Yurii Zubov's anisotropic algorithm (preserves Z-resolution)
+```
+
+#### Auto-Multiscale: Cluster mode (for existing s0)
+```bash
+# First, create s0 on cluster
+python -m tensorswitch --task tiff_to_zarr3_s0 \
+  --base_path /path/to/input.tif \
+  --output_path /path/to/output.zarr \
+  --submit --project your_project
+
+# After s0 completes, generate pyramid on cluster
+python -m tensorswitch --task downsample_shard_zarr3 \
+  --base_path /path/to/output.zarr/s0 \
+  --output_path /path/to/output.zarr \
+  --auto_multiscale \
+  --submit --project your_project
+
+# Generates CLI coordinator script that submits s1, s2, s3, ... jobs automatically
+```
+
+#### Fortran order (optimal for WebKnossos)
+```bash
+# Convert ND2 with Fortran order transpose codec
+python -m tensorswitch --task nd2_to_zarr3_s0 \
+  --base_path /path/to/file.nd2 \
+  --output_path /path/to/output.zarr \
+  --use_fortran_order 1 \
+  --submit --project your_project
 ```
 
 #### Convert ND2 to Zarr v2 s0 with automatic OME metadata (local)
