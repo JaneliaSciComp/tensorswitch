@@ -1,8 +1,9 @@
 from dask.cache import Cache
-from ..utils import (load_ims_stack, zarr2_store_spec, get_chunk_domains, commit_tasks, 
-                    get_total_chunks_from_store, extract_ims_metadata, 
-                    update_ome_multiscale_metadata_zarr2, create_zarr2_ome_metadata, 
-                    write_zarr2_group_metadata, convert_ims_to_zarr3_metadata)
+from ..utils import (load_ims_stack, zarr2_store_spec, get_chunk_domains, commit_tasks,
+                    get_total_chunks_from_store, extract_ims_metadata,
+                    update_ome_multiscale_metadata_zarr2, create_zarr2_ome_metadata,
+                    write_zarr2_group_metadata, convert_ims_to_zarr3_metadata,
+                    detect_anisotropic_voxels)
 import tensorstore as ts
 import numpy as np
 import psutil
@@ -57,36 +58,62 @@ def process(base_path, output_path, memory_limit=50, start_idx=0, stop_idx=None,
 
     volume, h5_file = load_ims_stack(base_path)
     print(f"Original volume shape: {volume.shape}, dtype: {volume.dtype}", flush=True)
-    
 
-    # Determine output shape and chunk strategy
+    # Extract voxel sizes from IMS metadata and detect anisotropic voxels
+    try:
+        ims_metadata, voxel_sizes = extract_ims_metadata(base_path)
+        if voxel_sizes and len(voxel_sizes) >= 3:
+            voxel_sizes_um = {
+                'x': voxel_sizes[0],
+                'y': voxel_sizes[1],
+                'z': voxel_sizes[2]
+            }
+            print(f"Extracted voxel sizes: x={voxel_sizes_um['x']:.4f}, y={voxel_sizes_um['y']:.4f}, z={voxel_sizes_um['z']:.4f} µm")
+            detect_anisotropic_voxels(voxel_sizes_um, volume.shape)
+        else:
+            print("Note: Could not extract voxel sizes from IMS metadata")
+    except Exception as e:
+        print(f"Note: Could not extract voxel sizes for anisotropic detection: {e}")
+
+    # Set WebKnossos-compatible default chunk shape if not specified
+    custom_chunk_shape = [32, 32, 32]
+    print(f"Using WebKnossos default chunk shape: {custom_chunk_shape}")
+
+    # Determine output shape and adapt chunk shape to volume dimensions
     print(f"Volume dimensions: {len(volume.shape)}D")
-    print(f"Volume shape: {volume.shape}")
-    
-    # Default chunk shapes based on dimensions
+
+    # Convert custom_chunk_shape to tuple
+    chunk_shape_base = tuple(custom_chunk_shape)
+
     if len(volume.shape) == 3:
         print("3D array detected - likely (Z, Y, X)")
-        print(f"Z-slices: {volume.shape[0]}")
-        print(f"Y (height): {volume.shape[1]}")
-        print(f"X (width): {volume.shape[2]}")
-        chunk_shape = (1, min(2304, volume.shape[1]), min(2304, volume.shape[2]))
-        
+        print(f"Z: {volume.shape[0]}, Y: {volume.shape[1]}, X: {volume.shape[2]}")
+        if len(chunk_shape_base) == 3:
+            chunk_shape = chunk_shape_base
+        elif len(chunk_shape_base) == 2:
+            chunk_shape = (1,) + chunk_shape_base  # ZYX with YX chunks
+        else:
+            chunk_shape = chunk_shape_base
+
     elif len(volume.shape) == 4:
-        print("4D array detected - likely (T, Z, Y, X)")
-        print(f"T-frames: {volume.shape[0]}")
-        print(f"Z-slices: {volume.shape[1]}")
-        print(f"Y (height): {volume.shape[2]}")
-        print(f"X (width): {volume.shape[3]}")
-        chunk_shape = (1, 1, min(2304, volume.shape[2]), min(2304, volume.shape[3]))
-        
+        print("4D array detected - likely (T, Z, Y, X) or (C, Z, Y, X)")
+        print(f"Dim0: {volume.shape[0]}, Z: {volume.shape[1]}, Y: {volume.shape[2]}, X: {volume.shape[3]}")
+        if len(chunk_shape_base) == 3:
+            chunk_shape = (1,) + chunk_shape_base  # TZYX/CZYX with ZYX chunks
+        elif len(chunk_shape_base) == 2:
+            chunk_shape = (1, 1) + chunk_shape_base  # TZYX with YX chunks
+        else:
+            chunk_shape = chunk_shape_base
+
     elif len(volume.shape) == 5:
         print("5D array detected - likely (T, C, Z, Y, X)")
-        print(f"T-frames: {volume.shape[0]}")
-        print(f"C-channels: {volume.shape[1]}")
-        print(f"Z-slices: {volume.shape[2]}")
-        print(f"Y (height): {volume.shape[3]}")
-        print(f"X (width): {volume.shape[4]}")
-        chunk_shape = (1, 1, 1, min(2304, volume.shape[3]), min(2304, volume.shape[4]))
+        print(f"T: {volume.shape[0]}, C: {volume.shape[1]}, Z: {volume.shape[2]}, Y: {volume.shape[3]}, X: {volume.shape[4]}")
+        if len(chunk_shape_base) == 3:
+            chunk_shape = (1, 1) + chunk_shape_base  # TCZYX with ZYX chunks
+        elif len(chunk_shape_base) == 2:
+            chunk_shape = (1, 1, 1) + chunk_shape_base  # TCZYX with YX chunks
+        else:
+            chunk_shape = chunk_shape_base
     else:
         raise ValueError(f"Unsupported volume dimensions: {len(volume.shape)}D")
 

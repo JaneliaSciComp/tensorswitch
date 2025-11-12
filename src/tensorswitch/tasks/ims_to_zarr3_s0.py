@@ -3,7 +3,7 @@ from ..utils import (load_ims_stack, zarr3_store_spec, get_chunk_domains, commit
                     get_total_chunks_from_store, extract_ims_metadata,
                     convert_ims_to_zarr3_metadata, write_zarr3_group_metadata,
                     write_dual_zarr_metadata, detect_anisotropic_voxels,
-                    update_zarr_metadata_from_source)
+                    update_zarr_metadata_from_source, precreate_shard_directories_inline)
 import tensorstore as ts
 import numpy as np
 import psutil
@@ -72,6 +72,10 @@ def process(base_path, output_path, use_shard=False, memory_limit=50, start_idx=
     )
 
     store = ts.open(store_spec, create=True, open=True, delete_existing=False).result()
+
+    # Pre-create shard directories if using sharded format (safety fallback)
+    if use_shard and custom_shard_shape:
+        precreate_shard_directories_inline(output_path, volume.shape, custom_shard_shape, use_ome_structure)
 
     # Prepare chunk domains and filter to assigned range
     chunk_shape = store.chunk_layout.write_chunk.shape
