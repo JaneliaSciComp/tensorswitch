@@ -39,14 +39,18 @@ def convert(base_path, output_path, level=0, start_idx=0, stop_idx=None,
     print(f"Shape: {shape}, dtype: {dtype}")
     print(f"N5 chunk shape: {n5_chunk_shape}")
 
-    # Read N5 attributes if available
+    # Read N5 attributes from BOTH level and root directories
     source_attrs = None
+    root_attrs = None
+
     try:
         if base_path.startswith(("http://", "https://", "gs://", "s3://")):
             attr_url = f"{base_path}/attributes.json"
             source_attrs = fetch_remote_json(attr_url)
         else:
             import json
+
+            # Read level attributes (for pixelResolution)
             attr_path = os.path.join(base_path, "attributes.json")
             if os.path.exists(attr_path):
                 with open(attr_path, 'r') as f:
@@ -55,17 +59,35 @@ def convert(base_path, output_path, level=0, start_idx=0, stop_idx=None,
                     print(f"Pixel resolution: {source_attrs['pixelResolution']}")
                 if 'downsamplingFactors' in source_attrs:
                     print(f"Downsampling factors: {source_attrs['downsamplingFactors']}")
+
+            # ALSO read root N5 attributes (for multiscales with axes)
+            # base_path format: .../dataset.n5/ch0tp0/s0
+            # Need to find: .../dataset.n5/attributes.json
+            path_parts = base_path.split(os.sep)
+            for i in range(len(path_parts) - 1, -1, -1):
+                if path_parts[i].endswith('.n5'):
+                    root_n5_path = os.sep.join(path_parts[:i+1])
+                    root_attr_path = os.path.join(root_n5_path, "attributes.json")
+                    if os.path.exists(root_attr_path):
+                        with open(root_attr_path, 'r') as f:
+                            root_attrs = json.load(f)
+                        print(f"Found root N5 attributes at: {root_attr_path}")
+                    break
     except Exception as e:
         print(f"Warning: Could not read N5 attributes: {e}")
 
-    # Extract voxel sizes from N5 metadata
+    # Extract voxel sizes AND axes from N5 metadata
     voxel_sizes_um = None
     dataset_name = None
+    axes_order = None  # NEW: Extract axes from N5
 
     # Try to extract from multiscales metadata (BigStitcher-Spark style)
-    if source_attrs and 'multiscales' in source_attrs:
+    # Look in root_attrs first (for axes), then source_attrs
+    attrs_to_check = root_attrs if root_attrs else source_attrs
+
+    if attrs_to_check and 'multiscales' in attrs_to_check:
         try:
-            multiscales = source_attrs['multiscales'][0]
+            multiscales = attrs_to_check['multiscales'][0]
             dataset_name = multiscales.get('name', 'N5_dataset')
 
             # Find the dataset for this level
@@ -73,13 +95,17 @@ def convert(base_path, output_path, level=0, start_idx=0, stop_idx=None,
             if level < len(datasets):
                 transform = datasets[level].get('transform', {})
                 voxel_sizes_nm = transform.get('scale', None)
+                axes_order = transform.get('axes', None)  # NEW: Extract axes
 
                 if voxel_sizes_nm:
                     # Convert nm to micrometers
                     voxel_sizes_um = [v / 1000.0 for v in voxel_sizes_nm]
                     print(f"Voxel sizes (from N5 multiscales): {voxel_sizes_nm} nm = {voxel_sizes_um} µm")
+
+                if axes_order:
+                    print(f"Axes order (from N5 multiscales): {axes_order}")
         except Exception as e:
-            print(f"Warning: Could not extract voxel sizes from N5 multiscales metadata: {e}")
+            print(f"Warning: Could not extract metadata from N5 multiscales: {e}")
 
     # Fallback: Try to extract from pixelResolution attribute
     if voxel_sizes_um is None and source_attrs and 'pixelResolution' in source_attrs:
@@ -133,7 +159,8 @@ def convert(base_path, output_path, level=0, start_idx=0, stop_idx=None,
         custom_shard_shape=custom_shard_shape,
         custom_chunk_shape=custom_chunk_shape,
         use_v2_encoding=use_v2_encoding,
-        use_fortran_order=use_fortran_order
+        use_fortran_order=use_fortran_order,
+        axes_order=axes_order  # NEW: Pass axes from N5
     )
     store_spec['context'] = context
 
@@ -155,7 +182,8 @@ def convert(base_path, output_path, level=0, start_idx=0, stop_idx=None,
                 chunk_shape=custom_chunk_shape,
                 use_ome_structure=use_ome_structure,
                 use_fortran_order=use_fortran_order,
-                use_v2_encoding=use_v2_encoding
+                use_v2_encoding=use_v2_encoding,
+                axes_order=axes_order
             )
 
     zarr3_store = ts.open(store_spec, create=True, open=True, delete_existing=False).result()
@@ -223,7 +251,8 @@ def convert(base_path, output_path, level=0, start_idx=0, stop_idx=None,
                 ome_xml=None,  # N5 doesn't have OME-XML
                 array_shape=shape,
                 image_name=dataset_name or os.path.basename(output_path),
-                pixel_sizes=pixel_sizes
+                pixel_sizes=pixel_sizes,
+                axes_order=axes_order  # Pass axes from N5
             )
 
             # Write root zarr.json
