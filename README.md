@@ -43,6 +43,9 @@ This package provides a unified entry point for managing N5/Zarr dataset convers
 - **Automatic Worker Calculation**: Optimal cluster distribution (~3 shards/worker, 1-50 workers)
 - **WebKnossos Defaults**: Optimal [32,32,32] chunks and [1024,1024,1024] shards
 - **Fortran Order Support**: Transpose codec `[2,1,0]` for optimal WebKnossos access (ND2/IMS/N5)
+  - **Axes Extraction from Source** (Jan 2025): Auto-detects axes from N5/source metadata (preserves [x,y,z] coordinate space)
+  - **Zarr3 Codec Compliance** (Jan 2025): Transpose codec at array level (before sharding), not in inner codecs
+  - **Axes Preservation**: Maintains consistent axes throughout downsampling pyramid
 - **Shard Pre-creation**: Race-condition-free inline directory pre-creation
 - **3D Shard Distribution**: Coordinate-based job distribution (no overlap, all shards covered)
 - **Optimized N5 Compression**: Native zstd with blosc fallback
@@ -50,7 +53,10 @@ This package provides a unified entry point for managing N5/Zarr dataset convers
 ### Zarr2 & Zarr3 Feature Parity (January 2025)
 - **Zarr2 Feature Parity**: All Zarr2 scripts now have anisotropic detection and WebKnossos defaults
 - **Code Quality**: ~320 lines eliminated through refactoring and unification
-- **Bug Fixes**: Fixed critical ND2→Zarr2 tuple unpacking bug
+- **Bug Fixes**:
+  - Fixed critical ND2→Zarr2 tuple unpacking bug
+  - Fixed N5→Zarr3 axes extraction (preserves source coordinate space for annotation compatibility)
+  - Fixed transpose codec placement (Zarr3 spec compliance, TensorStore compatibility)
 
 ## Folder Structure
 
