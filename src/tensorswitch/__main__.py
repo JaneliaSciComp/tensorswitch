@@ -360,6 +360,36 @@ def submit_job(args, use_v2_encoding=True):
             n5_dtype = n5_store.dtype.name
             n5_store = None  # Close
 
+            # Extract axes from N5 metadata (same logic as n5_to_zarr3_s0.py)
+            axes_order = None
+            try:
+                import json
+                # Read root N5 attributes for axes
+                # base_path format: .../dataset.n5/ch0tp0/s0
+                # Need to find: .../dataset.n5/attributes.json
+                path_parts = args.base_path.split(os.sep)
+                for i in range(len(path_parts) - 1, -1, -1):
+                    if path_parts[i].endswith('.n5'):
+                        root_n5_path = os.sep.join(path_parts[:i+1])
+                        root_attr_path = os.path.join(root_n5_path, "attributes.json")
+                        if os.path.exists(root_attr_path):
+                            with open(root_attr_path, 'r') as f:
+                                root_attrs = json.load(f)
+
+                            # Extract axes from multiscales.datasets[level].transform.axes
+                            if 'multiscales' in root_attrs:
+                                multiscales = root_attrs['multiscales'][0]
+                                datasets = multiscales.get('datasets', [])
+                                if args.level < len(datasets):
+                                    transform = datasets[args.level].get('transform', {})
+                                    axes_order = transform.get('axes', None)
+                                    if axes_order:
+                                        print(f"Extracted axes from N5: {axes_order}")
+                            break
+            except Exception as e:
+                print(f"Warning: Could not extract axes from N5: {e}")
+                print("Using default axes order: ['z', 'y', 'x']")
+
             # Parse shapes
             shard_shape = [int(x) for x in args.custom_shard_shape.split(',')]
             chunk_shape = [int(x) for x in args.custom_chunk_shape.split(',')]
@@ -384,7 +414,8 @@ def submit_job(args, use_v2_encoding=True):
                 chunk_shape=chunk_shape,
                 use_ome_structure=bool(args.use_ome_structure),
                 use_fortran_order=bool(args.use_fortran_order),
-                use_v2_encoding=use_v2_encoding
+                use_v2_encoding=use_v2_encoding,
+                axes_order=axes_order
             )
 
     # Check if using Dask JobQueue

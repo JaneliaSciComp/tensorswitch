@@ -134,7 +134,7 @@ def zarr2_store_spec(zarr_level_path, shape, chunks):
     }
 
 
-def zarr3_store_spec(path, shape, dtype, use_shard=True, level_path="s0", use_ome_structure=True, custom_shard_shape=None, custom_chunk_shape=None, use_v2_encoding=False, use_fortran_order=False):
+def zarr3_store_spec(path, shape, dtype, use_shard=True, level_path="s0", use_ome_structure=True, custom_shard_shape=None, custom_chunk_shape=None, use_v2_encoding=False, use_fortran_order=False, axes_order=None):
     if use_shard:
         # Use custom chunk shape if provided, otherwise default
         inner_chunk_shape = custom_chunk_shape if custom_chunk_shape is not None else [32, 32, 32]
@@ -155,32 +155,34 @@ def zarr3_store_spec(path, shape, dtype, use_shard=True, level_path="s0", use_om
         else:
             adjusted_inner_chunk = inner_chunk_shape
         
-        # Build inner codecs for sharding (with optional transpose for F-order)
-        inner_codecs = []
+        # Build inner codecs for sharding (NO transpose here - it goes at array level)
+        inner_codecs = [
+            {'name': 'bytes', 'configuration': {'endian': 'little'}},
+            {'name': 'zstd', 'configuration': {'level': 5}}
+        ]
+
+        # Build array-level codecs (transpose goes here for F-order, BEFORE sharding)
+        codecs = []
         if use_fortran_order:
             # Use explicit dimension reversal [n-1, ..., 1, 0] as recommended by Zarr specs
             # For 3D: [2, 1, 0], for 4D: [3, 2, 1, 0], etc.
+            # This must be at ARRAY level, not inside sharding inner codecs
             transpose_order = list(range(len(shape) - 1, -1, -1))
-            inner_codecs.append({'name': 'transpose', 'configuration': {'order': transpose_order}})
-        inner_codecs.extend([
-            {'name': 'bytes', 'configuration': {'endian': 'little'}},
-            {'name': 'zstd', 'configuration': {'level': 5}}
-        ])
+            codecs.append({'name': 'transpose', 'configuration': {'order': transpose_order}})
 
-        codecs = [
-            {
-                'name': 'sharding_indexed',
-                'configuration': {
-                    'chunk_shape': adjusted_inner_chunk,
-                    'codecs': inner_codecs,
-                    'index_codecs': [
-                        {'name': 'bytes', 'configuration': {'endian': 'little'}},
-                        {'name': 'crc32c'}
-                    ],
-                    'index_location': 'end'
-                }
+        # Add sharding codec
+        codecs.append({
+            'name': 'sharding_indexed',
+            'configuration': {
+                'chunk_shape': adjusted_inner_chunk,
+                'codecs': inner_codecs,
+                'index_codecs': [
+                    {'name': 'bytes', 'configuration': {'endian': 'little'}},
+                    {'name': 'crc32c'}
+                ],
+                'index_location': 'end'
             }
-        ]
+        })
         
         # Use custom shard shape if provided, otherwise default
         if custom_shard_shape is not None:
@@ -233,19 +235,26 @@ def zarr3_store_spec(path, shape, dtype, use_shard=True, level_path="s0", use_om
         # For plain zarr3: write directly to specified path
         array_path = path
     
-    # Determine dimension names based on shape - will be updated in calling function if OME metadata available
-    if len(shape) == 3:
-        # For 3D, assume channels if first dimension is small, otherwise Z
-        if shape[0] <= 10:
-            dimension_names = ["c", "y", "x"]
-        else:
-            dimension_names = ["z", "y", "x"]
-    elif len(shape) == 4:
-        dimension_names = ["c", "z", "y", "x"]
-    elif len(shape) == 5:
-        dimension_names = ["t", "c", "z", "y", "x"]
+    # Determine dimension names based on axes_order from source (if provided) or shape
+    if axes_order is not None and len(axes_order) == len(shape):
+        # Use axes from source metadata (e.g., N5)
+        dimension_names = axes_order
+        print(f"Using dimension names from source metadata: {dimension_names}")
     else:
-        dimension_names = [f"dim_{i}" for i in range(len(shape))]
+        # Fallback: infer from shape
+        if len(shape) == 3:
+            # For 3D, assume channels if first dimension is small, otherwise Z
+            if shape[0] <= 10:
+                dimension_names = ["c", "y", "x"]
+            else:
+                dimension_names = ["z", "y", "x"]
+        elif len(shape) == 4:
+            dimension_names = ["c", "z", "y", "x"]
+        elif len(shape) == 5:
+            dimension_names = ["t", "c", "z", "y", "x"]
+        else:
+            dimension_names = [f"dim_{i}" for i in range(len(shape))]
+        print(f"Inferred dimension names from shape: {dimension_names}")
     
     return {
         'driver': 'zarr3',
@@ -449,7 +458,7 @@ def update_zarr_metadata_from_source(zarr_root_path, source_file_path, source_ty
 def precreate_zarr3_metadata_safely(output_path, level, shape, dtype, use_shard,
                                     shard_shape, chunk_shape, use_ome_structure=True,
                                     use_fortran_order=False, use_v2_encoding=False,
-                                    force_precreate=False):
+                                    force_precreate=False, axes_order=None):
     """
     Pre-create zarr.json metadata to avoid worker race conditions.
 
@@ -470,6 +479,7 @@ def precreate_zarr3_metadata_safely(output_path, level, shape, dtype, use_shard,
         use_fortran_order: Whether to use Fortran (F) order instead of C order
         use_v2_encoding: Whether to use v2 chunk key encoding
         force_precreate: Force pre-creation even for standard C-order
+        axes_order: Axis order list (e.g., ["x", "y", "z"]) - if None, defaults to ["z", "y", "x"]
 
     Returns:
         bool: True if metadata was created, False if skipped (not needed)
@@ -494,7 +504,8 @@ def precreate_zarr3_metadata_safely(output_path, level, shape, dtype, use_shard,
         custom_shard_shape=shard_shape,
         custom_chunk_shape=chunk_shape,
         use_v2_encoding=use_v2_encoding,
-        use_fortran_order=use_fortran_order
+        use_fortran_order=use_fortran_order,
+        axes_order=axes_order
     )
 
     # Create metadata (no data written, just zarr.json)
@@ -1181,15 +1192,28 @@ def convert_ome_to_zarr3_metadata(ome_metadata, array_shape, image_name=None):
         return create_zarr3_ome_metadata(ome_metadata, array_shape, image_name or "image")
 
 
-def create_zarr3_ome_metadata(ome_xml, array_shape, image_name, pixel_sizes=None):
-    """Create OME-ZARR metadata structure for zarr3 format."""
-    
+def create_zarr3_ome_metadata(ome_xml, array_shape, image_name, pixel_sizes=None, axes_order=None):
+    """Create OME-ZARR metadata structure for zarr3 format.
+
+    Args:
+        axes_order: List of axis names (e.g., ["x", "y", "z"] or ["z", "y", "x"])
+                    If provided, this overrides the automatic detection
+    """
+
     # Build axes information based on array shape
     axes = []
     if len(array_shape) == 3:
+        # Check if axes_order was provided (e.g., from N5 source metadata)
+        if axes_order and len(axes_order) == 3:
+            # Use provided axes order
+            axes = [
+                {"name": axes_order[0], "type": "space", "unit": "micrometer"},
+                {"name": axes_order[1], "type": "space", "unit": "micrometer"},
+                {"name": axes_order[2], "type": "space", "unit": "micrometer"}
+            ]
         # Check if this is 2D multi-channel (CYX) or true 3D volume (ZYX)
         # Heuristic: if first dimension is small (<=10), treat as channels
-        if array_shape[0] <= 10:
+        elif array_shape[0] <= 10:
             # 2D multi-channel: CYX
             axes = [
                 {"name": "c", "type": "channel"},
@@ -1197,7 +1221,7 @@ def create_zarr3_ome_metadata(ome_xml, array_shape, image_name, pixel_sizes=None
                 {"name": "x", "type": "space", "unit": "micrometer"}
             ]
         else:
-            # True 3D volume: ZYX
+            # True 3D volume: ZYX (default)
             axes = [
                 {"name": "z", "type": "space", "unit": "micrometer"},
                 {"name": "y", "type": "space", "unit": "micrometer"},
@@ -1227,11 +1251,14 @@ def create_zarr3_ome_metadata(ome_xml, array_shape, image_name, pixel_sizes=None
     if pixel_sizes is not None:
         # Map pixel sizes to the correct axes
         if len(array_shape) == 3:
-            if array_shape[0] <= 10:
+            if axes_order and len(axes_order) == 3:
+                # Use axes_order to map pixel sizes
+                scale_factors = [pixel_sizes.get(axis, 1.0) for axis in axes_order]
+            elif array_shape[0] <= 10:
                 # 2D multi-channel: CYX -> scale = [1.0, y, x]
                 scale_factors = [1.0, pixel_sizes.get('y', 1.0), pixel_sizes.get('x', 1.0)]
             else:
-                # True 3D: ZYX -> scale = [z, y, x]
+                # True 3D: ZYX (default) -> scale = [z, y, x]
                 scale_factors = [pixel_sizes.get('z', 1.0), pixel_sizes.get('y', 1.0), pixel_sizes.get('x', 1.0)]
         elif len(array_shape) == 4:  # CZYX
             scale_factors = [1.0, pixel_sizes.get('z', 1.0), pixel_sizes.get('y', 1.0), pixel_sizes.get('x', 1.0)]
