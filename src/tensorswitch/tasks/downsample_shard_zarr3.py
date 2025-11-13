@@ -132,7 +132,8 @@ def process(base_path, output_path, level, start_idx=0, stop_idx=None, downsampl
         use_ome_structure=True,
         custom_shard_shape=custom_shard_shape,
         custom_chunk_shape=custom_chunk_shape,
-        use_fortran_order=use_fortran_order
+        use_fortran_order=use_fortran_order,
+        axes_order=dimension_names  # Preserve axes from source level
     )
 
     # Create basic output directory structure
