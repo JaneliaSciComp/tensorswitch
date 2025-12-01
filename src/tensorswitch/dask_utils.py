@@ -782,6 +782,15 @@ def run_task_on_worker(worker_args):
             print(f"Unsupported task: {task}")
             return False
         
+        # Parse custom shapes (they come as strings from command line)
+        custom_shard_shape = worker_args.get('custom_shard_shape')
+        if custom_shard_shape and isinstance(custom_shard_shape, str):
+            custom_shard_shape = [int(x) for x in custom_shard_shape.split(',')]
+
+        custom_chunk_shape = worker_args.get('custom_chunk_shape')
+        if custom_chunk_shape and isinstance(custom_chunk_shape, str):
+            custom_chunk_shape = [int(x) for x in custom_chunk_shape.split(',')]
+
         # Call the existing process() function
         process(
             base_path=worker_args['base_path'],
@@ -791,8 +800,8 @@ def run_task_on_worker(worker_args):
             start_idx=start_idx,
             stop_idx=stop_idx,
             use_ome_structure=worker_args['use_ome_structure'],
-            custom_shard_shape=worker_args.get('custom_shard_shape'),
-            custom_chunk_shape=worker_args.get('custom_chunk_shape'),
+            custom_shard_shape=custom_shard_shape,
+            custom_chunk_shape=custom_chunk_shape,
             use_fortran_order=worker_args.get('use_fortran_order', False)
         )
         
