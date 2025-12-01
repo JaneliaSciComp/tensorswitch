@@ -284,6 +284,103 @@ def get_total_chunks_for_task(args, use_v2_encoding=True):
     print(f"Calculated total chunks: {total_chunks} for task: {args.task}")
     return total_chunks
 
+def parse_and_adjust_shape(shape_str, volume_shape):
+    """
+    Parse a shape string and adjust dimensions to match the volume_shape.
+
+    Args:
+        shape_str: Comma-separated shape values (e.g., '4096,4096' or '128,128,128')
+        volume_shape: Tuple of the actual data dimensions (e.g., (4, 17993, 10274))
+
+    Returns:
+        List of adjusted shape values matching volume_shape dimensions
+    """
+    if not shape_str or shape_str == "None":
+        return None
+
+    shape = [int(x) for x in shape_str.split(',')]
+
+    if not volume_shape:
+        return shape
+
+    # Adjust shape to match array dimensions
+    if len(volume_shape) == 4 and len(shape) == 3:
+        shape = [1] + shape  # CZYX
+    elif len(volume_shape) == 4 and len(shape) == 2:
+        shape = [1, 1] + shape  # CZYX with YX shards
+    elif len(volume_shape) == 3 and len(shape) == 2:
+        shape = [1] + shape  # CYX
+    elif len(volume_shape) == 5 and len(shape) == 3:
+        shape = [1, 1] + shape  # TCZYX
+    elif len(volume_shape) == 5 and len(shape) == 2:
+        shape = [1, 1, 1] + shape  # TCZYX with YX shards
+
+    return shape
+
+def calculate_optimal_workers(volume_shape, dtype, total_shards):
+    """
+    Calculate optimal worker count based on dataset size AND shard count.
+
+    This function implements smart worker scaling to avoid:
+    - Too many jobs for small datasets (overhead > compute)
+    - Too few jobs for large datasets (underutilization)
+
+    Args:
+        volume_shape: Tuple of data dimensions, e.g., (4, 17993, 10274)
+        dtype: numpy dtype or dtype string (e.g., 'uint16', np.uint16)
+        total_shards: Number of 3D shards
+
+    Returns:
+        Optimal number of workers (int)
+
+    Examples:
+        Lavis Brain: 1.6 GB, 60 shards → 1 worker (small dataset)
+        Medium dataset: 20 GB → 4 workers
+        Ahrens: 3,620 GB, 1000+ shards → 40 workers (huge dataset)
+    """
+    import numpy as np
+
+    # Calculate dataset size in GB
+    num_elements = np.prod(volume_shape)
+
+    # Get dtype size in bytes
+    if isinstance(dtype, str):
+        dtype_bytes = np.dtype(dtype).itemsize
+    else:
+        dtype_bytes = dtype.itemsize
+
+    dataset_size_gb = (num_elements * dtype_bytes) / (1024**3)
+
+    # Smart scaling based on dataset size
+    if dataset_size_gb < 5:
+        # Small datasets (<5 GB): 1 worker
+        # Examples: Lavis datasets (1.6 GB, 1.9 GB) - single job is sufficient
+        optimal_workers = 1
+        scale_reason = f"small dataset (<5 GB)"
+    elif dataset_size_gb < 50:
+        # Medium datasets (5-50 GB): 2-5 workers
+        # Example: 20 GB dataset
+        optimal_workers = min(5, max(2, total_shards // 5))
+        scale_reason = f"medium dataset (5-50 GB)"
+    elif dataset_size_gb < 500:
+        # Large datasets (50-500 GB): 5-20 workers
+        # Example: 200 GB dataset
+        optimal_workers = min(20, max(5, total_shards // 3))
+        scale_reason = f"large dataset (50-500 GB)"
+    else:
+        # Huge datasets (>500 GB): 10-50 workers
+        # Examples: Ahrens (3,620 GB), cortex datasets
+        optimal_workers = min(50, max(10, total_shards // 2))
+        scale_reason = f"huge dataset (>500 GB)"
+
+    # Never exceed total shards (can't have empty workers)
+    optimal_workers = min(optimal_workers, total_shards)
+
+    print(f"Dataset size: {dataset_size_gb:.2f} GB ({scale_reason})")
+    print(f"Smart worker calculation: {optimal_workers} workers for {total_shards} shards (~{total_shards/optimal_workers:.1f} shards/worker)")
+
+    return optimal_workers
+
 def submit_job(args, use_v2_encoding=True):
     """Handles LSF cluster job submission for different tasks."""
     output_dir = os.path.join(os.getcwd(), "output")
@@ -294,21 +391,26 @@ def submit_job(args, use_v2_encoding=True):
 
     print(f"The total number of chunks is {total_chunks} with downsample={args.downsample} and level={args.level}")
 
-    # Get volume shape for directory pre-creation
+    # Get volume shape and dtype for directory pre-creation and worker calculation
     volume_shape = None
+    volume_dtype = None
     if args.task == "tiff_to_zarr3_s0":
         volume = load_tiff_stack(args.base_path)
         volume_shape = volume.shape
+        volume_dtype = volume.dtype
     elif args.task == "nd2_to_zarr3_s0":
         volume = load_nd2_stack(args.base_path)
         volume_shape = volume.shape
+        volume_dtype = volume.dtype
     elif args.task == "ims_to_zarr3_s0":
         volume = load_ims_stack(args.base_path)
         volume_shape = volume.shape
+        volume_dtype = volume.dtype
     elif args.task == "downsample_shard_zarr3":
         # For downsampling, get shape from the source zarr and calculate output shape
         store = ts.open({'driver': 'zarr3', 'kvstore': {'driver': 'file', 'path': args.base_path}}).result()
         source_shape = store.shape
+        volume_dtype = store.dtype.name  # TensorStore dtype
 
         # Calculate downsampled output shape
         if args.anisotropic_factors:
@@ -327,13 +429,16 @@ def submit_job(args, use_v2_encoding=True):
 
         print(f"Downsample: source shape {source_shape} -> output shape {volume_shape} (factors: {factors})")
 
+    # Parse and adjust shard/chunk shapes once (used throughout this function)
+    shard_shape = parse_and_adjust_shape(args.custom_shard_shape, volume_shape)
+    chunk_shape = parse_and_adjust_shape(args.custom_chunk_shape, volume_shape)
+
     # Pre-create all shard directories BEFORE submitting any jobs
     if volume_shape is not None and args.task in ["tiff_to_zarr3_s0", "nd2_to_zarr3_s0", "ims_to_zarr3_s0"]:
         precreate_shard_directories(args, volume_shape, use_v2_encoding)
     elif volume_shape is not None and args.task == "downsample_shard_zarr3":
         # For downsample tasks, use the universal function from utils
-        if bool(args.use_shard) and args.custom_shard_shape:
-            shard_shape = [int(x) for x in args.custom_shard_shape.split(',')]
+        if bool(args.use_shard) and shard_shape:
             precreate_shard_directories_universal(
                 output_path=args.output_path,
                 level=args.level,
@@ -343,7 +448,7 @@ def submit_job(args, use_v2_encoding=True):
             )
     elif args.task == "n5_to_zarr3_s0":
         # For N5 conversion, pre-create metadata and directories if F-order or sharding is enabled
-        if bool(args.use_shard) and args.custom_shard_shape:
+        if bool(args.use_shard) and shard_shape:
             from tensorswitch.utils import get_kvstore_spec, precreate_zarr3_metadata_safely
 
             # Read N5 metadata to get shape and dtype
@@ -359,6 +464,10 @@ def submit_job(args, use_v2_encoding=True):
             volume_shape = n5_store.shape
             n5_dtype = n5_store.dtype.name
             n5_store = None  # Close
+
+            # Re-parse shapes now that we have volume_shape from N5
+            shard_shape = parse_and_adjust_shape(args.custom_shard_shape, volume_shape)
+            chunk_shape = parse_and_adjust_shape(args.custom_chunk_shape, volume_shape)
 
             # Extract axes from N5 metadata (same logic as n5_to_zarr3_s0.py)
             axes_order = None
@@ -389,10 +498,6 @@ def submit_job(args, use_v2_encoding=True):
             except Exception as e:
                 print(f"Warning: Could not extract axes from N5: {e}")
                 print("Using default axes order: ['z', 'y', 'x']")
-
-            # Parse shapes
-            shard_shape = [int(x) for x in args.custom_shard_shape.split(',')]
-            chunk_shape = [int(x) for x in args.custom_chunk_shape.split(',')]
 
             # Pre-create shard directories
             precreate_shard_directories_universal(
@@ -432,11 +537,7 @@ def submit_job(args, use_v2_encoding=True):
 
     # Note: n5_to_zarr3_s0 already processes by shard domains (write_chunk), not inner chunks
     # So skip shard-aligned calculation to avoid double-counting (598 shards != 598/32768 shards)
-    if args.task != "n5_to_zarr3_s0" and bool(args.use_shard) and args.custom_shard_shape and args.custom_chunk_shape:
-        # Parse shard and chunk shapes
-        shard_shape = [int(x) for x in args.custom_shard_shape.split(',')]
-        chunk_shape = [int(x) for x in args.custom_chunk_shape.split(',')]
-
+    if args.task != "n5_to_zarr3_s0" and bool(args.use_shard) and shard_shape and chunk_shape:
         # Calculate chunks per shard in each dimension
         chunks_per_shard = 1
         for s, c in zip(shard_shape, chunk_shape):
@@ -463,19 +564,20 @@ def submit_job(args, use_v2_encoding=True):
 
     # Auto-calculate optimal num_volumes if user didn't override default
     if args.num_volumes == 8:  # User didn't specify (using default)
-        # Target: 2-3 shards per worker for good parallelism
-        # For small datasets (<= 3 shards): 1 worker
-        # For medium datasets (4-12 shards): 3-4 workers
-        # For large datasets (>12 shards): aim for 3 shards/worker
-        if total_shards <= 3:
-            optimal_workers = 1
-        elif total_shards <= 12:
-            optimal_workers = min(4, total_shards)
+        # Use smart worker calculation based on dataset size
+        if volume_shape and volume_dtype:
+            # NEW: Smart calculation considering dataset size
+            num_volumes = calculate_optimal_workers(volume_shape, volume_dtype, total_shards)
         else:
-            optimal_workers = max(3, total_shards // 3)
-
-        num_volumes = optimal_workers
-        print(f"Auto-calculated optimal workers: {num_volumes} for {total_shards} shards (~{total_shards/num_volumes:.1f} shards/worker)")
+            # FALLBACK: Old shard-based calculation when size unknown
+            print("WARNING: Dataset size unknown, using shard-based worker calculation")
+            if total_shards <= 3:
+                num_volumes = 1
+            elif total_shards <= 12:
+                num_volumes = min(4, total_shards)
+            else:
+                num_volumes = max(3, total_shards // 3)
+            print(f"Shard-based workers: {num_volumes} for {total_shards} shards (~{total_shards/num_volumes:.1f} shards/worker)")
     else:
         # User specified num_volumes, respect it but cap at total_shards
         num_volumes = min(total_shards, args.num_volumes)
@@ -485,12 +587,8 @@ def submit_job(args, use_v2_encoding=True):
 
     # For 3D sharded arrays, distribute by explicit 3D shard coordinates
     # to ensure no overlap (linear distribution doesn't map cleanly to 3D shards)
-    if total_3d_shards and volume_shape:
+    if total_3d_shards and volume_shape and shard_shape and chunk_shape:
         import math
-
-        # Parse shapes
-        shard_shape = [int(x) for x in args.custom_shard_shape.split(',')]
-        chunk_shape = [int(x) for x in args.custom_chunk_shape.split(',')]
 
         # Calculate 3D shard grid dimensions
         shard_grid = [
@@ -566,7 +664,12 @@ def submit_job(args, use_v2_encoding=True):
                             )
                             chunk_indices.append(linear_idx)
 
-            # Get min/max chunk indices for this worker
+            # Calculate shard-level indices for this worker (for batched submission)
+            # start_shard_idx and end_shard_idx are already the shard indices we need
+            shard_start_idx = start_shard_idx
+            shard_stop_idx = end_shard_idx
+
+            # Get min/max inner chunk indices (for per-shard submission fallback)
             if chunk_indices:
                 start_idx = min(chunk_indices)
                 stop_idx = max(chunk_indices) + 1
@@ -616,23 +719,39 @@ def submit_job(args, use_v2_encoding=True):
                 if getattr(args, arg, False):
                     command += ["--"+arg]
 
-            # Pass shard coordinate instead of chunk indices for 3D sharded distribution
-            # Submit one job per shard coordinate to ensure all shards are processed
-            for shard_idx, shard_coord in enumerate(assigned_shards):
-                shard_coord_str = ",".join(map(str, shard_coord))
-                shard_command = command + ["--shard_coord", shard_coord_str]
+            # Choose submission strategy based on task type and shard count
+            # Strategy 1: Per-shard submission (1 job per shard) - for large downsample jobs
+            # Strategy 2: Batched submission (1 job per worker) - for conversions and small jobs
+            if args.task == "downsample_shard_zarr3" and len(assigned_shards) > 5:
+                # Per-shard: Submit one job per shard coordinate (preserves original behavior for large downsample)
+                print(f"Using per-shard submission for {len(assigned_shards)} shards")
+                for shard_idx, shard_coord in enumerate(assigned_shards):
+                    shard_coord_str = ",".join(map(str, shard_coord))
+                    shard_command = command + ["--shard_coord", shard_coord_str]
 
-                # Update job name to include shard index
-                shard_job_name = f"{job_name}_shard{shard_idx}"
-                shard_command[shard_command.index(job_name)] = shard_job_name
+                    # Update job name to include shard index
+                    shard_job_name = f"{job_name}_shard{shard_idx}"
+                    shard_command[shard_command.index(job_name)] = shard_job_name
 
-                # print(shard_command)  # Uncomment for debugging
+                    subprocess.run(shard_command)
+                    print(f"Submitted {shard_job_name}, volume={i}, shard={shard_coord}")
 
-                subprocess.run(shard_command)
-                print(f"Submitted {shard_job_name}, volume={i}, shard={shard_coord}")
+                    # Small delay between job submissions to avoid overwhelming the scheduler
+                    time.sleep(0.05)
+            else:
+                # Batched: Submit one job that processes all assigned shards via shard-level chunk ranges
+                # This is racing-free because shard_start/stop_idx respect exclusive 3D shard boundaries
+                # Use shard-level indices (counting shards as chunks) for task scripts that count by write_chunk
+                print(f"Using batched submission: 1 job processing {len(assigned_shards)} shards via shard indices {shard_start_idx}-{shard_stop_idx}")
+                command += ["--start_idx", str(shard_start_idx)]
+                if shard_stop_idx is not None:
+                    command += ["--stop_idx", str(shard_stop_idx)]
 
-                # Small delay between job submissions to avoid overwhelming the scheduler
-                time.sleep(0.05)
+                subprocess.run(command)
+                print(f"Submitted {job_name}, volume={i}")
+
+                # Small delay between job submissions
+                time.sleep(0.1)
 
     else:
         # Fall back to linear distribution for non-3D or non-sharded cases
