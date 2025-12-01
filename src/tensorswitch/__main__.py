@@ -284,16 +284,20 @@ def get_total_chunks_for_task(args, use_v2_encoding=True):
     print(f"Calculated total chunks: {total_chunks} for task: {args.task}")
     return total_chunks
 
-def parse_and_adjust_shape(shape_str, volume_shape):
+def parse_and_adjust_shape(shape_str, volume_shape, shape_name="shape"):
     """
     Parse a shape string and adjust dimensions to match the volume_shape.
 
     Args:
         shape_str: Comma-separated shape values (e.g., '4096,4096' or '128,128,128')
         volume_shape: Tuple of the actual data dimensions (e.g., (4, 17993, 10274))
+        shape_name: Name of the shape parameter (for error messages)
 
     Returns:
         List of adjusted shape values matching volume_shape dimensions
+
+    Raises:
+        ValueError: If shape dimensions are incompatible with volume dimensions
     """
     if not shape_str or shape_str == "None":
         return None
@@ -303,17 +307,27 @@ def parse_and_adjust_shape(shape_str, volume_shape):
     if not volume_shape:
         return shape
 
-    # Adjust shape to match array dimensions
-    if len(volume_shape) == 4 and len(shape) == 3:
-        shape = [1] + shape  # CZYX
-    elif len(volume_shape) == 4 and len(shape) == 2:
-        shape = [1, 1] + shape  # CZYX with YX shards
-    elif len(volume_shape) == 3 and len(shape) == 2:
-        shape = [1] + shape  # CYX
-    elif len(volume_shape) == 5 and len(shape) == 3:
-        shape = [1, 1] + shape  # TCZYX
-    elif len(volume_shape) == 5 and len(shape) == 2:
-        shape = [1, 1, 1] + shape  # TCZYX with YX shards
+    source_ndim = len(volume_shape)
+    shape_ndim = len(shape)
+
+    # Validate: shape must be compatible with source dimensions
+    # Compatible means: same dims, or fewer dims that can be auto-prepended with 1s
+    if shape_ndim > source_ndim:
+        raise ValueError(
+            f"ERROR: {shape_name} has {shape_ndim} dimensions {shape}, "
+            f"but source data has only {source_ndim} dimensions {volume_shape}. "
+            f"Cannot use higher-dimensional {shape_name} than source data."
+        )
+
+    # Auto-adjust by prepending 1s to match source dimensions
+    # Common patterns:
+    # - 4D source (CZYX) + 3D shape (ZYX) → [1, Z, Y, X]
+    # - 4D source (CZYX) + 2D shape (YX) → [1, 1, Y, X]
+    # - 5D source (TCZYX) + 3D shape (ZYX) → [1, 1, Z, Y, X]
+    if shape_ndim < source_ndim:
+        dims_to_prepend = source_ndim - shape_ndim
+        shape = [1] * dims_to_prepend + shape
+        print(f"Auto-adjusted {shape_name} from {shape_ndim}D to {source_ndim}D: {shape}")
 
     return shape
 
@@ -430,8 +444,8 @@ def submit_job(args, use_v2_encoding=True):
         print(f"Downsample: source shape {source_shape} -> output shape {volume_shape} (factors: {factors})")
 
     # Parse and adjust shard/chunk shapes once (used throughout this function)
-    shard_shape = parse_and_adjust_shape(args.custom_shard_shape, volume_shape)
-    chunk_shape = parse_and_adjust_shape(args.custom_chunk_shape, volume_shape)
+    shard_shape = parse_and_adjust_shape(args.custom_shard_shape, volume_shape, "shard_shape")
+    chunk_shape = parse_and_adjust_shape(args.custom_chunk_shape, volume_shape, "chunk_shape")
 
     # Pre-create all shard directories BEFORE submitting any jobs
     if volume_shape is not None and args.task in ["tiff_to_zarr3_s0", "nd2_to_zarr3_s0", "ims_to_zarr3_s0"]:
@@ -466,8 +480,8 @@ def submit_job(args, use_v2_encoding=True):
             n5_store = None  # Close
 
             # Re-parse shapes now that we have volume_shape from N5
-            shard_shape = parse_and_adjust_shape(args.custom_shard_shape, volume_shape)
-            chunk_shape = parse_and_adjust_shape(args.custom_chunk_shape, volume_shape)
+            shard_shape = parse_and_adjust_shape(args.custom_shard_shape, volume_shape, "shard_shape")
+            chunk_shape = parse_and_adjust_shape(args.custom_chunk_shape, volume_shape, "chunk_shape")
 
             # Extract axes from N5 metadata (same logic as n5_to_zarr3_s0.py)
             axes_order = None
@@ -602,14 +616,15 @@ def submit_job(args, use_v2_encoding=True):
             for i in range(len(volume_shape))
         ]
 
-        print(f"Using 3D shard-based distribution: shard grid {shard_grid}, chunk grid {chunk_grid}")
+        print(f"Using N-D shard-based distribution: shard grid {shard_grid}, chunk grid {chunk_grid}")
 
-        # Generate all 3D shard coordinates (z, y, x order)
-        all_shard_coords = []
-        for z in range(shard_grid[0]):
-            for y in range(shard_grid[1]):
-                for x in range(shard_grid[2]):
-                    all_shard_coords.append([z, y, x])
+        # Generate all N-D shard coordinates dynamically (supports 2D, 3D, 4D, 5D, etc.)
+        # Use itertools.product to iterate over all combinations of shard indices
+        import itertools
+        all_shard_coords = [
+            list(coord) for coord in itertools.product(*[range(dim) for dim in shard_grid])
+        ]
+        print(f"Generated {len(all_shard_coords)} shard coordinates for {len(shard_grid)}D data")
 
         # Distribute shards among workers
         shards_per_worker = len(all_shard_coords) // num_volumes
