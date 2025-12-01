@@ -305,7 +305,7 @@ def submit_dask_job(args, total_chunks):
             if use_3d_shard_distribution and volume_shape:
                 import math
 
-                # Calculate 3D shard grid
+                # Calculate N-D shard grid
                 shard_grid = [
                     (volume_shape[i] + custom_shard_shape[i] - 1) // custom_shard_shape[i]
                     for i in range(len(volume_shape))
@@ -317,20 +317,20 @@ def submit_dask_job(args, total_chunks):
                     for i in range(len(volume_shape))
                 ]
 
-                # Generate all 3D shard coordinates
-                all_shard_coords = []
-                for z in range(shard_grid[0]):
-                    for y in range(shard_grid[1]):
-                        for x in range(shard_grid[2]):
-                            all_shard_coords.append([z, y, x])
+                # Generate all N-D shard coordinates dynamically (supports 2D, 3D, 4D, 5D, etc.)
+                # Use itertools.product to iterate over all combinations of shard indices
+                import itertools
+                all_shard_coords = [
+                    list(coord) for coord in itertools.product(*[range(dim) for dim in shard_grid])
+                ]
 
-                print(f"Using 3D shard-based distribution: {len(all_shard_coords)} shards (grid: {shard_grid})")
+                print(f"Using N-D shard-based distribution: {len(all_shard_coords)} shards (grid: {shard_grid}, {len(shard_grid)}D data)")
                 print(f"Creating {len(all_shard_coords)} shard tasks...")
 
                 # Create tasks per shard (not per chunk)
                 shard_tasks = []
                 for shard_coord in all_shard_coords:
-                    # Calculate all chunk indices within this 3D shard
+                    # Calculate all chunk indices within this N-D shard
                     chunks_per_shard_dim = [
                         custom_shard_shape[j] // custom_chunk_shape[j]
                         for j in range(len(custom_shard_shape))
@@ -342,30 +342,25 @@ def submit_dask_job(args, total_chunks):
                         for j in range(len(shard_coord))
                     ]
 
-                    # Generate all chunk indices within this shard
+                    # Generate all chunk indices within this shard using N-D iteration
                     chunk_indices = []
-                    for dz in range(chunks_per_shard_dim[0]):
-                        for dy in range(chunks_per_shard_dim[1]):
-                            for dx in range(chunks_per_shard_dim[2]):
-                                chunk_coord = [
-                                    base_chunk_coord[0] + dz,
-                                    base_chunk_coord[1] + dy,
-                                    base_chunk_coord[2] + dx
-                                ]
+                    for chunk_offset in itertools.product(*[range(dim) for dim in chunks_per_shard_dim]):
+                        chunk_coord = [
+                            base_chunk_coord[i] + chunk_offset[i]
+                            for i in range(len(base_chunk_coord))
+                        ]
 
-                                # Skip if chunk is outside data bounds
-                                if (chunk_coord[0] >= chunk_grid[0] or
-                                    chunk_coord[1] >= chunk_grid[1] or
-                                    chunk_coord[2] >= chunk_grid[2]):
-                                    continue
+                        # Skip if chunk is outside data bounds
+                        if any(chunk_coord[i] >= chunk_grid[i] for i in range(len(chunk_coord))):
+                            continue
 
-                                # Convert 3D chunk coordinate to linear index
-                                linear_idx = (
-                                    chunk_coord[0] * chunk_grid[1] * chunk_grid[2] +
-                                    chunk_coord[1] * chunk_grid[2] +
-                                    chunk_coord[2]
-                                )
-                                chunk_indices.append(linear_idx)
+                        # Convert N-D chunk coordinate to linear index
+                        linear_idx = 0
+                        stride = 1
+                        for i in range(len(chunk_coord) - 1, -1, -1):
+                            linear_idx += chunk_coord[i] * stride
+                            stride *= chunk_grid[i]
+                        chunk_indices.append(linear_idx)
 
                     shard_task = {
                         'task': args.task,

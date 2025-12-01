@@ -642,7 +642,7 @@ def submit_job(args, use_v2_encoding=True):
             # Calculate chunk ranges for all assigned shards
             chunk_indices = []
             for shard_coord in assigned_shards:
-                # Calculate chunk range within this 3D shard
+                # Calculate chunk range within this N-D shard
                 # Each shard contains: chunks_per_shard_dim[i] chunks in dimension i
                 chunks_per_shard_dim = [
                     shard_shape[j] // chunk_shape[j]
@@ -655,29 +655,24 @@ def submit_job(args, use_v2_encoding=True):
                     for j in range(len(shard_coord))
                 ]
 
-                # Generate all chunk coordinates within this shard
-                for dz in range(chunks_per_shard_dim[0]):
-                    for dy in range(chunks_per_shard_dim[1]):
-                        for dx in range(chunks_per_shard_dim[2]):
-                            chunk_coord = [
-                                base_chunk_coord[0] + dz,
-                                base_chunk_coord[1] + dy,
-                                base_chunk_coord[2] + dx
-                            ]
+                # Generate all chunk coordinates within this shard using N-D iteration
+                for chunk_offset in itertools.product(*[range(dim) for dim in chunks_per_shard_dim]):
+                    chunk_coord = [
+                        base_chunk_coord[i] + chunk_offset[i]
+                        for i in range(len(base_chunk_coord))
+                    ]
 
-                            # Skip if chunk is outside data bounds
-                            if (chunk_coord[0] >= chunk_grid[0] or
-                                chunk_coord[1] >= chunk_grid[1] or
-                                chunk_coord[2] >= chunk_grid[2]):
-                                continue
+                    # Skip if chunk is outside data bounds
+                    if any(chunk_coord[i] >= chunk_grid[i] for i in range(len(chunk_coord))):
+                        continue
 
-                            # Convert 3D chunk coordinate to linear index
-                            linear_idx = (
-                                chunk_coord[0] * chunk_grid[1] * chunk_grid[2] +
-                                chunk_coord[1] * chunk_grid[2] +
-                                chunk_coord[2]
-                            )
-                            chunk_indices.append(linear_idx)
+                    # Convert N-D chunk coordinate to linear index
+                    linear_idx = 0
+                    stride = 1
+                    for i in range(len(chunk_coord) - 1, -1, -1):
+                        linear_idx += chunk_coord[i] * stride
+                        stride *= chunk_grid[i]
+                    chunk_indices.append(linear_idx)
 
             # Calculate shard-level indices for this worker (for batched submission)
             # start_shard_idx and end_shard_idx are already the shard indices we need
