@@ -447,6 +447,56 @@ def submit_job(args, use_v2_encoding=True):
     shard_shape = parse_and_adjust_shape(args.custom_shard_shape, volume_shape, "shard_shape")
     chunk_shape = parse_and_adjust_shape(args.custom_chunk_shape, volume_shape, "chunk_shape")
 
+    # Single-Job Mode: Submit 1 LSF job that will use internal LocalCluster
+    if hasattr(args, 'use_single_job') and args.use_single_job:
+        print("="*80)
+        print("SINGLE-JOB MODE SUBMISSION")
+        print("="*80)
+
+        # Calculate optimal workers
+        if volume_shape and volume_dtype:
+            num_workers = calculate_optimal_workers(volume_shape, volume_dtype, total_chunks)
+        else:
+            num_workers = args.num_volumes if args.num_volumes != 8 else 10
+
+        print(f"Submitting 1 LSF job with {num_workers} cores")
+        print(f"Task: {args.task}")
+        print(f"Total chunks: {total_chunks:,}")
+
+        # Build command to run inside the LSF job
+        command = [
+            "bsub",
+            "-J", f"{args.task}_single",
+            "-n", str(num_workers),  # Reserve N cores
+            "-M", f"{num_workers * args.memory_limit}GB",  # Total memory
+            "-W", args.wall_time,
+            "-P", args.project,
+            "-g", "/scicompsoft/chend/tensorstore",
+            "-o", f"{output_dir}/output__{args.task}_single_%J.log",
+            "-e", f"{output_dir}/error__{args.task}_single_%J.log",
+            sys.executable,
+            "-m", "tensorswitch",
+        ]
+
+        # Add all arguments, plus the internal worker flag
+        string_args = ["task", "base_path", "output_path", "custom_shard_shape", "custom_chunk_shape", "dual_zarr_approach", "anisotropic_factors", "project", "cores", "wall_time", "job_prefix"]
+        int_args = ["level", "downsample", "use_shard", "use_ome_structure", "memory_limit", "use_fortran_order", "num_volumes"]
+
+        for arg in string_args + int_args:
+            value = getattr(args, arg)
+            if value is not None and str(value) != "None":
+                command += ["--"+arg, str(value)]
+
+        # Add the internal worker flag
+        command += ["--use_single_job_worker"]
+
+        subprocess.run(command)
+        print(f"\n✓ Submitted 1 LSF job for Single-Job Mode")
+        print(f"  Cores: {num_workers}")
+        print(f"  Memory: {num_workers * args.memory_limit}GB")
+        print(f"  Log: {output_dir}/output__{args.task}_single_<JOB_ID>.log")
+        return
+
     # Pre-create all shard directories BEFORE submitting any jobs
     if volume_shape is not None and args.task in ["tiff_to_zarr3_s0", "nd2_to_zarr3_s0", "ims_to_zarr3_s0"]:
         precreate_shard_directories(args, volume_shape, use_v2_encoding)
@@ -852,6 +902,8 @@ def main():
     parser.add_argument("--custom_shard_shape", type=str, help="Custom shard shape as comma-separated values (e.g., '128,576,576')")
     parser.add_argument("--custom_chunk_shape", type=str, help="Custom chunk shape as comma-separated values (e.g., '32,32,32')")
     parser.add_argument("--use_dask_jobqueue", action="store_true", help="Use Dask JobQueue instead of direct LSF submission")
+    parser.add_argument("--use_single_job", action="store_true", help="Use Single-Job Mode: submit 1 LSF job with internal LocalCluster (simpler than multi-job)")
+    parser.add_argument("--use_single_job_worker", action="store_true", help="Internal flag: indicates this IS the single-job worker (do not use manually)")
     parser.add_argument("--dual_zarr_approach", type=str, default="none", choices=["v2_chunks", "v3_chunks", "none"], help="Dual zarr v2/v3 compatibility approach: none (default, pure zarr v3), v2_chunks (colocated metadata), or v3_chunks (.zarray in c/ directory)")
     parser.add_argument("--auto_multiscale", action="store_true", help="Automatically generate all multiscale levels until thumbnail-sized (uses Yurii Zubov's anisotropic algorithm)")
     parser.add_argument("--min_array_nbytes", type=int, default=None, help="Stop pyramid when array size < this in bytes (default: chunk_nbytes from metadata)")
@@ -984,6 +1036,16 @@ def main():
                 print(f"       --output_path {args.output_path} \\")
                 print(f"       --auto_multiscale --submit --project {args.project}")
                 return
+
+    # Single-Job Mode: If we're INSIDE the single job, run LocalCluster processing
+    if hasattr(args, 'use_single_job_worker') and args.use_single_job_worker:
+        print("Running as Single-Job Mode worker (internal LocalCluster)")
+        from tensorswitch.dask_utils import process_with_local_cluster
+        success = process_with_local_cluster(args)
+        if not success:
+            print("Single-Job Mode processing failed")
+            sys.exit(1)
+        return
 
     # Regular submission (non-auto_multiscale)
     if args.submit:
