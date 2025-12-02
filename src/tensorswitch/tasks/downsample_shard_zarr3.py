@@ -2,7 +2,7 @@ import tensorstore as ts
 import numpy as np
 import time
 import psutil
-from ..utils import get_chunk_domains, create_output_store, commit_tasks, print_processing_info, downsample_spec, zarr3_store_spec, get_input_driver, get_total_chunks_from_store, calculate_anisotropic_downsample_factors
+from ..utils import get_chunk_domains, create_output_store, commit_tasks, print_processing_info, downsample_spec, zarr3_store_spec, get_input_driver, get_total_chunks_from_store, calculate_anisotropic_downsample_factors, get_tensorstore_context
 import os
 
 def process(base_path, output_path, level, start_idx=0, stop_idx=None, downsample=True, use_shard=True, memory_limit=50, custom_shard_shape=None, custom_chunk_shape=None, anisotropic_factors=None, shard_coord=None, **kwargs):
@@ -21,10 +21,11 @@ def process(base_path, output_path, level, start_idx=0, stop_idx=None, downsampl
         zarr_input_path = os.path.join(base_path, f"s{level - 1}")
 
     input_driver = get_input_driver(zarr_input_path)
-        
+
     zarr_store_spec = {
         'driver': input_driver,
-        'kvstore': {'driver': 'file', 'path': zarr_input_path}
+        'kvstore': {'driver': 'file', 'path': zarr_input_path},
+        'context': get_tensorstore_context()
     }
 
     downsampled_saved_path = output_path
@@ -116,6 +117,7 @@ def process(base_path, output_path, level, start_idx=0, stop_idx=None, downsampl
                 print(f"Using default downsampling with dimension_names: {dimension_names}")
 
         downsample_spec_dict = downsample_spec(zarr_store_spec, zarr_store.shape, dimension_names, custom_factors=anisotropic_factors)
+        downsample_spec_dict['context'] = get_tensorstore_context()
         downsample_store = ts.open(downsample_spec_dict).result()
     else:
         downsample_store = zarr_store
@@ -135,6 +137,9 @@ def process(base_path, output_path, level, start_idx=0, stop_idx=None, downsampl
         use_fortran_order=use_fortran_order,
         axes_order=dimension_names  # Preserve axes from source level
     )
+
+    # Add TensorStore context to limit concurrency to LSF allocation
+    downsampled_saved_spec['context'] = get_tensorstore_context()
 
     # Create basic output directory structure
     output_array_path = f"{downsampled_saved_path}/s{level}"

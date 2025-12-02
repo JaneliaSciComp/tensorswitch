@@ -3,7 +3,8 @@ from ..utils import (load_ims_stack, zarr3_store_spec, get_chunk_domains, commit
                     get_total_chunks_from_store, extract_ims_metadata,
                     convert_ims_to_zarr3_metadata, write_zarr3_group_metadata,
                     write_dual_zarr_metadata, detect_anisotropic_voxels,
-                    update_zarr_metadata_from_source, precreate_shard_directories_inline)
+                    update_zarr_metadata_from_source, precreate_shard_directories_inline,
+                    get_tensorstore_context)
 import tensorstore as ts
 import numpy as np
 import psutil
@@ -71,6 +72,9 @@ def process(base_path, output_path, use_shard=False, memory_limit=50, start_idx=
         use_fortran_order=use_fortran_order
     )
 
+    # Add TensorStore context to limit concurrency to LSF allocation
+    store_spec['context'] = get_tensorstore_context()
+
     store = ts.open(store_spec, create=True, open=True, delete_existing=False).result()
 
     # Pre-create shard directories if using sharded format (safety fallback)
@@ -88,29 +92,22 @@ def process(base_path, output_path, use_shard=False, memory_limit=50, start_idx=
 
     tasks = []
     ntasks = 0
-    txn = ts.Transaction()
 
     try:
         for domain in chunk_domains:
             # Handle both 3D and 4D arrays dynamically
             slices = tuple(slice(min, max) for (min,max) in zip(domain.inclusive_min, domain.exclusive_max))
             slice_data = volume[slices]
-            task = store[domain].with_transaction(txn).write(slice_data.compute())
+            # Create transaction per chunk to prevent loading all data simultaneously
+            with ts.Transaction() as txn:
+                task = store[domain].with_transaction(txn).write(slice_data.compute(scheduler='synchronous'))
 
             tasks.append(task)
             ntasks += 1
 
-            txn = commit_tasks(tasks, txn, memory_limit=memory_limit)
-        
-            if ntasks % 512 == 0:
-                chunk_idx = range(start_idx, stop_idx or total_chunks)[ntasks-1] if ntasks > 0 else start_idx
-                print(f"Queued {ntasks} chunk writes up to {chunk_idx}...", flush=True)
-        
         for task in tasks:
             task.result()
-        
-        txn.commit_sync()
-        
+
     finally:
         # Ensure h5py file is properly closed
         if h5_file:

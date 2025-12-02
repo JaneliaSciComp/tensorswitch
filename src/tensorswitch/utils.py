@@ -17,6 +17,32 @@ from ome_types import from_xml
 import xml.etree.ElementTree as ET
 import re
 
+def get_tensorstore_context(num_cores=None):
+    """
+    Create TensorStore context with concurrency limits based on LSF allocation.
+
+    This prevents TensorStore from using all available cores on the node,
+    which can cause jobs to exceed their LSF memory/CPU limits.
+
+    Args:
+        num_cores: Number of cores to limit concurrency to.
+                   If None, reads from LSB_DJOB_NUMPROC environment variable.
+                   Defaults to 1 if env var not set.
+
+    Returns:
+        dict: TensorStore context configuration with data_copy_concurrency
+              and file_io_concurrency limits set to num_cores
+    """
+    if num_cores is None:
+        num_cores = int(os.getenv("LSB_DJOB_NUMPROC", 1))
+
+    context = {
+        "data_copy_concurrency": {"limit": num_cores},
+        "file_io_concurrency": {"limit": num_cores}
+    }
+
+    return context
+
 def get_kvstore_spec(path):
     """
     Get kvstore specification for TensorStore, supporting HTTP, GCS, S3, and local file paths.
