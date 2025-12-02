@@ -6,7 +6,7 @@ import numpy as np
 from ..utils import (get_chunk_domains, n5_store_spec, zarr3_store_spec,
                     create_output_store, commit_tasks, get_total_chunks_from_store,
                     fetch_remote_json, create_zarr3_ome_metadata, write_zarr3_group_metadata,
-                    write_dual_zarr_metadata, detect_anisotropic_voxels)
+                    write_dual_zarr_metadata, detect_anisotropic_voxels, get_tensorstore_context)
 
 def convert(base_path, output_path, level=0, start_idx=0, stop_idx=None,
            memory_limit=50, use_shard=True, use_ome_structure=True,
@@ -20,12 +20,8 @@ def convert(base_path, output_path, level=0, start_idx=0, stop_idx=None,
 
     os.umask(0o0002)
 
-    # Get LSF cores for concurrency
-    num_cores = int(os.getenv("LSB_DJOB_NUMPROC", 1))
-    context = {
-        "data_copy_concurrency": {"limit": num_cores},
-        "file_io_concurrency": {"limit": num_cores}
-    }
+    # Get TensorStore context to limit concurrency to LSF allocation
+    context = get_tensorstore_context()
 
     # Open N5 source
     n5_input_spec = n5_store_spec(base_path)
