@@ -744,28 +744,35 @@ def process_with_local_cluster(args):
 def run_task_on_worker(worker_args):
     """
     Run task.process() on a Dask worker.
-    
+
     This function is executed on each worker and calls the existing
     task-specific process() function (reuses existing code).
-    
+
     Args:
         worker_args: Dictionary with task parameters
-    
+
     Returns:
         True if successful, False otherwise
     """
     import sys
     import os
-    
+    import dask
+
+    # CRITICAL FIX: Use synchronous scheduler for Dask operations within workers
+    # This prevents conflicts with LocalCluster's distributed scheduler
+    # Workers load data using Dask arrays (load_tiff_stack, etc.) which would
+    # otherwise try to serialize between schedulers, causing TypeError
+    dask.config.set(scheduler='synchronous')
+
     # Add tensorswitch to path (in case worker doesn't have it)
     tensorswitch_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if tensorswitch_path not in sys.path:
         sys.path.insert(0, tensorswitch_path)
-    
+
     task = worker_args['task']
     start_idx = worker_args['start_idx']
     stop_idx = worker_args['stop_idx']
-    
+
     print(f"Worker starting: task={task}, chunks={start_idx}-{stop_idx}, PID={os.getpid()}")
     
     try:
