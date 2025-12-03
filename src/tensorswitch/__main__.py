@@ -331,7 +331,45 @@ def parse_and_adjust_shape(shape_str, volume_shape, shape_name="shape"):
 
     return shape
 
-def calculate_optimal_workers(volume_shape, dtype, total_shards):
+def calculate_shards_per_worker_from_dimensions(shard_grid, min_threshold=5):
+    """
+    Calculate optimal shards per worker based on dimensional analysis.
+
+    Strategy: Use the smallest significant spatial dimension as the quantum.
+    This ensures we don't overload workers while respecting data structure.
+
+    Args:
+        shard_grid: List of shard counts per dimension, e.g., [3, 2, 31, 18] (CZYX)
+        min_threshold: Minimum shard count to consider a dimension "significant"
+
+    Returns:
+        Recommended shards per worker (int)
+
+    Examples:
+        [3, 2, 31, 18] → 18 (X dimension, smallest significant spatial dim)
+        [60, 100] → 60 (Y dimension for 2D slides)
+        [4, 17993, 10274] → 17993 (3D, use larger dim)
+        [1, 1196, 31, 18] → 18 (4D CZYX, skip C/Z, use smallest of Y/X)
+
+    Rationale:
+        - Small dims (C, T, thin Z) < threshold: Skip (not spatial workload)
+        - Pick smallest significant dim: Prevents overloading (fewer shards/worker)
+        - Respects data structure: Follows natural dimensional boundaries
+    """
+    # Filter out small dimensions (likely C, T, or very thin slices)
+    significant_dims = [dim for dim in shard_grid if dim > min_threshold]
+
+    if significant_dims:
+        # Use the SMALLEST significant dimension as the quantum
+        # This prevents overloading workers (fewer shards per worker)
+        shards_per_worker = min(significant_dims)
+    else:
+        # Fallback: no significant dimensions, use the largest available
+        shards_per_worker = max(shard_grid)
+
+    return shards_per_worker
+
+def calculate_optimal_workers(volume_shape, dtype, total_shards, shard_grid=None):
     """
     Calculate optimal worker count based on dataset size AND shard count.
 
@@ -343,6 +381,8 @@ def calculate_optimal_workers(volume_shape, dtype, total_shards):
         volume_shape: Tuple of data dimensions, e.g., (4, 17993, 10274)
         dtype: numpy dtype or dtype string (e.g., 'uint16', np.uint16)
         total_shards: Number of 3D shards
+        shard_grid: Optional list of shard counts per dimension (e.g., [3, 2, 31, 18])
+                    If provided, uses dimensional analysis for optimal distribution
 
     Returns:
         Optimal number of workers (int)
@@ -350,9 +390,10 @@ def calculate_optimal_workers(volume_shape, dtype, total_shards):
     Examples:
         Lavis Brain: 1.6 GB, 60 shards → 1 worker (small dataset)
         Medium dataset: 20 GB → 4 workers
-        Ahrens: 3,620 GB, 1000+ shards → 40 workers (huge dataset)
+        Ahrens: 3,620 GB, 1000+ shards, shard_grid=[3,2,31,18] → 186 workers (dimensional analysis)
     """
     import numpy as np
+    import math
 
     # Calculate dataset size in GB
     num_elements = np.prod(volume_shape)
@@ -365,7 +406,21 @@ def calculate_optimal_workers(volume_shape, dtype, total_shards):
 
     dataset_size_gb = (num_elements * dtype_bytes) / (1024**3)
 
-    # Smart scaling based on dataset size
+    # NEW: Use dimensional analysis if shard_grid provided
+    if shard_grid:
+        shards_per_worker = calculate_shards_per_worker_from_dimensions(shard_grid)
+        optimal_workers = math.ceil(total_shards / shards_per_worker)
+
+        # Cap at reasonable limits (max 500 workers to avoid overwhelming cluster)
+        optimal_workers = max(1, min(optimal_workers, 500))
+
+        print(f"Dataset size: {dataset_size_gb:.2f} GB")
+        print(f"Dimensional analysis: shard_grid={shard_grid}, smallest significant dim={shards_per_worker} shards")
+        print(f"Calculated workers: {optimal_workers} for {total_shards} shards (~{total_shards/optimal_workers:.1f} shards/worker)")
+
+        return optimal_workers
+
+    # FALLBACK: Smart scaling based on dataset size (when shard_grid not provided)
     if dataset_size_gb < 5:
         # Small datasets (<5 GB): 1 worker
         # Examples: Lavis datasets (1.6 GB, 1.9 GB) - single job is sufficient
@@ -394,6 +449,119 @@ def calculate_optimal_workers(volume_shape, dtype, total_shards):
     print(f"Smart worker calculation: {optimal_workers} workers for {total_shards} shards (~{total_shards/optimal_workers:.1f} shards/worker)")
 
     return optimal_workers
+
+def calculate_memory_per_job(volume_shape, dtype, shard_shape, shards_per_job, task_type="tiff_to_zarr3_s0"):
+    """
+    Calculate optimal memory per LSF job based on dataset size and shard count.
+
+    Formula: Base (file loading) + Shard buffers + Task overhead + 30% margin
+    """
+    import numpy as np
+
+    # Dataset size
+    num_elements = np.prod(volume_shape)
+    if isinstance(dtype, str):
+        dtype_bytes = np.dtype(dtype).itemsize
+    else:
+        dtype_bytes = dtype.itemsize
+    dataset_size_gb = (num_elements * dtype_bytes) / (1024**3)
+
+    # Shard size
+    shard_elements = np.prod(shard_shape)
+    shard_size_gb = (shard_elements * dtype_bytes) / (1024**3)
+
+    # Base memory for file loading (0.5-2% of dataset, capped at 20 GB)
+    if dataset_size_gb < 10:
+        base_mem = 2
+    elif dataset_size_gb < 100:
+        base_mem = min(dataset_size_gb * 0.02, 10)
+    else:
+        base_mem = min(dataset_size_gb * 0.005, 20)
+
+    # Shard processing buffers (process up to 3 shards concurrently)
+    concurrent_shards = min(shards_per_job, 3)
+    per_shard_buffer = shard_size_gb * 2.0  # 2x for read + write + compression
+    shard_buffer_mem = per_shard_buffer * concurrent_shards
+
+    # Task-specific overhead
+    if task_type in ["tiff_to_zarr3_s0", "nd2_to_zarr3_s0", "ims_to_zarr3_s0"]:
+        task_overhead = 2
+    elif task_type == "downsample_shard_zarr3":
+        task_overhead = 3
+    else:
+        task_overhead = 1
+
+    # Total with 30% safety margin, rounded to nearest 5 GB
+    total_mem = base_mem + shard_buffer_mem + task_overhead
+    recommended_mem = int(np.ceil(total_mem * 1.3 / 5) * 5)
+    recommended_mem = max(5, min(recommended_mem, 500))  # Min 5 GB, max 500 GB
+
+    print(f"Memory calculation for {shards_per_job} shards:")
+    print(f"  Dataset: {dataset_size_gb:.1f} GB, Shard: {shard_size_gb:.2f} GB each")
+    print(f"  Base: {base_mem:.1f} GB, Buffers: {shard_buffer_mem:.1f} GB, Overhead: {task_overhead} GB")
+    print(f"  Recommended (with 30% margin): {recommended_mem} GB")
+
+    return recommended_mem
+
+def calculate_wall_time(volume_shape, dtype, shard_shape, shards_per_job, task_type="tiff_to_zarr3_s0"):
+    """
+    Calculate optimal wall time per LSF job based on dataset size and shard count.
+
+    Formula: Base time per shard × number of shards × 2 (safety factor)
+    """
+    import numpy as np
+
+    # Dataset and shard sizes
+    num_elements = np.prod(volume_shape)
+    if isinstance(dtype, str):
+        dtype_bytes = np.dtype(dtype).itemsize
+    else:
+        dtype_bytes = dtype.itemsize
+    dataset_size_gb = (num_elements * dtype_bytes) / (1024**3)
+
+    shard_elements = np.prod(shard_shape)
+    shard_size_gb = (shard_elements * dtype_bytes) / (1024**3)
+
+    # Time estimation based on empirical observations:
+    # - Small shards (< 0.1 GB): ~0.5 min each
+    # - Medium shards (0.1-1 GB): ~1-2 min each
+    # - Large shards (> 1 GB): ~2-4 min each
+    # - Very large datasets add overhead for file loading
+
+    if shard_size_gb < 0.1:
+        minutes_per_shard = 0.5
+    elif shard_size_gb < 1.0:
+        minutes_per_shard = 2
+    else:
+        minutes_per_shard = 3
+
+    # Base time for this job
+    base_minutes = minutes_per_shard * shards_per_job
+
+    # Add overhead for large datasets (file loading, metadata)
+    if dataset_size_gb > 1000:
+        overhead_minutes = 10
+    elif dataset_size_gb > 100:
+        overhead_minutes = 5
+    else:
+        overhead_minutes = 2
+
+    total_minutes = base_minutes + overhead_minutes
+
+    # Apply 2x safety factor as requested
+    safe_minutes = total_minutes * 2
+
+    # Round up to nearest 30 minutes
+    safe_minutes = int(np.ceil(safe_minutes / 30) * 30)
+
+    # Convert to hours:minutes format, max 4 hours for short queue
+    hours = min(safe_minutes // 60, 4)
+    minutes = safe_minutes % 60
+    wall_time = f"{hours}:{minutes:02d}"
+
+    print(f"Wall time calculation: {shards_per_job} shards × {minutes_per_shard:.1f} min + {overhead_minutes} min overhead × 2 safety = {wall_time}")
+
+    return wall_time
 
 def submit_job(args, use_v2_encoding=True):
     """Handles LSF cluster job submission for different tasks."""
@@ -598,6 +766,7 @@ def submit_job(args, use_v2_encoding=True):
     # Calculate chunks per shard for shard-aligned distribution
     chunks_per_shard = 1  # Default: no sharding
     total_3d_shards = None  # Will be calculated if using 3D sharding
+    shard_grid_for_workers = None  # Will be calculated for dimensional analysis
 
     # Note: n5_to_zarr3_s0 already processes by shard domains (write_chunk), not inner chunks
     # So skip shard-aligned calculation to avoid double-counting (598 shards != 598/32768 shards)
@@ -616,7 +785,13 @@ def submit_job(args, use_v2_encoding=True):
                 (volume_shape[i] + shard_shape[i] - 1) // shard_shape[i]
                 for i in range(len(volume_shape))
             ])
+            # Also calculate shard grid for dimensional analysis
+            shard_grid_for_workers = [
+                (volume_shape[i] + shard_shape[i] - 1) // shard_shape[i]
+                for i in range(len(volume_shape))
+            ]
             print(f"3D shard count: {total_3d_shards} (from output shape {volume_shape})")
+            print(f"Shard grid: {shard_grid_for_workers}")
 
     # Calculate total shards
     # Use 3D shard count if available (more accurate for spatial distribution)
@@ -630,8 +805,8 @@ def submit_job(args, use_v2_encoding=True):
     if args.num_volumes == 8:  # User didn't specify (using default)
         # Use smart worker calculation based on dataset size
         if volume_shape and volume_dtype:
-            # NEW: Smart calculation considering dataset size
-            num_volumes = calculate_optimal_workers(volume_shape, volume_dtype, total_shards)
+            # NEW: Smart calculation considering dataset size and dimensional analysis
+            num_volumes = calculate_optimal_workers(volume_shape, volume_dtype, total_shards, shard_grid=shard_grid_for_workers)
         else:
             # FALLBACK: Old shard-based calculation when size unknown
             print("WARNING: Dataset size unknown, using shard-based worker calculation")
@@ -740,6 +915,36 @@ def submit_job(args, use_v2_encoding=True):
             shard_desc = f"{len(assigned_shards)} shard(s): {assigned_shards[0]}" + (f"...{assigned_shards[-1]}" if len(assigned_shards) > 1 else "")
             print(f"vol{i}: {shard_desc}")
 
+            # Auto-calculate memory per job (or use user override if specified)
+            if hasattr(args, 'memory_limit') and args.memory_limit != 50:  # 50 is default
+                memory_gb = args.memory_limit
+                print(f"Using user-specified memory override: {memory_gb} GB")
+            else:
+                memory_gb = calculate_memory_per_job(
+                    volume_shape=volume_shape,
+                    dtype=volume_dtype,
+                    shard_shape=shard_shape,
+                    shards_per_job=len(assigned_shards),
+                    task_type=args.task
+                )
+
+            # Auto-calculate wall time (or use user override)
+            if args.wall_time != "1:00":  # Not default
+                wall_time = args.wall_time
+                print(f"Using user-specified wall time: {wall_time}")
+            else:
+                wall_time = calculate_wall_time(
+                    volume_shape=volume_shape,
+                    dtype=volume_dtype,
+                    shard_shape=shard_shape,
+                    shards_per_job=len(assigned_shards),
+                    task_type=args.task
+                )
+
+            # Calculate required number of slots based on memory
+            # Local queue: 15 GB per slot (e.g., -n 2 → 30 GB, -n 3 → 45 GB)*2 for safety
+            cores_needed = max(1, int(np.ceil(memory_gb / 15))*2)
+
             # Extract setup number from base_path if any
             # Build job name with optional prefix
             prefix = f"{args.job_prefix}_" if args.job_prefix else ""
@@ -754,8 +959,10 @@ def submit_job(args, use_v2_encoding=True):
             command = [
                 "bsub",
                 "-J", job_name,
-                "-n", args.cores,
-                "-W", args.wall_time,
+                "-n", str(cores_needed),
+                "-W", wall_time,
+                "-M", f"{memory_gb}GB",
+                "-R", f"rusage[mem={memory_gb * 1024 * 1024 * 1024}]",
                 "-P", args.project,
                 "-g", "/scicompsoft/chend/tensorstore",
                 "-o", f"{output_dir}/output__{job_name}_%J.log",
@@ -765,8 +972,9 @@ def submit_job(args, use_v2_encoding=True):
             ]
 
             string_args = ["task", "base_path", "output_path", "custom_shard_shape", "custom_chunk_shape", "dual_zarr_approach", "anisotropic_factors"]
-            int_args = ["level", "downsample", "use_shard", "use_ome_structure", "memory_limit", "use_fortran_order"]
+            int_args = ["level", "downsample", "use_shard", "use_ome_structure", "use_fortran_order"]
             boolean_flags = ["use_dask_jobqueue"]
+            # Note: memory_limit removed - now auto-calculated per job
 
             # Add string and integer arguments
             for arg in string_args + int_args:
@@ -829,6 +1037,43 @@ def submit_job(args, use_v2_encoding=True):
 
             print(f"vol{i}: shards {start_shard}–{stop_shard} → chunks {start_idx}–{stop_idx}")
 
+            # Auto-calculate memory (fallback: estimate shards per job)
+            shards_this_job = stop_shard - start_shard
+            if hasattr(args, 'memory_limit') and args.memory_limit != 50:
+                memory_gb = args.memory_limit
+                print(f"Using user-specified memory override: {memory_gb} GB")
+            elif volume_shape and volume_dtype and shard_shape:
+                memory_gb = calculate_memory_per_job(
+                    volume_shape=volume_shape,
+                    dtype=volume_dtype,
+                    shard_shape=shard_shape,
+                    shards_per_job=shards_this_job,
+                    task_type=args.task
+                )
+            else:
+                memory_gb = 30  # Default fallback
+                print(f"Using default memory: {memory_gb} GB")
+
+            # Auto-calculate wall time
+            if args.wall_time != "1:00":  # Not default
+                wall_time = args.wall_time
+                print(f"Using user-specified wall time: {wall_time}")
+            elif volume_shape and volume_dtype and shard_shape:
+                wall_time = calculate_wall_time(
+                    volume_shape=volume_shape,
+                    dtype=volume_dtype,
+                    shard_shape=shard_shape,
+                    shards_per_job=shards_this_job,
+                    task_type=args.task
+                )
+            else:
+                wall_time = "2:00"  # Default fallback with 2x safety
+                print(f"Using default wall time: {wall_time}")
+
+            # Calculate required number of slots based on memory
+            # Local queue: 15 GB per slot (e.g., -n 2 → 30 GB, -n 3 → 45 GB)*2 for safety
+            cores_needed = max(1, int(np.ceil(memory_gb / 15))*2)
+
             # Extract setup number from base_path if any
             # Build job name with optional prefix
             prefix = f"{args.job_prefix}_" if args.job_prefix else ""
@@ -842,8 +1087,10 @@ def submit_job(args, use_v2_encoding=True):
             command = [
                 "bsub",
                 "-J", job_name,
-                "-n", args.cores,
-                "-W", args.wall_time,
+                "-n", str(cores_needed),
+                "-W", wall_time,
+                "-M", f"{memory_gb}GB",
+                "-R", f"rusage[mem={memory_gb * 1024 * 1024 * 1024}]",
                 "-P", args.project,
                 "-g", "/scicompsoft/chend/tensorstore",
                 "-o", f"{output_dir}/output__{job_name}_%J.log",
@@ -853,8 +1100,9 @@ def submit_job(args, use_v2_encoding=True):
             ]
 
             string_args = ["task", "base_path", "output_path", "custom_shard_shape", "custom_chunk_shape", "dual_zarr_approach", "anisotropic_factors"]
-            int_args = ["level", "downsample", "use_shard", "use_ome_structure", "memory_limit", "use_fortran_order"]
+            int_args = ["level", "downsample", "use_shard", "use_ome_structure", "use_fortran_order"]
             boolean_flags = ["use_dask_jobqueue"]
+            # Note: memory_limit removed - now auto-calculated per job
 
             # Add string and integer arguments
             for arg in string_args + int_args:
@@ -894,7 +1142,7 @@ def main():
     parser.add_argument("--use_ome_structure", type=int, default=1, choices=[0, 1], help="Use OME-ZARR multiscale structure (s0 subdirectory)")
     parser.add_argument("--use_fortran_order", type=int, default=0, choices=[0, 1], help="Use Fortran (F) order instead of C order (adds transpose codec)")
     parser.add_argument("--submit", action="store_true", help="Submit to the cluster scheduler")
-    parser.add_argument("--memory_limit", type=int, default=50, help="memory limit percentage" )
+    parser.add_argument("--memory_limit", type=int, default=50, help="Memory in GB (optional - auto-calculated if not specified)")
     parser.add_argument("--project", default="None", help="Project to charge")
     parser.add_argument("--cores", type=str, default="2", help="Number of cores for LSF job (-n flag)")
     parser.add_argument("--wall_time", type=str, default="1:00", help="Wall time for LSF job (-W flag)")
