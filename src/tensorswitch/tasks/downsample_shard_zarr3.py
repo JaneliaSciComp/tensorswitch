@@ -265,16 +265,20 @@ def process(base_path, output_path, level, start_idx=0, stop_idx=None, downsampl
     print_processing_info(level, start_idx, stop_idx, total_chunks)
 
     tasks = []
-    txn = ts.Transaction()
     # Use linear_indices_to_process from shard_coord if available, otherwise use range
     if linear_indices_to_process is None:
         linear_indices_to_process = range(start_idx, stop_idx)
-    # Use downsampled_saved (output) for chunk domains since we're writing to it
-    for chunk_domain in get_chunk_domains(chunk_shape, downsampled_saved, linear_indices_to_process=linear_indices_to_process):
-        task = downsampled_saved[chunk_domain].with_transaction(txn).write(downsample_store[chunk_domain])
-        tasks.append(task)
-        txn = commit_tasks(tasks, txn, memory_limit)
 
-    if txn.open:
-        txn.commit_sync()
+    # Use downsampled_saved (output) for chunk domains since we're writing to it
+    # Process with transaction-per-chunk pattern (Mark's fix) to prevent OOM
+    for chunk_domain in get_chunk_domains(chunk_shape, downsampled_saved, linear_indices_to_process=linear_indices_to_process):
+        # Create transaction per chunk to prevent loading all data simultaneously
+        with ts.Transaction() as txn:
+            task = downsampled_saved[chunk_domain].with_transaction(txn).write(downsample_store[chunk_domain])
+        tasks.append(task)
+
+    # Wait for all tasks to complete
+    for task in tasks:
+        task.result()
+
     print(f"Downsampling complete for level {level}, chunks {start_idx} to {stop_idx}")
