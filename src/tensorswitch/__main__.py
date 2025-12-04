@@ -21,7 +21,6 @@ from .utils import (get_total_chunks, downsample_spec, zarr3_store_spec, get_chu
 from .tasks import (downsample_shard_zarr3, n5_to_n5, n5_to_zarr2, n5_to_zarr3_s0, tiff_to_zarr3_s0,
                     nd2_to_zarr3_s0, ims_to_zarr3_s0, nd2_to_zarr2_s0, ims_to_zarr2_s0,
                     tiff_to_zarr2_s0, downsample_zarr2, precomputed_to_n5)
-from .dask_utils import submit_dask_job, submit_dask_wrapper_job
 
 # Set umask to allow group write access
 os.umask(0o0002)
@@ -755,13 +754,8 @@ def submit_job(args, use_v2_encoding=True):
                 axes_order=axes_order
             )
 
-    # Check if using Dask JobQueue
-    if hasattr(args, 'use_dask_jobqueue') and args.use_dask_jobqueue:
-        print("Using Dask JobQueue submission")
-        return submit_dask_wrapper_job(args, total_chunks)
-
-    # Traditional LSF bsub method
-    print("Using traditional LSF bsub submission")
+    # LSF bsub submission (multi-job mode)
+    print("Using LSF multi-job submission")
 
     # Calculate chunks per shard for shard-aligned distribution
     chunks_per_shard = 1  # Default: no sharding
@@ -973,7 +967,6 @@ def submit_job(args, use_v2_encoding=True):
 
             string_args = ["task", "base_path", "output_path", "custom_shard_shape", "custom_chunk_shape", "dual_zarr_approach", "anisotropic_factors"]
             int_args = ["level", "downsample", "use_shard", "use_ome_structure", "use_fortran_order"]
-            boolean_flags = ["use_dask_jobqueue"]
             # Note: memory_limit removed - now auto-calculated per job
 
             # Add string and integer arguments
@@ -981,11 +974,6 @@ def submit_job(args, use_v2_encoding=True):
                 value = getattr(args, arg)
                 if value is not None and str(value) != "None":
                     command += ["--"+arg, str(value)]
-
-            # Add boolean flags (only if True)
-            for arg in boolean_flags:
-                if getattr(args, arg, False):
-                    command += ["--"+arg]
 
             # Choose submission strategy based on task type and shard count
             # Strategy 1: Per-shard submission (1 job per shard) - for large downsample jobs
@@ -1101,7 +1089,6 @@ def submit_job(args, use_v2_encoding=True):
 
             string_args = ["task", "base_path", "output_path", "custom_shard_shape", "custom_chunk_shape", "dual_zarr_approach", "anisotropic_factors"]
             int_args = ["level", "downsample", "use_shard", "use_ome_structure", "use_fortran_order"]
-            boolean_flags = ["use_dask_jobqueue"]
             # Note: memory_limit removed - now auto-calculated per job
 
             # Add string and integer arguments
@@ -1109,11 +1096,6 @@ def submit_job(args, use_v2_encoding=True):
                 value = getattr(args, arg)
                 if value is not None and str(value) != "None":
                     command += ["--"+arg, str(value)]
-
-            # Add boolean flags (only if True)
-            for arg in boolean_flags:
-                if getattr(args, arg, False):
-                    command += ["--"+arg]
 
             command += ["--start_idx", str(start_idx)]
             if stop_idx is not None:
@@ -1149,7 +1131,6 @@ def main():
     parser.add_argument("--job_prefix", type=str, default="", help="Prefix for job names (e.g., 'ahrens_', 'lavis_brain_')")
     parser.add_argument("--custom_shard_shape", type=str, help="Custom shard shape as comma-separated values (e.g., '128,576,576')")
     parser.add_argument("--custom_chunk_shape", type=str, help="Custom chunk shape as comma-separated values (e.g., '32,32,32')")
-    parser.add_argument("--use_dask_jobqueue", action="store_true", help="Use Dask JobQueue instead of direct LSF submission")
     parser.add_argument("--use_single_job", action="store_true", help="Use Single-Job Mode: submit 1 LSF job with internal LocalCluster (simpler than multi-job)")
     parser.add_argument("--use_single_job_worker", action="store_true", help="Internal flag: indicates this IS the single-job worker (do not use manually)")
     parser.add_argument("--dual_zarr_approach", type=str, default="none", choices=["v2_chunks", "v3_chunks", "none"], help="Dual zarr v2/v3 compatibility approach: none (default, pure zarr v3), v2_chunks (colocated metadata), or v3_chunks (.zarray in c/ directory)")
@@ -1302,17 +1283,6 @@ def main():
         submit_job(args, use_v2_encoding)
 
     else:
-        if hasattr(args, 'use_dask_jobqueue') and args.use_dask_jobqueue:
-            print("Using Dask JobQueue submission")
-            total_chunks = get_total_chunks_for_task(args, use_v2_encoding)
-            success = submit_dask_wrapper_job(args, total_chunks)
-            if not success:
-                print("Dask wrapper job submission failed")
-                return
-            else:
-                print("Dask wrapper job submitted successfully")
-                return
-
         if args.task == "n5_to_n5":
             n5_to_n5.convert(args.base_path, args.output_path, args.num_volumes, args.level, args.start_idx, args.stop_idx, args.memory_limit, custom_chunk_shape)
         elif args.task == "n5_to_zarr2":
