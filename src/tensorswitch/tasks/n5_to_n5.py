@@ -2,7 +2,7 @@ import tensorstore as ts
 import os
 import time
 import psutil
-from ..utils import get_chunk_domains, n5_store_spec, create_output_store, commit_tasks, print_processing_info, fetch_http_json, fetch_remote_json, get_total_chunks_from_store
+from ..utils import get_chunk_domains, n5_store_spec, create_output_store, commit_tasks, print_processing_info, fetch_http_json, fetch_remote_json, get_total_chunks_from_store, get_tensorstore_context
 
 def convert(base_path, output_path, number, level, start_idx=0, stop_idx=None, memory_limit=50, custom_chunk_shape=None, **kwargs):
     """Convert N5 to N5 format with optional custom chunk shape."""
@@ -15,13 +15,8 @@ def convert(base_path, output_path, number, level, start_idx=0, stop_idx=None, m
     #attr_url = f"{n5_level_path}/attributes.json"
     #attr_data = fetch_http_json(attr_url)
 
-    # Get number of cores from LSF environment and set concurrency limits
-    num_cores = int(os.getenv("LSB_DJOB_NUMPROC", 1))
-    print(f"Setting tensorstore concurrency limits to {num_cores} cores")
-    context = {
-        "data_copy_concurrency": {"limit": num_cores},
-        "file_io_concurrency": {"limit": num_cores}
-    }
+    # Add TensorStore context to limit concurrency to LSF allocation
+    context = get_tensorstore_context()
 
     # Open source store with context
     n5_input_spec = n5_store_spec(n5_level_path)
@@ -116,8 +111,8 @@ def convert(base_path, output_path, number, level, start_idx=0, stop_idx=None, m
 
     print_processing_info(level, start_idx, stop_idx, total_chunks)
 
+    # Process chunks with transaction-per-chunk pattern (Mark's fix)
     tasks = []
-    txn = ts.Transaction()
     linear_indices_to_process = range(start_idx, stop_idx)
     for idx, chunk_domain in enumerate(get_chunk_domains(chunk_shape, n5_output_store, linear_indices_to_process=linear_indices_to_process), start=start_idx):
         try:
@@ -125,18 +120,17 @@ def convert(base_path, output_path, number, level, start_idx=0, stop_idx=None, m
         except Exception as e:
             print(f"[WARNING] Skipping corrupted chunk index {idx} at {chunk_domain}: {e}")
             continue
-    
-        task = n5_output_store[chunk_domain].with_transaction(txn).write(array)
+
+        # Create transaction per chunk to prevent loading all data simultaneously
+        with ts.Transaction() as txn:
+            task = n5_output_store[chunk_domain].with_transaction(txn).write(array)
         tasks.append(task)
-        txn = commit_tasks(tasks, txn, memory_limit)
         print(f"Writing chunk index {idx}: {chunk_domain}, array shape: {array.shape}")
 
+    # Wait for all tasks to complete
+    for task in tasks:
+        task.result()
 
-    if txn.open:
-        print("Committing final transaction...")
-        txn.commit_sync()
-        print("Transaction committed.")
-        
     print(f"Conversion complete for {n5_level_path} to {n5_output_path}")
 
 

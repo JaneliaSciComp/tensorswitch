@@ -2,7 +2,7 @@ import tensorstore as ts
 import numpy as np
 import time
 import psutil
-from ..utils import get_chunk_domains, commit_tasks, downsample_spec, zarr2_store_spec, get_input_driver, get_total_chunks_from_store, update_ome_multiscale_metadata_zarr2
+from ..utils import get_chunk_domains, commit_tasks, downsample_spec, zarr2_store_spec, get_input_driver, get_total_chunks_from_store, update_ome_multiscale_metadata_zarr2, get_tensorstore_context
 import os
 import json
 
@@ -43,6 +43,8 @@ def process(base_path, output_path, level, start_idx=0, stop_idx=None, downsampl
     print(f"Reading from: {zarr_input_path} (format: {input_driver})")
     print(f"Writing to: {downsampled_saved_path}")
 
+    # Add TensorStore context to limit concurrency to LSF allocation
+    zarr_store_spec['context'] = get_tensorstore_context()
     zarr_store = ts.open(zarr_store_spec).result()
 
     # Apply downsampling if requested and level > 0
@@ -70,6 +72,7 @@ def process(base_path, output_path, level, start_idx=0, stop_idx=None, downsampl
             print(f"Downsampling zarr2 with dimension_names: {dimension_names}")
 
         downsample_spec_dict = downsample_spec(zarr_store_spec, zarr_store.shape, dimension_names, custom_factors=anisotropic_factors)
+        downsample_spec_dict['context'] = get_tensorstore_context()
         downsample_store = ts.open(downsample_spec_dict).result()
     else:
         downsample_store = zarr_store
@@ -120,6 +123,9 @@ def process(base_path, output_path, level, start_idx=0, stop_idx=None, downsampl
     
     downsampled_saved_spec['metadata']['dtype'] = zarr_dtype
 
+    # Add TensorStore context to output store
+    downsampled_saved_spec['context'] = get_tensorstore_context()
+
     print(f"Creating zarr2 output at: {output_level_path}")
     print(f"Output shape: {downsample_store.shape}")
     print(f"Output dtype: {downsample_store.dtype}")
@@ -136,34 +142,20 @@ def process(base_path, output_path, level, start_idx=0, stop_idx=None, downsampl
     # Get chunk domains for processing
     linear_indices = range(start_idx, stop_idx if stop_idx else total_chunks)
     chunk_domains = list(get_chunk_domains(chunk_shape, output_store, linear_indices))
-    
-    # Process chunks in batches
-    batch_size = 512
-    for i in range(0, len(chunk_domains), batch_size):
-        batch_domains = chunk_domains[i:i+batch_size]
-        
-        # Check memory usage
-        memory_percent = psutil.virtual_memory().percent
-        if memory_percent > memory_limit:
-            print(f"Memory usage {memory_percent:.1f}% > {memory_limit}%, waiting...")
-            time.sleep(1)
-            continue
-        
-        # Create tasks for this batch
-        tasks = []
-        for domain_slice in batch_domains:
-            # Read from downsampled store
-            data_slice = downsample_store[domain_slice].read().result()
-            # Write to output store
-            task = output_store[domain_slice].write(data_slice)
-            tasks.append(task)
-        
-        # Commit batch - wait for all tasks to complete
-        for task in tasks:
-            task.result()
-        
-        end_chunk = min(i + batch_size, len(chunk_domains)) + start_idx
-        print(f"Processed {len(batch_domains)} chunks up to {end_chunk}...")
+
+    # Process chunks with transaction-per-chunk pattern (Mark's fix)
+    tasks = []
+    for chunk_domain in chunk_domains:
+        # Create transaction per chunk to prevent loading all data simultaneously
+        with ts.Transaction() as txn:
+            task = output_store[chunk_domain].with_transaction(txn).write(downsample_store[chunk_domain])
+        tasks.append(task)
+
+    # Wait for all tasks to complete
+    for task in tasks:
+        task.result()
+
+    print(f"Processed {len(chunk_domains)} chunks")
 
     # Update OME multiscale metadata for zarr2
     print("Updating OME-Zarr multiscale metadata...")

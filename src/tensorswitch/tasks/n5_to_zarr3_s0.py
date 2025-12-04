@@ -272,11 +272,10 @@ def convert(base_path, output_path, level=0, start_idx=0, stop_idx=None,
     linear_indices_to_process = range(start_idx, stop_idx)
     chunk_domains = get_chunk_domains(chunk_shape, zarr3_store, linear_indices_to_process=linear_indices_to_process)
 
-    # Process chunks
+    # Process chunks with transaction-per-chunk pattern (Mark's fix)
     print(f"Converting {len(linear_indices_to_process)} chunks...")
 
     tasks = []
-    txn = ts.Transaction()
     processed = 0
     start_time = time.time()
     last_report = start_time
@@ -284,11 +283,13 @@ def convert(base_path, output_path, level=0, start_idx=0, stop_idx=None,
     for idx, chunk_domain in enumerate(chunk_domains, start=start_idx):
         try:
             array = n5_store[chunk_domain].read().result()
-            task = zarr3_store[chunk_domain].with_transaction(txn).write(array)
+
+            # Create transaction per chunk to prevent loading all data simultaneously
+            with ts.Transaction() as txn:
+                task = zarr3_store[chunk_domain].with_transaction(txn).write(array)
+
             tasks.append(task)
             processed += 1
-
-            txn = commit_tasks(tasks, txn, memory_limit)
 
             # Progress every 100 chunks or 30s
             now = time.time()
@@ -304,8 +305,9 @@ def convert(base_path, output_path, level=0, start_idx=0, stop_idx=None,
             print(f"Warning: Skipping chunk {idx}: {e}")
             continue
 
-    if txn.open:
-        txn.commit_sync()
+    # Wait for all tasks to complete
+    for task in tasks:
+        task.result()
 
     elapsed = time.time() - start_time
     print(f"Complete: {processed} chunks in {elapsed:.1f}s ({processed/elapsed:.1f} chunks/s)")

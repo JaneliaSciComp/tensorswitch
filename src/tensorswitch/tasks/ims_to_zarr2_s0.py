@@ -3,7 +3,7 @@ from ..utils import (load_ims_stack, zarr2_store_spec, get_chunk_domains, commit
                     get_total_chunks_from_store, extract_ims_metadata,
                     update_ome_multiscale_metadata_zarr2, create_zarr2_ome_metadata,
                     write_zarr2_group_metadata, convert_ims_to_zarr3_metadata,
-                    detect_anisotropic_voxels)
+                    detect_anisotropic_voxels, get_tensorstore_context)
 import tensorstore as ts
 import numpy as np
 import psutil
@@ -148,6 +148,9 @@ def process(base_path, output_path, memory_limit=50, start_idx=0, stop_idx=None,
     
     store_spec['metadata']['dtype'] = zarr_dtype
 
+    # Add TensorStore context to limit concurrency to LSF allocation
+    store_spec['context'] = get_tensorstore_context()
+
     # Create the zarr2 store
     store = ts.open(store_spec, create=True, delete_existing=True).result()
     total_chunks = get_total_chunks_from_store(store, chunk_shape)
@@ -158,41 +161,30 @@ def process(base_path, output_path, memory_limit=50, start_idx=0, stop_idx=None,
     # Get chunk domains for processing
     linear_indices = range(start_idx, stop_idx if stop_idx else total_chunks)
     chunk_domains = list(get_chunk_domains(chunk_shape, store, linear_indices))
-    
-    # Process chunks in batches
-    batch_size = 512
-    for i in range(0, len(chunk_domains), batch_size):
-        batch_domains = chunk_domains[i:i+batch_size]
-        
-        # Get memory usage
-        memory_percent = psutil.virtual_memory().percent
-        
-        # Skip this batch if memory usage is too high
-        if memory_percent > memory_limit:
-            print(f"Memory usage {memory_percent:.1f}% > {memory_limit}%, waiting...")
-            time.sleep(1)
-            continue
-        
-        # Create tasks for this batch
-        tasks = []
-        for domain_slice in batch_domains:
+
+    print(f"Processing {len(chunk_domains)} chunks: start={start_idx}, stop={stop_idx}", flush=True)
+
+    # Process chunks with transaction-per-chunk pattern (Mark's fix)
+    tasks = []
+    try:
+        for domain in chunk_domains:
             # Convert domain to slices for dask array indexing
-            slices = tuple(slice(min, max) for (min,max) in zip(domain_slice.inclusive_min, domain_slice.exclusive_max))
-            # Read data slice
-            data_slice = volume[slices]
-            # Create write task
-            task = store[domain_slice].write(data_slice)
+            slices = tuple(slice(min, max) for (min, max) in zip(domain.inclusive_min, domain.exclusive_max))
+            slice_data = volume[slices]
+
+            # Create transaction per chunk to prevent loading all data simultaneously
+            with ts.Transaction() as txn:
+                task = store[domain].with_transaction(txn).write(slice_data.compute(scheduler='synchronous'))
+
             tasks.append(task)
-        
-        # Commit batch - wait for all tasks to complete
+
+        # Wait for all tasks to complete
         for task in tasks:
             task.result()
-        
-        end_chunk = min(i + batch_size, len(chunk_domains)) + start_idx
-        print(f"Queued {len(batch_domains)} chunk writes up to {end_chunk}...")
 
-    # Close h5_file properly
-    h5_file.close()
+    finally:
+        # Close h5_file properly
+        h5_file.close()
 
     # Write OME-Zarr metadata for zarr2
     if use_ome_structure:

@@ -180,12 +180,16 @@ def run_task_on_worker(worker_args):
             from tensorswitch.tasks.ims_to_zarr3_s0 import process
         elif task == "downsample_shard_zarr3":
             from tensorswitch.tasks.downsample_shard_zarr3 import process
+        elif task == "downsample_zarr2":
+            from tensorswitch.tasks.downsample_zarr2 import process
         elif task == "n5_to_zarr3_s0":
             from tensorswitch.tasks.n5_to_zarr3_s0 import process
         elif task == "tiff_to_zarr2_s0":
             from tensorswitch.tasks.tiff_to_zarr2_s0 import process
         elif task == "nd2_to_zarr2_s0":
             from tensorswitch.tasks.nd2_to_zarr2_s0 import process
+        elif task == "ims_to_zarr2_s0":
+            from tensorswitch.tasks.ims_to_zarr2_s0 import process
         else:
             print(f"Unsupported task: {task}")
             return False
