@@ -46,6 +46,10 @@ def process_with_local_cluster(args):
         num_workers = int(os.environ.get('LSB_DJOB_NUMPROC',
                                          os.environ.get('LSB_MAX_NUM_PROCESSORS', 4)))
 
+    # Calculate use_v2_encoding and create_dual_metadata from args
+    use_v2_encoding = (args.dual_zarr_approach == "v2_chunks")
+    create_dual_metadata = (args.dual_zarr_approach != "none")
+
     print("="*80)
     print(f"SINGLE-JOB MODE: 1 LSF Job + Internal LocalCluster")
     print("="*80)
@@ -53,10 +57,12 @@ def process_with_local_cluster(args):
     print(f"Input: {args.base_path}")
     print(f"Output: {args.output_path}")
     print(f"Workers: {num_workers}")
+    print(f"Chunk encoding: {'v2' if use_v2_encoding else 'default'}")
+    print(f"Dual metadata: {create_dual_metadata}")
 
     # Calculate total chunks (reuse existing logic)
     from tensorswitch.__main__ import get_total_chunks_for_task
-    total_chunks = get_total_chunks_for_task(args, use_v2_encoding=True)
+    total_chunks = get_total_chunks_for_task(args, use_v2_encoding=use_v2_encoding)
     print(f"Total chunks: {total_chunks:,}")
 
     # Start LocalCluster
@@ -99,6 +105,8 @@ def process_with_local_cluster(args):
                 'custom_shard_shape': args.custom_shard_shape,
                 'custom_chunk_shape': args.custom_chunk_shape,
                 'use_fortran_order': args.use_fortran_order if hasattr(args, 'use_fortran_order') else False,
+                'use_v2_encoding': use_v2_encoding,
+                'create_dual_metadata': create_dual_metadata,
             }
 
             # Submit to worker
@@ -214,6 +222,8 @@ def run_task_on_worker(worker_args):
             use_ome_structure=worker_args['use_ome_structure'],
             custom_shard_shape=custom_shard_shape,
             custom_chunk_shape=custom_chunk_shape,
+            create_dual_metadata=worker_args.get('create_dual_metadata', False),
+            use_v2_encoding=worker_args.get('use_v2_encoding', False),
             use_fortran_order=worker_args.get('use_fortran_order', False)
         )
 
@@ -241,32 +251,64 @@ def write_metadata_for_task(args):
         from tensorswitch.utils import (
             extract_tiff_ome_metadata, extract_nd2_ome_metadata,
             extract_ims_metadata, convert_ome_to_zarr3_metadata,
-            convert_ims_to_zarr3_metadata, write_zarr3_group_metadata
+            convert_ims_to_zarr3_metadata, write_zarr3_group_metadata,
+            update_zarr_metadata_from_source
         )
 
-        output_group_path = os.path.join(args.output_path, "multiscale") if args.use_ome_structure else args.output_path
+        # NGFF 0.5: Write metadata to root, no multiscale folder
+        output_group_path = args.output_path
 
         if args.task == "tiff_to_zarr3_s0":
             ome_metadata, voxel_sizes = extract_tiff_ome_metadata(args.base_path)
             if ome_metadata:
                 image_name = os.path.splitext(os.path.basename(args.base_path))[0]
                 zarr3_metadata = convert_ome_to_zarr3_metadata(ome_metadata, image_name)
+
+                # Write zarr.json to root (NGFF 0.5 - no multiscale folder)
                 write_zarr3_group_metadata(output_group_path, zarr3_metadata)
-                print("OME metadata written successfully")
+                print("OME-Zarr metadata written successfully")
+
+                # Update metadata with OME XML from source TIFF (like multi-job method)
+                try:
+                    print("Updating zarr.json with enhanced OME XML metadata...")
+                    update_zarr_metadata_from_source(output_group_path, args.base_path, source_type='tiff')
+                    print("Enhanced OME XML metadata updated successfully")
+                except Exception as e:
+                    print(f"Warning: Could not update enhanced OME XML metadata: {e}")
 
         elif args.task == "nd2_to_zarr3_s0":
             ome_metadata = extract_nd2_ome_metadata(args.base_path)
             if ome_metadata:
                 image_name = os.path.splitext(os.path.basename(args.base_path))[0]
                 zarr3_metadata = convert_ome_to_zarr3_metadata(ome_metadata, image_name)
+
+                # Write zarr.json to root (NGFF 0.5 - no multiscale folder)
                 write_zarr3_group_metadata(output_group_path, zarr3_metadata)
-                print("OME metadata written successfully")
+                print("OME-Zarr metadata written successfully")
+
+                # Update metadata with OME XML from source ND2 (like multi-job method)
+                try:
+                    print("Updating zarr.json with enhanced OME XML metadata...")
+                    update_zarr_metadata_from_source(output_group_path, args.base_path, source_type='nd2')
+                    print("Enhanced OME XML metadata updated successfully")
+                except Exception as e:
+                    print(f"Warning: Could not update enhanced OME XML metadata: {e}")
 
         elif args.task == "ims_to_zarr3_s0":
             metadata, voxel_sizes = extract_ims_metadata(args.base_path)
             zarr3_metadata = convert_ims_to_zarr3_metadata(args.base_path, None, voxel_sizes)
+
+            # Write zarr.json to root (NGFF 0.5 - no multiscale folder)
             write_zarr3_group_metadata(output_group_path, zarr3_metadata)
-            print("OME metadata written successfully")
+            print("OME-Zarr metadata written successfully")
+
+            # Update metadata with IMS metadata (like multi-job method)
+            try:
+                print("Updating zarr.json with enhanced IMS metadata...")
+                update_zarr_metadata_from_source(output_group_path, args.base_path, source_type='ims')
+                print("Enhanced IMS metadata updated successfully")
+            except Exception as e:
+                print(f"Warning: Could not update enhanced IMS metadata: {e}")
 
     except Exception as e:
         print(f"Warning: Could not write OME metadata: {e}")
