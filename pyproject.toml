@@ -3,7 +3,7 @@ name = "tensorswitch"
 version = "0.1.0"
 requires-python = ">= 3.11"
 dependencies = [
-    "tensorstore",
+    "tensorstore>=0.1.79,<0.2",
     "psutil",
     "requests",
     "numpy", "ome-zarr-models @ git+https://github.com/ome-zarr-models/ome-zarr-models-py.git",
@@ -50,7 +50,6 @@ tensorswitch = { path = ".", editable = true }
 [tool.pixi.tasks]
 
 [tool.pixi.dependencies]
-tensorstore = ">=0.1.65,<0.2"
 psutil = ">=7.0.0,<8"
 requests = ">=2.32.3,<3"
 pytest = ">=8.3.5,<9"
