@@ -3128,10 +3128,14 @@ def generate_cli_coordinator_script(output_path, pyramid_plan, args):
     Args:
         output_path: Zarr dataset path (contains s0/)
         pyramid_plan: Output from calculate_pyramid_plan()
-        args: CLI arguments (cores, wall_time, project, etc.)
+        args: CLI arguments (cores, wall_time, project, use_single_job, num_volumes, etc.)
 
     Returns:
         Bash script as string
+
+    Notes:
+        - Multi-Job Mode (default): Submits 1 LSF job per shard (hundreds of jobs per level)
+        - Single-Job Mode (--use_single_job): Submits 1 LSF job per level with internal LocalCluster
     """
     import sys
 
@@ -3147,8 +3151,19 @@ def generate_cli_coordinator_script(output_path, pyramid_plan, args):
     # Build command arguments
     # Auto-detect sharding from s0 metadata (if inner_chunk_shape exists, s0 uses sharding)
     use_shard = 1 if pyramid_plan.get('inner_chunk_shape') is not None else 0
-    # Use num_volumes=1 to avoid race conditions with linear chunk indexing vs 3D shard boundaries
-    base_args = f"--downsample 1 --use_shard {use_shard} --memory_limit {args.memory_limit} --cores {args.cores} --wall_time {args.wall_time} --project {args.project} --num_volumes 1"
+
+    # Check if single-job mode is requested
+    use_single_job = hasattr(args, 'use_single_job') and args.use_single_job
+
+    if use_single_job:
+        # Single-Job Mode: 1 LSF job per level with internal LocalCluster
+        # num_volumes = number of workers in the LocalCluster
+        num_volumes = getattr(args, 'num_volumes', 50)  # Default to 50 workers
+        base_args = f"--downsample 1 --use_shard {use_shard} --use_single_job --memory_limit {args.memory_limit} --cores {args.cores} --wall_time {args.wall_time} --project {args.project} --num_volumes {num_volumes}"
+    else:
+        # Multi-Job Mode (default): 1 LSF job per shard
+        # num_volumes=1 to avoid race conditions with linear chunk indexing vs 3D shard boundaries
+        base_args = f"--downsample 1 --use_shard {use_shard} --memory_limit {args.memory_limit} --cores {args.cores} --wall_time {args.wall_time} --project {args.project} --num_volumes 1"
 
     if hasattr(args, 'custom_shard_shape') and args.custom_shard_shape:
         base_args += f" --custom_shard_shape {args.custom_shard_shape}"
@@ -3158,10 +3173,14 @@ def generate_cli_coordinator_script(output_path, pyramid_plan, args):
     num_levels = pyramid_plan.get('num_levels', 0)
     levels_info = pyramid_plan.get('pyramid_plan', [])
 
+    # Print mode information
+    mode_str = "Single-Job Mode (1 job/level)" if use_single_job else "Multi-Job Mode (1 job/shard)"
+
     script = f"""#!/bin/bash
 set -e
 
 echo "Auto-multiscale: {output_path} (s1 to s{num_levels})"
+echo "Mode: {mode_str}"
 
 extract_job_ids() {{
     grep -oP 'Job <\\K[0-9]+(?=>)' || true
