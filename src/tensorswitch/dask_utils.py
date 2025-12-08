@@ -254,15 +254,27 @@ def write_metadata_for_task(args):
             convert_ims_to_zarr3_metadata, write_zarr3_group_metadata,
             update_zarr_metadata_from_source
         )
+        import json
 
         # NGFF 0.5: Write metadata to root, no multiscale folder
         output_group_path = args.output_path
+
+        # Read array shape from s0/zarr.json (created by workers)
+        s0_zarr_json_path = os.path.join(output_group_path, 's0', 'zarr.json')
+        if not os.path.exists(s0_zarr_json_path):
+            print(f"Warning: s0/zarr.json not found at {s0_zarr_json_path}")
+            array_shape = None
+        else:
+            with open(s0_zarr_json_path, 'r') as f:
+                s0_metadata = json.load(f)
+                array_shape = tuple(s0_metadata.get('shape', []))
+                print(f"Read array shape from s0/zarr.json: {array_shape}")
 
         if args.task == "tiff_to_zarr3_s0":
             ome_metadata, voxel_sizes = extract_tiff_ome_metadata(args.base_path)
             if ome_metadata:
                 image_name = os.path.splitext(os.path.basename(args.base_path))[0]
-                zarr3_metadata = convert_ome_to_zarr3_metadata(ome_metadata, image_name)
+                zarr3_metadata = convert_ome_to_zarr3_metadata(ome_metadata, array_shape, image_name)
 
                 # Write zarr.json to root (NGFF 0.5 - no multiscale folder)
                 write_zarr3_group_metadata(output_group_path, zarr3_metadata)
@@ -280,7 +292,7 @@ def write_metadata_for_task(args):
             ome_metadata = extract_nd2_ome_metadata(args.base_path)
             if ome_metadata:
                 image_name = os.path.splitext(os.path.basename(args.base_path))[0]
-                zarr3_metadata = convert_ome_to_zarr3_metadata(ome_metadata, image_name)
+                zarr3_metadata = convert_ome_to_zarr3_metadata(ome_metadata, array_shape, image_name)
 
                 # Write zarr.json to root (NGFF 0.5 - no multiscale folder)
                 write_zarr3_group_metadata(output_group_path, zarr3_metadata)
