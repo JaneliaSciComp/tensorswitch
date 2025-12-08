@@ -107,6 +107,10 @@ def process_with_local_cluster(args):
                 'use_fortran_order': args.use_fortran_order if hasattr(args, 'use_fortran_order') else False,
                 'use_v2_encoding': use_v2_encoding,
                 'create_dual_metadata': create_dual_metadata,
+                # Downsample-specific parameters
+                'level': getattr(args, 'level', None),
+                'downsample': getattr(args, 'downsample', True),
+                'anisotropic_factors': getattr(args, 'anisotropic_factors', None),
             }
 
             # Submit to worker
@@ -211,21 +215,42 @@ def run_task_on_worker(worker_args):
         if custom_chunk_shape and isinstance(custom_chunk_shape, str):
             custom_chunk_shape = [int(x) for x in custom_chunk_shape.split(',')]
 
+        anisotropic_factors = worker_args.get('anisotropic_factors')
+        if anisotropic_factors and isinstance(anisotropic_factors, str):
+            anisotropic_factors = [int(x) for x in anisotropic_factors.split(',')]
+
         # Call the existing process() function
-        process(
-            base_path=worker_args['base_path'],
-            output_path=worker_args['output_path'],
-            use_shard=worker_args['use_shard'],
-            memory_limit=worker_args['memory_limit'],
-            start_idx=start_idx,
-            stop_idx=stop_idx,
-            use_ome_structure=worker_args['use_ome_structure'],
-            custom_shard_shape=custom_shard_shape,
-            custom_chunk_shape=custom_chunk_shape,
-            create_dual_metadata=worker_args.get('create_dual_metadata', False),
-            use_v2_encoding=worker_args.get('use_v2_encoding', False),
-            use_fortran_order=worker_args.get('use_fortran_order', False)
-        )
+        # Downsample tasks have different signature (require level parameter)
+        if task in ["downsample_shard_zarr3", "downsample_zarr2"]:
+            process(
+                base_path=worker_args['base_path'],
+                output_path=worker_args['output_path'],
+                level=worker_args['level'],  # Required for downsample
+                start_idx=start_idx,
+                stop_idx=stop_idx,
+                downsample=worker_args.get('downsample', True),
+                use_shard=worker_args['use_shard'],
+                memory_limit=worker_args['memory_limit'],
+                custom_shard_shape=custom_shard_shape,
+                custom_chunk_shape=custom_chunk_shape,
+                anisotropic_factors=anisotropic_factors,  # Use parsed version
+            )
+        else:
+            # Conversion tasks (tiff/nd2/ims/n5 to zarr2/zarr3)
+            process(
+                base_path=worker_args['base_path'],
+                output_path=worker_args['output_path'],
+                use_shard=worker_args['use_shard'],
+                memory_limit=worker_args['memory_limit'],
+                start_idx=start_idx,
+                stop_idx=stop_idx,
+                use_ome_structure=worker_args['use_ome_structure'],
+                custom_shard_shape=custom_shard_shape,
+                custom_chunk_shape=custom_chunk_shape,
+                create_dual_metadata=worker_args.get('create_dual_metadata', False),
+                use_v2_encoding=worker_args.get('use_v2_encoding', False),
+                use_fortran_order=worker_args.get('use_fortran_order', False)
+            )
 
         print(f"Worker finished successfully: chunks {start_idx}-{stop_idx}")
         return True
