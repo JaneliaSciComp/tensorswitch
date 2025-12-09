@@ -108,10 +108,73 @@ def get_kvstore_spec(path):
             'path': path
         }
 
+def get_chunk_linear_indices_in_shard(shard_coord, shard_shape, chunk_shape, chunk_grid):
+    """
+    Generate linear indices for all chunks within a specific shard.
+    Works for N-dimensional data (2D, 3D, 4D, 5D, etc.).
+
+    Args:
+        shard_coord: N-D shard coordinate (e.g., [z, y, x] for 3D or [c, z, y, x] for 4D)
+        shard_shape: Shape of each shard (e.g., [1024, 1024, 1024])
+        chunk_shape: Shape of each chunk (e.g., [32, 32, 32])
+        chunk_grid: Total number of chunks in each dimension across entire array
+
+    Returns:
+        list: Linear indices of all chunks within this shard that are within data bounds
+
+    Example:
+        >>> # For 4D data (C,Z,Y,X) with shard at [0,0,0,0]
+        >>> indices = get_chunk_linear_indices_in_shard(
+        ...     shard_coord=[0, 0, 0, 0],
+        ...     shard_shape=[1, 1024, 1024, 1024],
+        ...     chunk_shape=[1, 32, 32, 32],
+        ...     chunk_grid=[3, 598, 15708, 8818]
+        ... )
+        >>> len(indices)  # Should be 1 * 32 * 32 * 32 = 32768 (or less at boundaries)
+    """
+    import itertools
+
+    # Calculate how many chunks fit in each dimension of the shard
+    chunks_per_shard_dim = [
+        shard_shape[i] // chunk_shape[i]
+        for i in range(len(shard_shape))
+    ]
+
+    # Base chunk coordinate for this shard (where this shard starts in chunk space)
+    base_chunk_coord = [
+        shard_coord[i] * chunks_per_shard_dim[i]
+        for i in range(len(shard_coord))
+    ]
+
+    # Generate all chunk indices within this shard using N-D iteration
+    chunk_indices = []
+    for chunk_offset in itertools.product(*[range(dim) for dim in chunks_per_shard_dim]):
+        # Calculate absolute chunk coordinate in the array
+        chunk_coord = [
+            base_chunk_coord[i] + chunk_offset[i]
+            for i in range(len(base_chunk_coord))
+        ]
+
+        # Skip if chunk is outside data bounds
+        if any(chunk_coord[i] >= chunk_grid[i] for i in range(len(chunk_coord))):
+            continue
+
+        # Convert N-D chunk coordinate to linear index (row-major order)
+        linear_idx = 0
+        stride = 1
+        for i in range(len(chunk_coord) - 1, -1, -1):
+            linear_idx += chunk_coord[i] * stride
+            stride *= chunk_grid[i]
+
+        chunk_indices.append(linear_idx)
+
+    return chunk_indices
+
+
 def get_chunk_domains(chunk_shape, array, linear_indices_to_process=None):
     first_chunk_domain = ts.IndexDomain(inclusive_min=array.origin, shape=chunk_shape)
     chunk_number = -(np.array(array.shape) // -np.array(chunk_shape))
-    
+
     if linear_indices_to_process is not None:
         linear_indices_iterator = linear_indices_to_process
     else:
@@ -657,10 +720,10 @@ def precreate_shard_directories(output_path, level, output_shape, shard_shape, u
 
 def precreate_shard_directories_inline(output_path, volume_shape, custom_shard_shape, use_ome_structure=True):
     """
-    Inline shard directory pre-creation with safety checks for use inside worker processes.
+    SAFETY FALLBACK WRAPPER for worker processes.
 
-    This is a lightweight safety fallback that should rarely execute, as directories
-    should already be pre-created by submit_job() before workers start.
+    Checks if directories already exist and only creates them if missing.
+    Should rarely execute since __main__.py pre-creates everything before workers start.
 
     Args:
         output_path: Base zarr dataset path
@@ -671,7 +734,9 @@ def precreate_shard_directories_inline(output_path, volume_shape, custom_shard_s
     Returns:
         bool: True if directories were created, False if already existed
     """
-    # Check if directories already exist
+    import os
+
+    # Check if directories already exist (safety check)
     if use_ome_structure:
         base_check_path = os.path.join(output_path, "s0", "c", "0")
     else:
@@ -683,54 +748,134 @@ def precreate_shard_directories_inline(output_path, volume_shape, custom_shard_s
 
     print("⚠ Shard directories not found, creating them now (this should be rare)...")
 
-    # Convert to lists
+    # Convert to list if needed
     shard_shape = custom_shard_shape if isinstance(custom_shard_shape, list) else [int(x) for x in custom_shard_shape.split(',')]
-    output_shape = list(volume_shape)
 
-    # Adjust shard shape to match array dimensions
-    if len(output_shape) == 4 and len(shard_shape) == 3:
-        shard_shape = [1] + shard_shape  # CZYX
-    elif len(output_shape) == 4 and len(shard_shape) == 2:
-        shard_shape = [1, 1] + shard_shape  # CZYX with YX shards
-    elif len(output_shape) == 3 and len(shard_shape) == 2:
-        shard_shape = [1] + shard_shape  # CYX or ZYX
-    elif len(output_shape) == 5 and len(shard_shape) == 3:
-        shard_shape = [1, 1] + shard_shape  # TCZYX
-    elif len(output_shape) == 5 and len(shard_shape) == 2:
-        shard_shape = [1, 1, 1] + shard_shape  # TCZYX with YX shards
+    # Call the core function to create directories (has all the logic)
+    precreate_shard_directories(
+        output_path=output_path,
+        level=0,  # Workers always work on s0
+        output_shape=list(volume_shape),
+        shard_shape=shard_shape,
+        use_ome_structure=use_ome_structure
+    )
 
-    # Calculate number of shards in each dimension
-    num_shards = [((dim_size + shard_size - 1) // shard_size) for dim_size, shard_size in zip(output_shape, shard_shape)]
-
-    # Determine base path
-    if use_ome_structure:
-        base_shard_path = os.path.join(output_path, "s0", "c")
-    else:
-        base_shard_path = os.path.join(output_path, "c")
-
-    # Create all shard parent directories
-    if len(num_shards) == 4:  # CZYX
-        for c in range(num_shards[0]):
-            for z in range(num_shards[1]):
-                for y in range(num_shards[2]):
-                    dir_path = os.path.join(base_shard_path, str(c), str(z), str(y))
-                    os.makedirs(dir_path, exist_ok=True)
-    elif len(num_shards) == 3:  # CYX or ZYX
-        for dim0 in range(num_shards[0]):
-            for dim1 in range(num_shards[1]):
-                dir_path = os.path.join(base_shard_path, str(dim0), str(dim1))
-                os.makedirs(dir_path, exist_ok=True)
-    elif len(num_shards) == 5:  # TCZYX
-        for t in range(num_shards[0]):
-            for c in range(num_shards[1]):
-                for z in range(num_shards[2]):
-                    for y in range(num_shards[3]):
-                        dir_path = os.path.join(base_shard_path, str(t), str(c), str(z), str(y))
-                        os.makedirs(dir_path, exist_ok=True)
-
-    total_dirs = np.prod(num_shards[:3] if len(num_shards) >= 3 else num_shards)
-    print(f"Created directory structure for {total_dirs} shard locations")
     return True
+
+
+def precreate_zarr3_output(output_path, level, output_shape, shard_shape, chunk_shape,
+                           dtype, use_ome_structure=True, use_v2_encoding=False,
+                           axes_order=None, check_exists=False, create_metadata=True):
+    """
+    UNIFIED function to pre-create both shard directories AND zarr.json metadata.
+
+    This is the ONE function that should be called for all Zarr3 output pre-creation
+    to prevent race conditions in multi-job mode.
+
+    Args:
+        output_path: Base output path (e.g., /path/to/data.zarr)
+        level: Level number (0 for s0, 1 for s1, etc.)
+        output_shape: Output array shape (e.g., [3, 1196, 31416, 17635])
+        shard_shape: Shard dimensions (e.g., [1024, 1024, 1024] or [1, 1024, 1024, 1024])
+        chunk_shape: Chunk dimensions (e.g., [32, 32, 32] or [1, 32, 32, 32])
+        dtype: Data type string (e.g., 'uint16')
+        use_ome_structure: Whether to use OME-NGFF structure with s{level} subdirectories
+        use_v2_encoding: Whether to use v2 chunk key encoding
+        axes_order: Axis names list (e.g., ["c", "z", "y", "x"])
+        check_exists: If True, check if dirs exist first and skip if present (for inline use)
+        create_metadata: If True, also create zarr.json (set False for dirs-only)
+
+    Returns:
+        dict: {'dirs_created': bool, 'metadata_created': bool}
+
+    Example (downsample):
+        precreate_zarr3_output(
+            output_path="/data/img.zarr",
+            level=1,
+            output_shape=[3, 598, 15708, 8817],
+            shard_shape=[1, 1024, 1024, 1024],
+            chunk_shape=[1, 32, 32, 32],
+            dtype="uint16",
+            axes_order=["c", "z", "y", "x"]
+        )
+
+    Example (N5 conversion):
+        precreate_zarr3_output(
+            output_path="/data/img.zarr",
+            level=0,
+            output_shape=[1196, 31416, 17635],
+            shard_shape=[1024, 1024, 1024],
+            chunk_shape=[32, 32, 32],
+            dtype="uint16",
+            axes_order=["z", "y", "x"]
+        )
+    """
+    import os
+
+    result = {'dirs_created': False, 'metadata_created': False}
+
+    print("\n" + "="*80)
+    print(f"PRE-CREATING ZARR3 OUTPUT FOR s{level}")
+    print("="*80)
+
+    # Step 1: Check if already exists (for inline mode)
+    if check_exists:
+        if use_ome_structure:
+            base_check_path = os.path.join(output_path, f"s{level}", "c", "0")
+        else:
+            base_check_path = os.path.join(output_path, "c", "0")
+
+        if os.path.exists(base_check_path):
+            print(f"✓ Shard directories already exist for s{level}, skipping redundant creation")
+
+            # Check if metadata also exists
+            metadata_path = os.path.join(output_path, f"s{level}" if use_ome_structure else "", "zarr.json")
+            if os.path.exists(metadata_path):
+                print(f"✓ Metadata also exists, all pre-creation complete")
+                return result
+            else:
+                print(f"⚠ Metadata missing, will create it")
+
+    # Step 2: Pre-create shard directories
+    print(f"\n1. Creating shard directory structure...")
+    precreate_shard_directories(
+        output_path=output_path,
+        level=level,
+        output_shape=output_shape,
+        shard_shape=shard_shape,
+        use_ome_structure=use_ome_structure
+    )
+    result['dirs_created'] = True
+
+    # Step 3: Pre-create zarr.json metadata (CRITICAL for multi-job mode)
+    if create_metadata:
+        print(f"\n2. Pre-creating zarr.json metadata to prevent race conditions...")
+        metadata_created = precreate_zarr3_metadata_safely(
+            output_path=output_path,
+            level=level,
+            shape=output_shape,
+            dtype=dtype,
+            use_shard=True,
+            shard_shape=shard_shape,
+            chunk_shape=chunk_shape,
+            use_ome_structure=use_ome_structure,
+            use_fortran_order=False,  # C-order by default
+            use_v2_encoding=use_v2_encoding,
+            force_precreate=True,  # CRITICAL: Force creation to prevent worker race conditions
+            axes_order=axes_order
+        )
+        result['metadata_created'] = metadata_created
+
+        if metadata_created:
+            print(f"✓ Metadata pre-creation complete")
+        else:
+            print(f"⚠ Metadata pre-creation was skipped")
+    else:
+        print(f"\n2. Skipping metadata creation (create_metadata=False)")
+
+    print("="*80 + "\n")
+
+    return result
 
 
 def create_output_store(spec):
@@ -3223,6 +3368,10 @@ submit_and_wait() {{
 
     bwait -w "$wait_condition" 2>&1 || true
     echo "s$level done"
+
+    # Update OME-Zarr metadata to include this level in root zarr.json
+    echo "Updating metadata for s$level..."
+    {python_path} -c "import sys; sys.path.insert(0, '{tensorswitch_dir}'); from tensorswitch.utils import update_ome_metadata_if_needed; update_ome_metadata_if_needed('$output_path', use_ome_structure=True)" 2>&1 || echo "Warning: Metadata update failed"
 }}
 
 """

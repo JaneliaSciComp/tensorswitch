@@ -138,6 +138,12 @@ def process_with_local_cluster(args):
         # Write metadata (run on main process, not workers)
         if args.task in ["tiff_to_zarr3_s0", "nd2_to_zarr3_s0", "ims_to_zarr3_s0"]:
             write_metadata_for_task(args)
+        elif args.task in ["downsample_shard_zarr3", "downsample_zarr2"]:
+            # Update OME-Zarr metadata for downsampling tasks
+            print("\nUpdating OME-Zarr metadata after downsampling...")
+            from tensorswitch.utils import update_ome_metadata_if_needed
+            update_ome_metadata_if_needed(args.output_path, use_ome_structure=True)
+            print("Metadata updated successfully!")
 
         print("\n" + "="*80)
         print("SINGLE-JOB MODE COMPLETE")

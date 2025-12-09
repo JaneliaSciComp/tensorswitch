@@ -2,7 +2,7 @@ import tensorstore as ts
 import numpy as np
 import time
 import psutil
-from ..utils import get_chunk_domains, create_output_store, commit_tasks, print_processing_info, downsample_spec, zarr3_store_spec, get_input_driver, get_total_chunks_from_store, calculate_anisotropic_downsample_factors, get_tensorstore_context
+from ..utils import get_chunk_domains, create_output_store, commit_tasks, print_processing_info, downsample_spec, zarr3_store_spec, get_input_driver, get_total_chunks_from_store, calculate_anisotropic_downsample_factors, get_tensorstore_context, get_chunk_linear_indices_in_shard
 import os
 
 def process(base_path, output_path, level, start_idx=0, stop_idx=None, downsample=True, use_shard=True, memory_limit=50, custom_shard_shape=None, custom_chunk_shape=None, anisotropic_factors=None, shard_coord=None, **kwargs):
@@ -169,36 +169,13 @@ def process(base_path, output_path, level, start_idx=0, stop_idx=None, downsampl
             for i in range(len(custom_shard_shape))
         ]
 
-        # Base chunk coordinate for this shard
-        base_chunk_coord = [
-            shard_coord[i] * chunks_per_shard_dim[i]
-            for i in range(len(shard_coord))
-        ]
-
-        # Generate all chunk indices within this shard
-        chunk_indices = []
-        for dz in range(chunks_per_shard_dim[0]):
-            for dy in range(chunks_per_shard_dim[1]):
-                for dx in range(chunks_per_shard_dim[2]):
-                    chunk_coord = [
-                        base_chunk_coord[0] + dz,
-                        base_chunk_coord[1] + dy,
-                        base_chunk_coord[2] + dx
-                    ]
-
-                    # Skip if chunk is outside data bounds
-                    if (chunk_coord[0] >= chunk_grid[0] or
-                        chunk_coord[1] >= chunk_grid[1] or
-                        chunk_coord[2] >= chunk_grid[2]):
-                        continue
-
-                    # Convert 3D chunk coordinate to linear index
-                    linear_idx = (
-                        chunk_coord[0] * chunk_grid[1] * chunk_grid[2] +
-                        chunk_coord[1] * chunk_grid[2] +
-                        chunk_coord[2]
-                    )
-                    chunk_indices.append(linear_idx)
+        # Generate all chunk indices within this shard using N-D utility function
+        chunk_indices = get_chunk_linear_indices_in_shard(
+            shard_coord=shard_coord,
+            shard_shape=custom_shard_shape,
+            chunk_shape=chunk_shape,
+            chunk_grid=chunk_grid
+        )
 
         # Override start_idx and stop_idx to process only these specific chunks
         # We'll use start_idx=0 and stop_idx=total_chunks, but filter by chunk_indices in get_chunk_domains
