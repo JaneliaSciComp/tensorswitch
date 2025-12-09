@@ -17,7 +17,8 @@ from .utils import (get_total_chunks, downsample_spec, zarr3_store_spec, get_chu
                     load_tiff_stack, load_nd2_stack, load_ims_stack, update_ome_metadata_if_needed,
                     calculate_num_multiscale_levels, calculate_anisotropic_downsample_factors,
                     generate_auto_multiscale, calculate_pyramid_plan, generate_cli_coordinator_script,
-                    precreate_shard_directories as precreate_shard_directories_universal)
+                    precreate_shard_directories as precreate_shard_directories_universal,
+                    get_chunk_linear_indices_in_shard)
 from .tasks import (downsample_shard_zarr3, n5_to_n5, n5_to_zarr2, n5_to_zarr3_s0, tiff_to_zarr3_s0,
                     nd2_to_zarr3_s0, ims_to_zarr3_s0, nd2_to_zarr2_s0, ims_to_zarr2_s0,
                     tiff_to_zarr2_s0, downsample_zarr2, precomputed_to_n5)
@@ -28,8 +29,12 @@ os.umask(0o0002)
 
 def precreate_shard_directories(args, volume_shape, use_v2_encoding=True):
     """
-    Pre-create all shard directories before job submission to avoid race conditions.
-    This function runs once on the submission node, not on each worker.
+    LEGACY WRAPPER for backward compatibility.
+
+    Parses args object and calls the unified precreate_zarr3_output() function.
+    This runs once on the submission node before job submission.
+
+    Note: This is now just a thin wrapper - all logic is in precreate_zarr3_output().
     """
     # Only create directories if sharding is enabled
     if not bool(args.use_shard):
@@ -40,72 +45,21 @@ def precreate_shard_directories(args, volume_shape, use_v2_encoding=True):
         print("No custom shard shape specified, skipping directory pre-creation")
         return
 
-    print("\n" + "="*80)
-    print("PRE-CREATING SHARD DIRECTORY STRUCTURE")
-    print("="*80)
+    # Parse parameters from args object
+    from tensorswitch.utils import precreate_zarr3_output
 
-    # Parse shard shape
     shard_shape = [int(x) for x in args.custom_shard_shape.split(',')]
-    output_shape = list(volume_shape)
+    chunk_shape = [int(x) for x in args.custom_chunk_shape.split(',')] if args.custom_chunk_shape else None
 
-    # Adjust shard shape to match array dimensions
-    if len(output_shape) == 4 and len(shard_shape) == 3:
-        shard_shape = [1] + shard_shape  # CZYX
-    elif len(output_shape) == 4 and len(shard_shape) == 2:
-        shard_shape = [1, 1] + shard_shape  # CZYX with YX shards
-    elif len(output_shape) == 3 and len(shard_shape) == 2:
-        shard_shape = [1] + shard_shape  # CYX
-    elif len(output_shape) == 5 and len(shard_shape) == 3:
-        shard_shape = [1, 1] + shard_shape  # TCZYX
-    elif len(output_shape) == 5 and len(shard_shape) == 2:
-        shard_shape = [1, 1, 1] + shard_shape  # TCZYX with YX shards
-
-    # Calculate number of shards in each dimension
-    num_shards = [((dim_size + shard_size - 1) // shard_size)
-                  for dim_size, shard_size in zip(output_shape, shard_shape)]
-
-    print(f"Data shape: {output_shape}")
-    print(f"Shard shape: {shard_shape}")
-    print(f"Number of shards per dimension: {num_shards}")
-
-    # Determine base path
-    use_ome_structure = bool(args.use_ome_structure)
-    if use_ome_structure:
-        base_shard_path = os.path.join(args.output_path, "s0", "c")
-    else:
-        base_shard_path = os.path.join(args.output_path, "c")
-
-    # Create all shard parent directories
-    total_dirs = 0
-    import time
-    start_time = time.time()
-
-    if len(num_shards) == 4:  # CZYX
-        for c in range(num_shards[0]):
-            for z in range(num_shards[1]):
-                for y in range(num_shards[2]):
-                    dir_path = os.path.join(base_shard_path, str(c), str(z), str(y))
-                    os.makedirs(dir_path, exist_ok=True)
-                    total_dirs += 1
-    elif len(num_shards) == 3:  # CYX or ZYX
-        for dim0 in range(num_shards[0]):
-            for dim1 in range(num_shards[1]):
-                dir_path = os.path.join(base_shard_path, str(dim0), str(dim1))
-                os.makedirs(dir_path, exist_ok=True)
-                total_dirs += 1
-    elif len(num_shards) == 5:  # TCZYX
-        for t in range(num_shards[0]):
-            for c in range(num_shards[1]):
-                for z in range(num_shards[2]):
-                    for y in range(num_shards[3]):
-                        dir_path = os.path.join(base_shard_path, str(t), str(c), str(z), str(y))
-                        os.makedirs(dir_path, exist_ok=True)
-                        total_dirs += 1
-
-    elapsed = time.time() - start_time
-    print(f"✓ Created {total_dirs} shard directories in {elapsed:.2f} seconds")
-    print(f"✓ Base path: {base_shard_path}")
-    print("="*80 + "\n")
+    # This wrapper is only for dirs-only mode (old non-sharded fallback path)
+    # Metadata creation is handled by the main precreate_zarr3_output() calls above
+    precreate_shard_directories_universal(
+        output_path=args.output_path,
+        level=0,  # Always s0 for conversion tasks
+        output_shape=list(volume_shape),
+        shard_shape=shard_shape,
+        use_ome_structure=bool(args.use_ome_structure)
+    )
 
 
 def get_total_chunks_for_task(args, use_v2_encoding=True):
@@ -266,11 +220,16 @@ def get_total_chunks_for_task(args, use_v2_encoding=True):
                 for i in range(len(input_shape))
             ]
 
-            # Use custom_chunk_shape if provided, otherwise use input's chunk shape
-            if custom_chunk_shape:
+            # For sharded arrays, count by shards (write_chunk), not inner chunks (read_chunk)
+            # This ensures single-job mode distributes work by shards, matching multi-job mode
+            if custom_shard_shape:
+                # Use shard shape for counting (matches multi-job mode behavior)
+                chunk_shape = custom_shard_shape
+            elif custom_chunk_shape:
                 chunk_shape = custom_chunk_shape
             else:
-                chunk_shape = downsample_store.chunk_layout.read_chunk.shape
+                # Auto-detect: use write_chunk for sharded arrays, read_chunk otherwise
+                chunk_shape = downsample_store.chunk_layout.write_chunk.shape
 
             # Calculate total chunks based on OUTPUT shape, not input shape!
             total_chunks = math.prod([
@@ -666,16 +625,83 @@ def submit_job(args, use_v2_encoding=True):
 
     # Pre-create all shard directories BEFORE submitting any jobs
     if volume_shape is not None and args.task in ["tiff_to_zarr3_s0", "nd2_to_zarr3_s0", "ims_to_zarr3_s0"]:
-        precreate_shard_directories(args, volume_shape, use_v2_encoding)
-    elif volume_shape is not None and args.task == "downsample_shard_zarr3":
-        # For downsample tasks, use the universal function from utils
+        # Use UNIFIED function to create BOTH directories AND metadata for TIFF/ND2/IMS
         if bool(args.use_shard) and shard_shape:
-            precreate_shard_directories_universal(
+            from tensorswitch.utils import precreate_zarr3_output
+
+            # Determine axes order based on array dimensions
+            axes_order = None
+            if len(volume_shape) == 3:
+                axes_order = ["z", "y", "x"]
+            elif len(volume_shape) == 4:
+                axes_order = ["c", "z", "y", "x"]
+            elif len(volume_shape) == 5:
+                axes_order = ["t", "c", "z", "y", "x"]
+
+            precreate_zarr3_output(
+                output_path=args.output_path,
+                level=0,  # Always s0 for conversion tasks
+                output_shape=list(volume_shape),
+                shard_shape=shard_shape,
+                chunk_shape=chunk_shape,
+                dtype=str(volume_dtype),
+                use_ome_structure=bool(args.use_ome_structure),
+                use_v2_encoding=use_v2_encoding,
+                axes_order=axes_order,
+                check_exists=False,
+                create_metadata=True  # Create metadata to prevent race conditions
+            )
+        else:
+            # Fallback for non-sharded mode (rare)
+            precreate_shard_directories(args, volume_shape, use_v2_encoding)
+    elif volume_shape is not None and args.task == "downsample_shard_zarr3":
+        # For downsample tasks, use the NEW UNIFIED function that creates BOTH dirs AND metadata
+        if bool(args.use_shard) and shard_shape:
+            from tensorswitch.utils import precreate_zarr3_output
+            import json
+
+            # Determine input path (previous level)
+            if args.base_path.endswith(f"s{args.level - 1}"):
+                input_path = args.base_path
+            else:
+                input_path = os.path.join(args.base_path, f"s{args.level - 1}")
+
+            # Read dtype and axes from input zarr.json
+            print(f"Reading input metadata from {input_path}...")
+            input_store = ts.open({
+                'driver': get_input_driver(input_path),
+                'kvstore': {'driver': 'file', 'path': input_path},
+            }).result()
+            dtype = input_store.dtype.name
+            input_store = None
+
+            # Extract axes from input
+            axes_order = None
+            try:
+                zarr_json_path = os.path.join(input_path, 'zarr.json')
+                if os.path.exists(zarr_json_path):
+                    with open(zarr_json_path, 'r') as f:
+                        metadata = json.load(f)
+                        axes_order = metadata.get('dimension_names')
+                        if axes_order:
+                            print(f"Extracted axes from input: {axes_order}")
+            except Exception as e:
+                print(f"Warning: Could not extract axes: {e}")
+
+            # Call UNIFIED function to create both directories AND metadata
+            # This prevents the race condition where multiple workers try to create s{level}/zarr.json
+            precreate_zarr3_output(
                 output_path=args.output_path,
                 level=args.level,
                 output_shape=list(volume_shape),
                 shard_shape=shard_shape,
-                use_ome_structure=bool(args.use_ome_structure)
+                chunk_shape=chunk_shape,
+                dtype=dtype,
+                use_ome_structure=bool(args.use_ome_structure),
+                use_v2_encoding=use_v2_encoding,
+                axes_order=axes_order,
+                check_exists=False,
+                create_metadata=True  # CRITICAL: Create metadata to prevent race conditions
             )
     elif args.task == "n5_to_zarr3_s0":
         # For N5 conversion, pre-create metadata and directories if F-order or sharding is enabled
@@ -730,28 +756,22 @@ def submit_job(args, use_v2_encoding=True):
                 print(f"Warning: Could not extract axes from N5: {e}")
                 print("Using default axes order: ['z', 'y', 'x']")
 
-            # Pre-create shard directories
-            precreate_shard_directories_universal(
+            # Use UNIFIED function to create both directories AND metadata
+            # (replaces the two separate calls above)
+            from tensorswitch.utils import precreate_zarr3_output
+
+            precreate_zarr3_output(
                 output_path=args.output_path,
                 level=args.level,
                 output_shape=list(volume_shape),
                 shard_shape=shard_shape,
-                use_ome_structure=bool(args.use_ome_structure)
-            )
-
-            # Pre-create zarr.json metadata (PRIMARY PROTECTION - happens ONCE before workers)
-            precreate_zarr3_metadata_safely(
-                output_path=args.output_path,
-                level=args.level,
-                shape=volume_shape,
-                dtype=n5_dtype,
-                use_shard=True,
-                shard_shape=shard_shape,
                 chunk_shape=chunk_shape,
+                dtype=n5_dtype,
                 use_ome_structure=bool(args.use_ome_structure),
-                use_fortran_order=bool(args.use_fortran_order),
                 use_v2_encoding=use_v2_encoding,
-                axes_order=axes_order
+                axes_order=axes_order,
+                check_exists=False,
+                create_metadata=True
             )
 
     # LSF bsub submission (multi-job mode)
@@ -858,40 +878,16 @@ def submit_job(args, use_v2_encoding=True):
 
             assigned_shards = all_shard_coords[start_shard_idx:end_shard_idx]
 
-            # Calculate chunk ranges for all assigned shards
+            # Calculate chunk ranges for all assigned shards using N-D utility function
             chunk_indices = []
             for shard_coord in assigned_shards:
-                # Calculate chunk range within this N-D shard
-                # Each shard contains: chunks_per_shard_dim[i] chunks in dimension i
-                chunks_per_shard_dim = [
-                    shard_shape[j] // chunk_shape[j]
-                    for j in range(len(shard_shape))
-                ]
-
-                # Base chunk coordinate for this shard
-                base_chunk_coord = [
-                    shard_coord[j] * chunks_per_shard_dim[j]
-                    for j in range(len(shard_coord))
-                ]
-
-                # Generate all chunk coordinates within this shard using N-D iteration
-                for chunk_offset in itertools.product(*[range(dim) for dim in chunks_per_shard_dim]):
-                    chunk_coord = [
-                        base_chunk_coord[i] + chunk_offset[i]
-                        for i in range(len(base_chunk_coord))
-                    ]
-
-                    # Skip if chunk is outside data bounds
-                    if any(chunk_coord[i] >= chunk_grid[i] for i in range(len(chunk_coord))):
-                        continue
-
-                    # Convert N-D chunk coordinate to linear index
-                    linear_idx = 0
-                    stride = 1
-                    for i in range(len(chunk_coord) - 1, -1, -1):
-                        linear_idx += chunk_coord[i] * stride
-                        stride *= chunk_grid[i]
-                    chunk_indices.append(linear_idx)
+                shard_chunk_indices = get_chunk_linear_indices_in_shard(
+                    shard_coord=shard_coord,
+                    shard_shape=shard_shape,
+                    chunk_shape=chunk_shape,
+                    chunk_grid=chunk_grid
+                )
+                chunk_indices.extend(shard_chunk_indices)
 
             # Calculate shard-level indices for this worker (for batched submission)
             # start_shard_idx and end_shard_idx are already the shard indices we need
