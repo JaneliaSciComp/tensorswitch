@@ -560,13 +560,15 @@ def submit_job(args, use_v2_encoding=True):
             factors = [2, 2, 2]
 
         # Apply downsampling factors to calculate output shape
+        # IMPORTANT: Use ceiling division to match TensorStore's downsample driver
+        # TensorStore uses: (s + f - 1) // f  (not s // f)
         if len(source_shape) == 3:  # ZYX
-            volume_shape = tuple(s // f for s, f in zip(source_shape, factors))
+            volume_shape = tuple((s + f - 1) // f for s, f in zip(source_shape, factors))
         elif len(source_shape) == 4:  # CZYX - don't downsample channel dimension
             # If factors include channel dimension (length 4), skip first factor
             # Otherwise use factors as-is (assumed to be spatial only)
             spatial_factors = factors[1:] if len(factors) == 4 else factors
-            volume_shape = (source_shape[0],) + tuple(s // f for s, f in zip(source_shape[1:], spatial_factors))
+            volume_shape = (source_shape[0],) + tuple((s + f - 1) // f for s, f in zip(source_shape[1:], spatial_factors))
         else:
             volume_shape = source_shape  # Fallback
 
