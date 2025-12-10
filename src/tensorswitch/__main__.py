@@ -563,7 +563,10 @@ def submit_job(args, use_v2_encoding=True):
         if len(source_shape) == 3:  # ZYX
             volume_shape = tuple(s // f for s, f in zip(source_shape, factors))
         elif len(source_shape) == 4:  # CZYX - don't downsample channel dimension
-            volume_shape = (source_shape[0],) + tuple(s // f for s, f in zip(source_shape[1:], factors))
+            # If factors include channel dimension (length 4), skip first factor
+            # Otherwise use factors as-is (assumed to be spatial only)
+            spatial_factors = factors[1:] if len(factors) == 4 else factors
+            volume_shape = (source_shape[0],) + tuple(s // f for s, f in zip(source_shape[1:], spatial_factors))
         else:
             volume_shape = source_shape  # Fallback
 
