@@ -27,8 +27,8 @@ def convert(base_path, output_path, number, level, start_idx=0, stop_idx=None, m
 
     # Read from original (local/HTTP/GCS/S3) chunk shape but write in specific output chunk shape
     shape, chunk_shape = n5_store.shape, n5_store.chunk_layout.read_chunk.shape
-    # Use custom chunk shape if provided, otherwise default to [64, 64, 64]
-    output_chunk_shape = custom_chunk_shape if custom_chunk_shape else [64, 64, 64]
+    # Use custom chunk shape if provided, otherwise default to [128, 128, 128]
+    output_chunk_shape = custom_chunk_shape if custom_chunk_shape else [128, 128, 128]
     print(f"Output chunk shape: {output_chunk_shape}")
 
     # Try to read source attributes.json to preserve metadata like downsamplingFactors
