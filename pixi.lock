@@ -331,7 +331,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/linux-64/zlib-ng-2.2.4-h7955e40_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/zstd-1.5.7-hb8e6e7a_2.conda
       - pypi: https://files.pythonhosted.org/packages/3a/cb/28ce52eb94390dda42599c98ea0204d74799e4d8047a0eb559b6fd648056/ml_dtypes-0.5.4-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
-      - pypi: git+https://github.com/ome-zarr-models/ome-zarr-models-py.git#1ee2c91f1128e2b573e2ad2222ac21b0f4c9f3d3
+      - pypi: git+https://github.com/ome-zarr-models/ome-zarr-models-py.git#e91be2abb83085e0f02939d82081ddf108ffdf08
       - pypi: https://files.pythonhosted.org/packages/1b/6d/1cdd70b6ab7bc2879b08521bf688a86b1ea4a29521da2ea2c2e613d5508e/pydantic_zarr-0.8.2-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/87/4a/60e234147570e21bbab4ac70ab79dd794a5ef9a4945d36c34c1914a73205/tensorstore-0.1.79-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
       - pypi: ./
@@ -687,7 +687,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/linux-64/zlib-ng-2.2.4-h7955e40_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/zstd-1.5.7-hb8e6e7a_2.conda
       - pypi: https://files.pythonhosted.org/packages/3a/cb/28ce52eb94390dda42599c98ea0204d74799e4d8047a0eb559b6fd648056/ml_dtypes-0.5.4-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
-      - pypi: git+https://github.com/ome-zarr-models/ome-zarr-models-py.git#1ee2c91f1128e2b573e2ad2222ac21b0f4c9f3d3
+      - pypi: git+https://github.com/ome-zarr-models/ome-zarr-models-py.git#e91be2abb83085e0f02939d82081ddf108ffdf08
       - pypi: https://files.pythonhosted.org/packages/1b/6d/1cdd70b6ab7bc2879b08521bf688a86b1ea4a29521da2ea2c2e613d5508e/pydantic_zarr-0.8.2-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/87/4a/60e234147570e21bbab4ac70ab79dd794a5ef9a4945d36c34c1914a73205/tensorstore-0.1.79-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
       - pypi: ./
@@ -4533,9 +4533,9 @@ packages:
   - pkg:pypi/ome-types?source=hash-mapping
   size: 131554
   timestamp: 1740747270805
-- pypi: git+https://github.com/ome-zarr-models/ome-zarr-models-py.git#1ee2c91f1128e2b573e2ad2222ac21b0f4c9f3d3
+- pypi: git+https://github.com/ome-zarr-models/ome-zarr-models-py.git#e91be2abb83085e0f02939d82081ddf108ffdf08
   name: ome-zarr-models
-  version: 1.4.dev6+g1ee2c91f1
+  version: 1.4.dev7+ge91be2abb
   requires_dist:
   - pydantic-zarr>=0.8.2
   - pydantic>=2.11.5
