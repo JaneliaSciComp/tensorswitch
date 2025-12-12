@@ -31,6 +31,28 @@ This package provides a unified entry point for managing N5/Zarr dataset convers
 - **OME-NGFF v0.4/v0.5 Compliant**: Full specification compliance for WebKnossos and Neuroglancer
 
 ### Performance & Optimization (Recent Updates)
+
+#### Dual Job Submission Modes (All Tasks)
+- **Multi-Job Mode (LSF)**: Distribute work across multiple cluster jobs
+  - Use `--submit` flag for cluster submission
+  - Optimal for large datasets (>50 GB)
+  - Available for all conversion and downsampling tasks
+- **Single-Job Mode**: Run on single job with Dask parallelization
+  - Use `--use_single_job` flag
+  - Better for small-medium datasets (<50 GB)
+  - Available for all conversion and downsampling tasks
+  - Single log file for easier debugging
+
+#### Phase 1 Complete: Multi-Resolution Pyramid Downsampling (December 2025)
+- **Downsampling Verified**: Multi-job and single-job modes produce identical output
+  - Tested on 1.5TB dataset with 9-level pyramid (s0-s9)
+  - All metadata byte-for-byte identical between modes
+  - Voxel sizes accurate to nanometer precision
+  - Performance: Multi-job 3x faster (7 min vs 20 min) for this test case
+- **Downsampling Bug Fixes Applied**:
+  - Fixed 4D anisotropic factor handling for CZYX data
+  - Fixed ceiling division to match TensorStore behavior
+  - Fixed metadata update crash with incomplete downsampling factors
 - **Auto-Multiscale Pyramid Generation**: Automatic multi-resolution pyramid with smart stopping conditions
   - Uses Yurii Zubov's anisotropic downsampling algorithm (Janelia CellMap Team)
   - Supports both Zarr2 and Zarr3 formats
@@ -40,13 +62,16 @@ This package provides a unified entry point for managing N5/Zarr dataset convers
   - Dimension-aware detection (3D/4D/5D arrays)
   - Automatic recommendations (e.g., "1,2,2" for 2.5× anisotropy)
   - Yurii Zubov's algorithm: maintains voxel aspect ratio within 0.5-2.0× range
-- **Automatic Worker Calculation**: Optimal cluster distribution (~3 shards/worker, 1-50 workers)
+- **Automatic Worker Calculation**: Optimal cluster distribution using dimensional analysis
+  - Smart shard grid calculation with ceiling division
+  - Optimal 1-50 workers based on dataset size
+  - Implemented in Phase 0.5 (December 2025)
 - **WebKnossos Defaults**: Optimal [32,32,32] chunks and [1024,1024,1024] shards
 - **Fortran Order Support**: Transpose codec `[2,1,0]` for optimal WebKnossos access (ND2/IMS/N5)
   - **Axes Extraction from Source** (Jan 2025): Auto-detects axes from N5/source metadata (preserves [x,y,z] coordinate space)
   - **Zarr3 Codec Compliance** (Jan 2025): Transpose codec at array level (before sharding), not in inner codecs
   - **Axes Preservation**: Maintains consistent axes throughout downsampling pyramid
-- **Shard Pre-creation**: Race-condition-free inline directory pre-creation
+- **Shard Pre-creation**: Race-condition-free inline directory pre-creation with correct dimensions
 - **3D Shard Distribution**: Coordinate-based job distribution (no overlap, all shards covered)
 - **Optimized N5 Compression**: Native zstd with blosc fallback
 
