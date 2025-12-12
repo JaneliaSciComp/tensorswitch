@@ -1503,6 +1503,12 @@ def update_ome_multiscale_metadata(zarr_path, max_level=4):
     # Check if downsampling factors are available in custom metadata (PREFERRED METHOD)
     downsampling_factors = metadata.get("attributes", {}).get("custom", {}).get("downsampling_factors", None)
 
+    # Always read s0 shape - needed as fallback even if downsampling_factors exist but are incomplete
+    s0_metadata_path = os.path.join(zarr_path, "s0", "zarr.json")
+    with open(s0_metadata_path, 'r') as f:
+        s0_meta = json.load(f)
+    s0_shape = s0_meta.get('shape')
+
     if downsampling_factors:
         print("✓ Using downsampling factors from custom metadata (precise method)")
         use_factors = True
@@ -1510,11 +1516,6 @@ def update_ome_multiscale_metadata(zarr_path, max_level=4):
     else:
         print("⚠ No downsampling factors found - using dimension ratio method (may have rounding imprecision)")
         use_factors = False
-        # Read s0 shape for fallback method
-        s0_metadata_path = os.path.join(zarr_path, "s0", "zarr.json")
-        with open(s0_metadata_path, 'r') as f:
-            s0_meta = json.load(f)
-        s0_shape = s0_meta.get('shape')
 
     # Build datasets for all levels with multiscale paths
     datasets = []
