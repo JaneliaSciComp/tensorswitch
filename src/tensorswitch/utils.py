@@ -1485,8 +1485,11 @@ def write_zarr3_group_metadata(output_path, metadata):
 def update_ome_multiscale_metadata(zarr_path, max_level=4):
     """Update OME-ZARR metadata to include all multiscale levels s0 through max_level.
 
-    Uses downsampling factors from custom metadata if available (precise method),
-    otherwise falls back to calculating from dimension ratios (backward compatible).
+    Two methods to calculate voxel sizes:
+    1. INCREMENTAL: Uses stored downsampling_factors from custom metadata (cleaner numbers)
+    2. RATIO: Calculates from actual dimensions s0_shape/sN_shape (more accurate for TensorStore)
+
+    Falls back to ratio method if downsampling_factors missing/incomplete (always reliable).
     """
     import numpy as np
 
@@ -1500,21 +1503,24 @@ def update_ome_multiscale_metadata(zarr_path, max_level=4):
     multiscales = metadata["attributes"]["ome"]["multiscales"][0]
     s0_scale_factors = multiscales["datasets"][0]["coordinateTransformations"][0]["scale"]
 
-    # Check if downsampling factors are available in custom metadata (PREFERRED METHOD)
+    # Check if downsampling factors are available in custom metadata (INCREMENTAL METHOD)
+    # This gives cleaner voxel size numbers (e.g., 0.232 instead of 0.23198684...)
+    # but may be incomplete due to race conditions during writing.
     downsampling_factors = metadata.get("attributes", {}).get("custom", {}).get("downsampling_factors", None)
 
-    # Always read s0 shape - needed as fallback even if downsampling_factors exist but are incomplete
+    # Always read s0 shape - needed for RATIO METHOD fallback
+    # Ratio method is more accurate for TensorStore's ceiling division, calculates from actual dimensions.
     s0_metadata_path = os.path.join(zarr_path, "s0", "zarr.json")
     with open(s0_metadata_path, 'r') as f:
         s0_meta = json.load(f)
     s0_shape = s0_meta.get('shape')
 
     if downsampling_factors:
-        print("✓ Using downsampling factors from custom metadata (precise method)")
+        print("✓ Using downsampling factors from custom metadata (incremental method - cleaner numbers)")
         use_factors = True
         previous_scale = s0_scale_factors
     else:
-        print("⚠ No downsampling factors found - using dimension ratio method (may have rounding imprecision)")
+        print("⚠ No downsampling factors found - using dimension ratio method (more accurate for TensorStore)")
         use_factors = False
 
     # Build datasets for all levels with multiscale paths
@@ -1532,25 +1538,28 @@ def update_ome_multiscale_metadata(zarr_path, max_level=4):
             current_scale = s0_scale_factors
         else:
             if use_factors:
-                # METHOD 1 (PREFERRED): Use exact downsampling factors from metadata
+                # METHOD 1 (INCREMENTAL): Multiply previous level by stored downsampling factors
+                # Gives cleaner numbers: 0.116 → 0.232 → 0.464 → 0.928 (exact multiples)
                 level_factors = downsampling_factors.get(f"s{level}")
                 if not level_factors:
                     print(f"Warning: No factors for s{level}, falling back to ratio method for remaining levels")
                     use_factors = False
                 else:
-                    # Multiply parent voxel size by downsampling factors
-                    # Example: s2 [0.04, 0.04, 0.05] * factors [2,2,2] = s3 [0.08, 0.08, 0.1]
+                    # Example: s1_voxel = s0_voxel * [1,1,2,2] = [1.0, 1.0, 0.232, 0.232]
                     current_scale = [previous_scale[i] * level_factors[i] for i in range(len(previous_scale))]
                     voxel_nm = [s * 1000 for s in current_scale]
                     print(f"  s{level}: factors={level_factors} → voxel_size={voxel_nm} nm")
 
             if not use_factors:
-                # METHOD 2 (FALLBACK): Calculate from dimension ratios (backward compatible)
+                # METHOD 2 (RATIO): Calculate from actual dimensions (more accurate)
+                # Uses cumulative ratio from s0 to account for TensorStore's ceiling division
+                # Example: 17635→8818→4409→2205 (not exact /2 due to rounding up)
                 with open(level_metadata_path, 'r') as f:
                     level_meta = json.load(f)
                 level_shape = level_meta.get('shape')
 
-                # Calculate cumulative factor from s0 to current level
+                # Calculate cumulative ratio: s3_voxel = s0_voxel * (s0_dim / s3_dim)
+                # This reflects actual data dimensions, giving 0.23198684... instead of 0.232
                 factors = [s0_shape[i] / level_shape[i] for i in range(len(s0_shape))]
                 current_scale = [s0_scale_factors[i] * factors[i] for i in range(len(s0_scale_factors))]
                 voxel_nm = [s * 1000 for s in current_scale]
