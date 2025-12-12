@@ -1298,8 +1298,18 @@ def main():
 
             downsample_shard_zarr3.process(args.base_path, args.output_path, args.level, args.start_idx, args.stop_idx, bool(args.downsample), bool(args.use_shard), args.memory_limit, custom_shard_shape, custom_chunk_shape, anisotropic_factors, shard_coord=shard_coord_list, use_fortran_order=bool(args.use_fortran_order))
 
-            # Store downsampling factors in metadata if this is the first worker (shard [0,0,0])
-            # This enables precise voxel size calculation in update_ome_metadata_if_needed
+            # OPTIONAL: Store downsampling factors for "cleaner" voxel sizes
+            #
+            # Two methods to calculate voxel sizes:
+            # 1. INCREMENTAL (using these factors): s1_voxel = s0_voxel * [1,1,2,2] → gives clean 0.232
+            # 2. RATIO (from dimensions): s1_voxel = s0_voxel * (s0_dim/s1_dim) → gives precise 0.23198684...
+            #
+            # Trade-off: Incremental gives cleaner numbers, but ratio is more accurate for TensorStore's
+            # ceiling division (17635/2 = 8818, not 8817.5). Difference is tiny (~0.26 nanometers).
+            #
+            # NOTE: This writing is UNRELIABLE due to race conditions (workers may fail to write).
+            # Metadata update in utils.py always has ratio fallback, so this is optional.
+            # Kept for backward compatibility with datasets that have this metadata.
             if shard_coord_list is None or shard_coord_list == [0, 0, 0]:
                 if anisotropic_factors:
                     try:
