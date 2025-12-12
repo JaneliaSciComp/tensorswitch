@@ -1310,31 +1310,34 @@ def main():
             # NOTE: This writing is UNRELIABLE due to race conditions (workers may fail to write).
             # Metadata update in utils.py always has ratio fallback, so this is optional.
             # Kept for backward compatibility with datasets that have this metadata.
-            if shard_coord_list is None or shard_coord_list == [0, 0, 0]:
-                if anisotropic_factors:
-                    try:
-                        import json
-                        zarr_json_path = os.path.join(args.output_path, "zarr.json")
-                        if os.path.exists(zarr_json_path):
-                            with open(zarr_json_path, 'r') as f:
-                                metadata = json.load(f)
-
-                            # Initialize custom metadata if not present
-                            if "custom" not in metadata.get("attributes", {}):
-                                metadata["attributes"]["custom"] = {}
-                            if "downsampling_factors" not in metadata["attributes"]["custom"]:
-                                metadata["attributes"]["custom"]["downsampling_factors"] = {}
-
-                            # Store factors for this level
-                            metadata["attributes"]["custom"]["downsampling_factors"][f"s{args.level}"] = anisotropic_factors
-
-                            # Write back
-                            with open(zarr_json_path, 'w') as f:
-                                json.dump(metadata, f, indent=2)
-
-                            print(f"✓ Stored downsampling factors for s{args.level}: {anisotropic_factors}")
-                    except Exception as e:
-                        print(f"Warning: Could not store downsampling factors: {e}")
+            #
+            # DISABLED: Commented out to ensure multi-job produces identical output to single-job mode
+            # (both use ratio method only, no custom section). Uncomment if you need cleaner voxel numbers.
+            # if shard_coord_list is None or shard_coord_list == [0, 0, 0]:
+            #     if anisotropic_factors:
+            #         try:
+            #             import json
+            #             zarr_json_path = os.path.join(args.output_path, "zarr.json")
+            #             if os.path.exists(zarr_json_path):
+            #                 with open(zarr_json_path, 'r') as f:
+            #                     metadata = json.load(f)
+            #
+            #                 # Initialize custom metadata if not present
+            #                 if "custom" not in metadata.get("attributes", {}):
+            #                     metadata["attributes"]["custom"] = {}
+            #                 if "downsampling_factors" not in metadata["attributes"]["custom"]:
+            #                     metadata["attributes"]["custom"]["downsampling_factors"] = {}
+            #
+            #                 # Store factors for this level
+            #                 metadata["attributes"]["custom"]["downsampling_factors"][f"s{args.level}"] = anisotropic_factors
+            #
+            #                 # Write back
+            #                 with open(zarr_json_path, 'w') as f:
+            #                     json.dump(metadata, f, indent=2)
+            #
+            #                 print(f"✓ Stored downsampling factors for s{args.level}: {anisotropic_factors}")
+            #         except Exception as e:
+            #             print(f"Warning: Could not store downsampling factors: {e}")
         elif args.task == "tiff_to_zarr3_s0":
             tiff_to_zarr3_s0.process(args.base_path, args.output_path, bool(args.use_shard), args.memory_limit, args.start_idx, args.stop_idx, bool(args.use_ome_structure), custom_shard_shape, custom_chunk_shape, create_dual_metadata, use_v2_encoding, use_fortran_order=bool(args.use_fortran_order))
         elif args.task == "nd2_to_zarr3_s0":
