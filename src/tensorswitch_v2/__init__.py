@@ -29,7 +29,7 @@ Development Status:
 For detailed architecture, see: phase5UnifiedIntermediateFormat.md
 """
 
-__version__ = '2.0.0-alpha'
+__version__ = 'Phase 5 Development'
 __author__ = 'Diyi Chen'
 
 # Public API will be exported here as components are built
