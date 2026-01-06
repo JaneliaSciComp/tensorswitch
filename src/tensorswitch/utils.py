@@ -3620,3 +3620,359 @@ def generate_auto_multiscale(output_path, min_dimension=256, use_shard=True, mem
     print("="*80 + "\n")
 
 
+# ============================================================================
+# OME-NGFF Labels Support Functions
+# ============================================================================
+
+def create_labels_group_metadata_v3(label_names):
+    """
+    Create Zarr3 metadata for the labels group.
+
+    Args:
+        label_names: List of label image names (e.g., ["segmentation", "soma_focused"])
+
+    Returns:
+        dict: Labels group metadata for zarr.json
+
+    Example output:
+        {
+          "attributes": {
+            "ome": {
+              "labels": ["segmentation", "soma_focused"]
+            }
+          }
+        }
+    """
+    return {
+        "attributes": {
+            "ome": {
+                "labels": label_names
+            }
+        }
+    }
+
+
+def create_labels_group_metadata_v2(label_names):
+    """
+    Create Zarr2 metadata for the labels group.
+
+    Args:
+        label_names: List of label image names (e.g., ["segmentation", "soma_focused"])
+
+    Returns:
+        dict: Labels group metadata for .zattrs
+
+    Example output:
+        {
+          "labels": ["segmentation", "soma_focused"]
+        }
+    """
+    return {
+        "labels": label_names
+    }
+
+
+def generate_default_label_colors(num_labels, alpha=255):
+    """
+    Generate distinct colors for label values using golden ratio.
+
+    Args:
+        num_labels: Number of unique label values (excluding 0/background)
+        alpha: Alpha value (0-255, default: 255 for opaque)
+
+    Returns:
+        list: List of dicts with label-value and rgba
+
+    Example:
+        [
+            {"label-value": 1, "rgba": [174, 25, 242, 255]},
+            {"label-value": 2, "rgba": [111, 206, 59, 255]},
+            ...
+        ]
+    """
+    import colorsys
+
+    colors = []
+    for i in range(1, num_labels + 1):
+        # Generate distinct hues using golden ratio (0.618...)
+        # This distributes colors evenly around the color wheel
+        hue = (i * 0.618033988749895) % 1.0
+        saturation = 0.7
+        value = 0.9
+
+        # Convert HSV to RGB
+        rgb = colorsys.hsv_to_rgb(hue, saturation, value)
+        rgba = [int(rgb[0] * 255), int(rgb[1] * 255), int(rgb[2] * 255), alpha]
+
+        colors.append({
+            "label-value": i,
+            "rgba": rgba
+        })
+
+    return colors
+
+
+def create_label_image_metadata_v3(multiscales, label_colors=None, label_properties=None, source_path="../../", ngff_version="0.5"):
+    """
+    Create Zarr3 metadata for a label image with image-label object.
+
+    Args:
+        multiscales: The multiscales metadata dict (same structure as image)
+        label_colors: List of dicts with label-value and rgba, e.g.:
+                     [{"label-value": 1, "rgba": [174, 25, 242, 255]},
+                      {"label-value": 2, "rgba": [111, 206, 59, 255]}]
+        label_properties: Optional list of dicts with label-value and properties, e.g.:
+                         [{"label-value": 1, "class": "neuron", "area": 1200}]
+        source_path: Relative path to parent image (default: "../../")
+        ngff_version: OME-NGFF version (default: "0.5" for Zarr3)
+
+    Returns:
+        dict: Complete label image metadata for zarr.json
+
+    Example output:
+        {
+          "attributes": {
+            "ome": {
+              "multiscales": [{...}],
+              "image-label": {
+                "colors": [...],
+                "properties": [...],
+                "source": {"image": "../../"},
+                "version": "0.5"
+              }
+            }
+          }
+        }
+    """
+    # Build image-label object
+    image_label = {
+        "source": {
+            "image": source_path
+        },
+        "version": ngff_version
+    }
+
+    # Add colors if provided
+    if label_colors:
+        image_label["colors"] = label_colors
+
+    # Add properties if provided
+    if label_properties:
+        image_label["properties"] = label_properties
+
+    # Combine multiscales and image-label
+    return {
+        "attributes": {
+            "ome": {
+                "version": ngff_version,
+                "multiscales": [multiscales],
+                "image-label": image_label
+            }
+        }
+    }
+
+
+def create_label_image_metadata_v2(multiscales, label_colors=None, label_properties=None, source_path="../../", ngff_version="0.4"):
+    """
+    Create Zarr2 metadata for a label image with image-label object.
+
+    Args:
+        multiscales: The multiscales metadata dict (same structure as image)
+        label_colors: List of dicts with label-value and rgba
+        label_properties: Optional list of dicts with label-value and properties
+        source_path: Relative path to parent image (default: "../../")
+        ngff_version: OME-NGFF version (default: "0.4" for Zarr2)
+
+    Returns:
+        dict: Complete label image metadata for .zattrs
+
+    Example output:
+        {
+          "multiscales": [{...}],
+          "image-label": {
+            "colors": [...],
+            "properties": [...],
+            "source": {"image": "../../"},
+            "version": "0.4"
+          }
+        }
+    """
+    # Build image-label object
+    image_label = {
+        "source": {
+            "image": source_path
+        },
+        "version": ngff_version
+    }
+
+    # Add colors if provided
+    if label_colors:
+        image_label["colors"] = label_colors
+
+    # Add properties if provided
+    if label_properties:
+        image_label["properties"] = label_properties
+
+    # Combine multiscales and image-label (flat structure for Zarr2)
+    return {
+        "multiscales": [multiscales],
+        "image-label": image_label
+    }
+
+
+def add_labels_to_zarr(
+    image_zarr_path,
+    label_data_paths,
+    label_names=None,
+    label_colors=None,
+    copy_mode='symlink'
+):
+    """
+    Add labels to an existing Zarr image dataset following OME-NGFF spec.
+
+    This function:
+    1. Creates a 'labels' group in the image zarr
+    2. Links or copies label data into the labels group
+    3. Generates proper OME-NGFF metadata for labels
+
+    Args:
+        image_zarr_path: Path to the image zarr dataset
+        label_data_paths: List of paths to label zarr datasets (or single path string)
+        label_names: List of names for the labels (default: derived from paths)
+        label_colors: Dict mapping label_name to list of color dicts (optional)
+                     e.g., {"segmentation": [{"label-value": 1, "rgba": [255,0,0,255]}]}
+        copy_mode: 'symlink' (default), 'copy', or 'hardlink'
+
+    Returns:
+        None
+
+    Example usage:
+        add_labels_to_zarr(
+            image_zarr_path='/path/to/image.zarr',
+            label_data_paths=['/path/to/segmentation.zarr'],
+            label_names=['segmentation'],
+            copy_mode='symlink'
+        )
+    """
+    import shutil
+
+    # Normalize inputs
+    if isinstance(label_data_paths, str):
+        label_data_paths = [label_data_paths]
+
+    if label_names is None:
+        # Derive names from paths
+        label_names = [os.path.basename(p).replace('.zarr', '') for p in label_data_paths]
+
+    if len(label_names) != len(label_data_paths):
+        raise ValueError(f"label_names ({len(label_names)}) and label_data_paths ({len(label_data_paths)}) must have same length")
+
+    # Detect zarr version from image
+    zarr_version = None
+    if os.path.exists(os.path.join(image_zarr_path, 'zarr.json')):
+        zarr_version = 'v3'
+        print(f"Detected Zarr v3 format")
+    elif os.path.exists(os.path.join(image_zarr_path, '.zattrs')):
+        zarr_version = 'v2'
+        print(f"Detected Zarr v2 format")
+    else:
+        raise ValueError(f"Cannot detect zarr version for {image_zarr_path}")
+
+    # Create labels directory
+    labels_dir = os.path.join(image_zarr_path, 'labels')
+    os.makedirs(labels_dir, exist_ok=True)
+    print(f"Created labels directory: {labels_dir}")
+
+    # Create labels group metadata
+    if zarr_version == 'v3':
+        labels_group_metadata = create_labels_group_metadata_v3(label_names)
+        labels_metadata_path = os.path.join(labels_dir, 'zarr.json')
+    else:  # v2
+        labels_group_metadata = create_labels_group_metadata_v2(label_names)
+        labels_metadata_path = os.path.join(labels_dir, '.zattrs')
+        # Also create .zgroup for zarr v2
+        zgroup_path = os.path.join(labels_dir, '.zgroup')
+        with open(zgroup_path, 'w') as f:
+            json.dump({"zarr_format": 2}, f, indent=2)
+        print(f"✓ Created .zgroup: {zgroup_path}")
+
+    # Write labels group metadata
+    with open(labels_metadata_path, 'w') as f:
+        json.dump(labels_group_metadata, f, indent=2)
+    print(f"✓ Created labels group metadata: {labels_metadata_path}")
+
+    # Process each label
+    for label_name, label_path in zip(label_names, label_data_paths):
+        print(f"\nProcessing label: {label_name}")
+        label_dest = os.path.join(labels_dir, label_name)
+
+        # Link or copy label data
+        if copy_mode == 'symlink':
+            if os.path.exists(label_dest) or os.path.islink(label_dest):
+                os.remove(label_dest)
+            os.symlink(os.path.abspath(label_path), label_dest)
+            print(f"  ✓ Symlinked: {label_path} -> {label_dest}")
+        elif copy_mode == 'copy':
+            if os.path.exists(label_dest):
+                shutil.rmtree(label_dest)
+            shutil.copytree(label_path, label_dest)
+            print(f"  ✓ Copied: {label_path} -> {label_dest}")
+        else:
+            raise ValueError(f"Invalid copy_mode: {copy_mode}. Use 'symlink' or 'copy'")
+
+        # Read existing label metadata to update it
+        if zarr_version == 'v3':
+            label_metadata_path = os.path.join(label_dest, 'zarr.json')
+        else:
+            label_metadata_path = os.path.join(label_dest, '.zattrs')
+
+        if not os.path.exists(label_metadata_path):
+            print(f"  ⚠ Warning: No metadata found at {label_metadata_path}, skipping metadata update")
+            continue
+
+        with open(label_metadata_path, 'r') as f:
+            label_metadata = json.load(f)
+
+        # Extract multiscales
+        if zarr_version == 'v3':
+            multiscales = label_metadata.get('attributes', {}).get('ome', {}).get('multiscales', [{}])[0]
+        else:
+            multiscales = label_metadata.get('multiscales', [{}])[0]
+
+        # Get or generate colors
+        if label_colors and label_name in label_colors:
+            colors = label_colors[label_name]
+            print(f"  Using provided colors ({len(colors)} labels)")
+        else:
+            # Auto-generate default colors
+            colors = generate_default_label_colors(10)  # Default to 10 colors
+            print(f"  Generated default colors (10 labels)")
+
+        # Create updated label metadata with image-label object
+        if zarr_version == 'v3':
+            updated_metadata = create_label_image_metadata_v3(
+                multiscales=multiscales,
+                label_colors=colors,
+                source_path="../../",
+                ngff_version="0.5"
+            )
+        else:  # v2
+            updated_metadata = create_label_image_metadata_v2(
+                multiscales=multiscales,
+                label_colors=colors,
+                source_path="../../",
+                ngff_version="0.4"
+            )
+
+        # Write updated metadata
+        with open(label_metadata_path, 'w') as f:
+            json.dump(updated_metadata, f, indent=2)
+        print(f"  ✓ Updated metadata with image-label object: {label_metadata_path}")
+
+    print(f"\n{'='*80}")
+    print(f"✓ Successfully added {len(label_names)} label(s) to {image_zarr_path}")
+    print(f"  Labels: {', '.join(label_names)}")
+    print(f"  Format: Zarr {zarr_version}, NGFF {'0.5' if zarr_version == 'v3' else '0.4'}")
+    print(f"{'='*80}\n")
+
+

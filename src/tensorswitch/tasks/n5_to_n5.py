@@ -4,6 +4,9 @@ import time
 import psutil
 from ..utils import get_chunk_domains, n5_store_spec, create_output_store, commit_tasks, print_processing_info, fetch_http_json, fetch_remote_json, get_total_chunks_from_store, get_tensorstore_context
 
+# Set umask for team permissions
+os.umask(0o0002)
+
 def convert(base_path, output_path, number, level, start_idx=0, stop_idx=None, memory_limit=50, custom_chunk_shape=None, **kwargs):
     """Convert N5 to N5 format with optional custom chunk shape."""
     #n5_level_path = f"{base_path}/setup{number}/s{level}"
