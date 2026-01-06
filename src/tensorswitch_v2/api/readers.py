@@ -129,27 +129,28 @@ class Readers:
     # ========================================================================
 
     @staticmethod
-    def n5(path: str) -> BaseReader:
+    def n5(path: str, dataset_path: str = "") -> BaseReader:
         """
         Create N5 reader (Tier 1 - Native TensorStore).
 
         Args:
             path: Path to N5 dataset
+            dataset_path: Optional path to dataset within N5 (e.g., "s0" for scale 0)
 
         Returns:
             N5Reader instance
 
-        Example:
+        Example (single-scale):
             >>> reader = Readers.n5("/data.n5")
 
+        Example (multi-scale):
+            >>> reader = Readers.n5("/data.n5", dataset_path="s0")
+
         Implementation Status:
-            🚧 Week 3-4 (Phase 5.2 - Tier 1 Readers)
+            ✅ Complete (Week 3-4)
         """
-        raise NotImplementedError(
-            "N5Reader not yet implemented. "
-            "Will be added in Week 3-4 (Phase 5.2 - Tier 1 Readers). "
-            "See PLAN_phase5.md for timeline."
-        )
+        from ..readers.n5 import N5Reader
+        return N5Reader(path, dataset_path=dataset_path)
 
     @staticmethod
     def zarr3(path: str) -> BaseReader:
