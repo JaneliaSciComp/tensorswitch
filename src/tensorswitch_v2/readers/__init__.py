@@ -16,10 +16,12 @@ Tier Strategy:
 
 Public API:
     - BaseReader: Abstract base class for all readers
-    - N5Reader: Tier 1 - Native TensorStore N5 reader (Week 3-4)
+    - N5Reader: Tier 1 - Native TensorStore N5 reader
+    - PrecomputedReader: Tier 1 - Neuroglancer Precomputed reader
 """
 
 from .base import BaseReader
 from .n5 import N5Reader
+from .precomputed import PrecomputedReader
 
-__all__ = ['BaseReader', 'N5Reader']
+__all__ = ['BaseReader', 'N5Reader', 'PrecomputedReader']

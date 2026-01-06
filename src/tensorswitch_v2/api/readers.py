@@ -199,27 +199,26 @@ class Readers:
         )
 
     @staticmethod
-    def precomputed(path: str) -> BaseReader:
+    def precomputed(path: str, scale_index: int = 0) -> BaseReader:
         """
         Create Neuroglancer Precomputed reader (Tier 1 - Native TensorStore).
 
         Args:
             path: Path or URL to Precomputed dataset
+            scale_index: Which resolution level to read (0 = highest resolution)
 
         Returns:
             PrecomputedReader instance
 
         Example:
             >>> reader = Readers.precomputed("precomputed://gs://bucket/data")
+            >>> reader = Readers.precomputed("precomputed://gs://bucket/data", scale_index=1)
 
         Implementation Status:
-            🚧 Week 3-4 (Phase 5.2 - Tier 1 Readers)
+            ✅ Complete (Week 3-4)
         """
-        raise NotImplementedError(
-            "PrecomputedReader not yet implemented. "
-            "Will be added in Week 3-4 (Phase 5.2 - Tier 1 Readers). "
-            "See PLAN_phase5.md for timeline."
-        )
+        from ..readers.precomputed import PrecomputedReader
+        return PrecomputedReader(path, scale_index=scale_index)
 
     # ========================================================================
     # Tier 2: Custom Optimized Readers (Week 5-6)
