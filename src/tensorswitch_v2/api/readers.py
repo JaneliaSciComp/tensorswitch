@@ -239,16 +239,13 @@ class Readers:
 
         Example:
             >>> reader = Readers.tiff("/data.tif")
+            >>> reader = Readers.tiff("/data/stack/")
 
         Implementation Status:
-            🚧 Week 5-6 (Phase 5.3 - Tier 2 Readers)
+            ✅ Complete
         """
-        raise NotImplementedError(
-            "TiffReader not yet implemented. "
-            "Will be added in Week 5-6 (Phase 5.3 - Tier 2 Readers). "
-            "Will reuse existing load_tiff_stack() from utils.py. "
-            "See PLAN_phase5.md for timeline."
-        )
+        from ..readers.tiff import TiffReader
+        return TiffReader(path)
 
     @staticmethod
     def nd2(path: str) -> BaseReader:

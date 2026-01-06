@@ -18,10 +18,12 @@ Public API:
     - BaseReader: Abstract base class for all readers
     - N5Reader: Tier 1 - Native TensorStore N5 reader
     - PrecomputedReader: Tier 1 - Neuroglancer Precomputed reader
+    - TiffReader: Tier 2 - Custom optimized TIFF reader
 """
 
 from .base import BaseReader
 from .n5 import N5Reader
 from .precomputed import PrecomputedReader
+from .tiff import TiffReader
 
-__all__ = ['BaseReader', 'N5Reader', 'PrecomputedReader']
+__all__ = ['BaseReader', 'N5Reader', 'PrecomputedReader', 'TiffReader']
