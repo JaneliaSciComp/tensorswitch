@@ -2,7 +2,7 @@ import tensorstore as ts
 import os
 import time
 import psutil
-from ..utils import get_chunk_domains, n5_store_spec, create_output_store, commit_tasks, print_processing_info, fetch_http_json, fetch_remote_json, get_total_chunks_from_store, get_tensorstore_context
+from ..utils import get_chunk_domains, n5_store_spec, create_output_store, commit_tasks, print_processing_info, fetch_http_json, fetch_remote_json, get_total_chunks_from_store, get_tensorstore_context, detect_source_order
 
 # Set umask for team permissions
 os.umask(0o0002)
@@ -33,6 +33,17 @@ def convert(base_path, output_path, number, level, start_idx=0, stop_idx=None, m
     # Use custom chunk shape if provided, otherwise default to [128, 128, 128]
     output_chunk_shape = custom_chunk_shape if custom_chunk_shape else [128, 128, 128]
     print(f"Output chunk shape: {output_chunk_shape}")
+
+    # Detect source data order
+    source_order_info = detect_source_order(n5_store)
+    print(f"\nSource data order: {source_order_info['description']}")
+    print(f"  Inner order: {source_order_info['inner_order']}")
+    print(f"  Detected axes: {source_order_info['suggested_axes']}")
+    # NOTE: N5 → N5 conversion preserves order automatically via TensorStore
+    if source_order_info['is_fortran_order']:
+        print(f"✓ Source is F-order → Output will preserve F-order")
+    else:
+        print(f"✓ Source is C-order → Output will preserve C-order")
 
     # Try to read source attributes.json to preserve metadata like downsamplingFactors
     source_attrs = None

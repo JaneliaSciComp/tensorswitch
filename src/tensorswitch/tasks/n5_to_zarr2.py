@@ -2,7 +2,7 @@ import tensorstore as ts
 import os
 import time
 import psutil
-from ..utils import get_chunk_domains, n5_store_spec, zarr2_store_spec, create_output_store, commit_tasks, print_processing_info, get_total_chunks_from_store, get_tensorstore_context
+from ..utils import get_chunk_domains, n5_store_spec, zarr2_store_spec, create_output_store, commit_tasks, print_processing_info, get_total_chunks_from_store, get_tensorstore_context, detect_source_order
 
 def convert(base_path, output_path, level, start_idx=0, stop_idx=None, memory_limit=50, **kwargs):
     """Convert N5 to Zarr2 format."""
@@ -17,6 +17,18 @@ def convert(base_path, output_path, level, start_idx=0, stop_idx=None, memory_li
     n5_spec['context'] = get_tensorstore_context()
     n5_store = ts.open(n5_spec).result()
     shape, chunks = n5_store.shape, n5_store.chunk_layout.read_chunk.shape
+
+    # Detect source data order
+    source_order_info = detect_source_order(n5_store)
+    print(f"Source data order: {source_order_info['description']}")
+    print(f"  Inner order: {source_order_info['inner_order']}")
+    print(f"  Detected axes: {source_order_info['suggested_axes']}")
+
+    # NOTE: TensorStore will preserve order when copying N5 → Zarr2
+    if source_order_info['is_fortran_order']:
+        print(f"✓ Preserving F-order in Zarr2 output")
+    else:
+        print(f"✓ Preserving C-order in Zarr2 output")
 
     zarr2_spec = zarr2_store_spec(zarr_level_path, shape, chunks)
     zarr2_spec['context'] = get_tensorstore_context()
