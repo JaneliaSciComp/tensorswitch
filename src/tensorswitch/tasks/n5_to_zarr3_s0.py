@@ -6,7 +6,8 @@ import numpy as np
 from ..utils import (get_chunk_domains, n5_store_spec, zarr3_store_spec,
                     create_output_store, commit_tasks, get_total_chunks_from_store,
                     fetch_remote_json, create_zarr3_ome_metadata, write_zarr3_group_metadata,
-                    write_dual_zarr_metadata, detect_anisotropic_voxels, get_tensorstore_context)
+                    write_dual_zarr_metadata, detect_anisotropic_voxels, get_tensorstore_context,
+                    detect_source_order)
 
 def convert(base_path, output_path, level=0, start_idx=0, stop_idx=None,
            memory_limit=50, use_shard=True, use_ome_structure=True,
@@ -32,8 +33,14 @@ def convert(base_path, output_path, level=0, start_idx=0, stop_idx=None,
     dtype = str(n5_store.dtype.numpy_dtype)
     n5_chunk_shape = n5_store.chunk_layout.read_chunk.shape
 
+    # Detect source data order (F-order vs C-order) from N5
+    source_order_info = detect_source_order(n5_store)
+
     print(f"Shape: {shape}, dtype: {dtype}")
     print(f"N5 chunk shape: {n5_chunk_shape}")
+    print(f"Source data order: {source_order_info['description']}")
+    print(f"  Inner order: {source_order_info['inner_order']}")
+    print(f"  Detected axes: {source_order_info['suggested_axes']}")
 
     # Read N5 attributes from BOTH level and root directories
     source_attrs = None
@@ -75,7 +82,7 @@ def convert(base_path, output_path, level=0, start_idx=0, stop_idx=None,
     # Extract voxel sizes AND axes from N5 metadata
     voxel_sizes_um = None
     dataset_name = None
-    axes_order = None  # NEW: Extract axes from N5
+    axes_order = None  # Will be extracted from N5 metadata or detected from data order
 
     # Try to extract from multiscales metadata (BigStitcher-Spark style)
     # Look in root_attrs first (for axes), then source_attrs
@@ -91,7 +98,7 @@ def convert(base_path, output_path, level=0, start_idx=0, stop_idx=None,
             if level < len(datasets):
                 transform = datasets[level].get('transform', {})
                 voxel_sizes_nm = transform.get('scale', None)
-                axes_order = transform.get('axes', None)  # NEW: Extract axes
+                axes_order = transform.get('axes', None)  # Extract axes from metadata
 
                 if voxel_sizes_nm:
                     # Convert nm to micrometers
@@ -99,9 +106,14 @@ def convert(base_path, output_path, level=0, start_idx=0, stop_idx=None,
                     print(f"Voxel sizes (from N5 multiscales): {voxel_sizes_nm} nm = {voxel_sizes_um} µm")
 
                 if axes_order:
-                    print(f"Axes order (from N5 multiscales): {axes_order}")
+                    print(f"Axes order (from N5 multiscales metadata): {axes_order}")
         except Exception as e:
             print(f"Warning: Could not extract metadata from N5 multiscales: {e}")
+
+    # If no axes found in metadata, use detected axes from data order
+    if not axes_order:
+        axes_order = source_order_info['suggested_axes']
+        print(f"No axes in N5 metadata → using detected axes: {axes_order}")
 
     # Fallback: Try to extract from pixelResolution attribute
     if voxel_sizes_um is None and source_attrs and 'pixelResolution' in source_attrs:
@@ -142,8 +154,23 @@ def convert(base_path, output_path, level=0, start_idx=0, stop_idx=None,
     # Create Zarr3 output
     level_path = f"s{level}" if use_ome_structure else None
 
-    # Get use_fortran_order from kwargs (defaults to False)
-    use_fortran_order = kwargs.get('use_fortran_order', False)
+    # Determine final use_fortran_order based on:
+    # 1. User explicit override (if 'use_fortran_order' in kwargs)
+    # 2. Otherwise, preserve source order (auto-detect)
+    if 'use_fortran_order' in kwargs:
+        # User explicitly set use_fortran_order → respect it
+        use_fortran_order = kwargs.get('use_fortran_order', False)
+        if use_fortran_order:
+            print(f"✓ Using F-order output (user override)")
+        else:
+            print(f"✓ Using C-order output (user override)")
+    else:
+        # No user override → preserve source order (auto-detect)
+        use_fortran_order = source_order_info['is_fortran_order']
+        if use_fortran_order:
+            print(f"✓ Preserving F-order from source (auto-detected)")
+        else:
+            print(f"✓ Preserving C-order from source (auto-detected)")
 
     store_spec = zarr3_store_spec(
         path=output_path,

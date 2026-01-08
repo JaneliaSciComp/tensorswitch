@@ -428,6 +428,128 @@ def detect_anisotropic_voxels(voxel_sizes, array_shape, threshold=2.0):
 
     return anisotropy_ratio
 
+def detect_source_order(source_data):
+    """
+    Detect source data order (C-order vs F-order) from TensorStore object or numpy/dask array.
+
+    This function checks the data order to determine whether the source data is stored
+    in C-order (row-major) or F-order (column-major).
+
+    Background:
+    - N5 datasets typically use F-order: inner_order [2, 1, 0] for 3D → dims are [X, Y, Z]
+    - Most other formats use C-order: inner_order [0, 1, 2] for 3D → dims are [Z, Y, X]
+    - TIFF/ND2/IMS loaded via numpy are usually C-order but should be checked
+    - This matters for axes labels: F-order N5 with shape (4937, 3874, 13735) is actually
+      X=4937, Y=3874, Z=13735, NOT Z=4937, Y=3874, X=13735!
+
+    Args:
+        source_data: TensorStore object OR numpy/dask array
+
+    Returns:
+        dict: {
+            'is_fortran_order': bool,     # True if F-order, False if C-order
+            'inner_order': list or None,  # inner_order from TensorStore, None for numpy
+            'suggested_axes': list,        # Suggested axis labels ['x','y','z'] or ['z','y','x']
+            'description': str             # Human-readable description
+        }
+
+    Examples:
+        >>> # TensorStore example
+        >>> n5_store = ts.open({'driver': 'n5', 'kvstore': {...}}).result()
+        >>> order_info = detect_source_order(n5_store)
+        >>> print(order_info['is_fortran_order'])  # True for N5
+
+        >>> # Numpy array example
+        >>> volume = load_tiff_stack('/path/to/tiff')  # Returns dask array
+        >>> order_info = detect_source_order(volume)
+        >>> print(order_info['is_fortran_order'])  # Usually False for TIFF
+    """
+    import numpy as np
+    import dask.array as da
+
+    shape = source_data.shape
+    ndim = len(shape)
+
+    # Determine if input is TensorStore or numpy/dask
+    has_tensorstore_attrs = hasattr(source_data, 'chunk_layout')
+
+    if has_tensorstore_attrs:
+        # TensorStore object - use inner_order from chunk layout
+        inner_order = list(source_data.chunk_layout.inner_order)
+
+        # Determine if F-order by checking if inner_order is reversed
+        # F-order: [n-1, n-2, ..., 1, 0] (e.g., [2, 1, 0] for 3D)
+        # C-order: [0, 1, 2, ..., n-1] (e.g., [0, 1, 2] for 3D)
+        expected_fortran_order = list(range(ndim - 1, -1, -1))
+        expected_c_order = list(range(ndim))
+
+        is_fortran_order = (inner_order == expected_fortran_order)
+        is_c_order = (inner_order == expected_c_order)
+    else:
+        # Numpy or dask array - check flags
+        inner_order = None  # Not applicable for numpy arrays
+
+        # For dask arrays, check first chunk
+        if isinstance(source_data, da.Array):
+            # Get first chunk as numpy array to check flags
+            try:
+                first_chunk = source_data.blocks[tuple([0] * ndim)].compute()
+                is_fortran_order = first_chunk.flags.f_contiguous and not first_chunk.flags.c_contiguous
+                is_c_order = first_chunk.flags.c_contiguous and not first_chunk.flags.f_contiguous
+            except:
+                # If can't check, assume C-order (safe default for TIFF/ND2/IMS)
+                is_fortran_order = False
+                is_c_order = True
+        elif isinstance(source_data, np.ndarray):
+            # Direct numpy array
+            is_fortran_order = source_data.flags.f_contiguous and not source_data.flags.c_contiguous
+            is_c_order = source_data.flags.c_contiguous and not source_data.flags.f_contiguous
+        else:
+            # Unknown type - assume C-order (safe default)
+            is_fortran_order = False
+            is_c_order = True
+
+    # Determine suggested axes labels based on detected order
+    # F-order (N5): dimensions are [X, Y, Z] for 3D, [C, X, Y, Z] for 4D, etc.
+    # C-order: dimensions are [Z, Y, X] for 3D, [C, Z, Y, X] for 4D, etc.
+    if is_fortran_order:
+        # F-order: first dimension is fastest-varying (X), last is slowest (Z/C/T)
+        if ndim == 3:
+            suggested_axes = ['x', 'y', 'z']
+        elif ndim == 4:
+            # Ambiguous: could be [C,X,Y,Z] or [X,Y,Z,C]
+            # For N5 BigStitcher-Spark, it's typically spatial first
+            # We'll guess [X,Y,Z,C] but this should be overridden by metadata
+            suggested_axes = ['x', 'y', 'z', 'c']
+        elif ndim == 5:
+            suggested_axes = ['x', 'y', 'z', 'c', 't']
+        else:
+            suggested_axes = [f'dim_{i}' for i in range(ndim)]
+        description = f"F-order (Fortran/column-major): dimensions are {suggested_axes}"
+    elif is_c_order:
+        # C-order: first dimension is slowest-varying (Z/C/T), last is fastest (X)
+        if ndim == 3:
+            suggested_axes = ['z', 'y', 'x']
+        elif ndim == 4:
+            suggested_axes = ['c', 'z', 'y', 'x']
+        elif ndim == 5:
+            suggested_axes = ['t', 'c', 'z', 'y', 'x']
+        else:
+            suggested_axes = [f'dim_{i}' for i in range(ndim)]
+        description = f"C-order (C/row-major): dimensions are {suggested_axes}"
+    else:
+        # Unknown/custom order - be conservative
+        suggested_axes = [f'dim_{i}' for i in range(ndim)]
+        description = f"Custom order (inner_order={inner_order})"
+        is_fortran_order = False  # Default to C-order for safety
+
+    return {
+        'is_fortran_order': is_fortran_order,
+        'inner_order': inner_order,
+        'suggested_axes': suggested_axes,
+        'description': description
+    }
+
 def update_zarr_metadata_from_source(zarr_root_path, source_file_path, source_type='auto'):
     """
     Update zarr.json with source-specific metadata (unified function for TIFF/ND2/IMS).
@@ -3230,7 +3352,7 @@ def calculate_pyramid_plan(s0_path, min_array_nbytes=None, min_array_shape=None)
     current_voxel_sizes = voxel_sizes.copy()
     current_shape = shape.copy()
 
-    # Keep original shard and chunk shapes constant across all levels (Mark's recommendation)
+    # Keep original shard and chunk shapes constant across all levels
     original_shard_shape = shard_shape.copy() if shard_shape else None
     original_inner_chunk_shape = inner_chunk_shape.copy() if inner_chunk_shape else None
 
@@ -3244,7 +3366,7 @@ def calculate_pyramid_plan(s0_path, min_array_nbytes=None, min_array_shape=None)
         # Predict next level's array shape
         predicted_shape = [max(1, s // f) for s, f in zip(current_shape, factor)]
 
-        # Keep chunk and shard shapes constant across all levels (Mark's recommendation)
+        # Keep chunk and shard shapes constant across all levels
         # "The easiest would be to just keep the shard and chunk shape constant the whole time."
         scaled_chunk = original_inner_chunk_shape.copy() if original_inner_chunk_shape else None
         scaled_shard = original_shard_shape.copy() if original_shard_shape else None
