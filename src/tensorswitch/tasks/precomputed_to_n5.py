@@ -12,7 +12,8 @@ from ..utils import (
     get_chunk_domains,
     commit_tasks,
     print_processing_info,
-    get_total_chunks_from_store
+    get_total_chunks_from_store,
+    detect_source_order
 )
 
 
@@ -160,6 +161,19 @@ def convert(base_path, output_path, level, start_idx=0, stop_idx=None,
             print(f"  Squeezing channel dimension: {source_store.shape} → {source_store.shape[:3]}")
             source_store = source_store[..., 0]  # Remove channel dimension
             print(f"  ✓ Final source shape: {source_store.shape}")
+
+        # Detect source data order
+        source_order_info = detect_source_order(source_store)
+        print(f"\n  Source data order: {source_order_info['description']}")
+        print(f"    Inner order: {source_order_info['inner_order']}")
+        print(f"    Detected axes: {source_order_info['suggested_axes']}")
+
+        # NOTE: N5 output will preserve source order automatically via TensorStore
+        # N5 always stores data with inner_order, so F-order source → F-order N5
+        if source_order_info['is_fortran_order']:
+            print(f"  ✓ Source is F-order → N5 output will preserve F-order")
+        else:
+            print(f"  ✓ Source is C-order → N5 output will preserve C-order")
 
     except Exception as e:
         print(f"ERROR: Failed to open Precomputed source: {e}")
