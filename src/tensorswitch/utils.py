@@ -209,7 +209,16 @@ def n5_store_spec(n5_level_path):
         'kvstore': get_kvstore_spec(n5_level_path)
     }
 
-def zarr2_store_spec(zarr_level_path, shape, chunks):
+def zarr2_store_spec(zarr_level_path, shape, chunks, use_fortran_order=False):
+    """
+    Create Zarr2 store specification.
+
+    Args:
+        zarr_level_path: Path to zarr level
+        shape: Array shape
+        chunks: Chunk shape
+        use_fortran_order: If True, use F-order (column-major); if False, use C-order (row-major)
+    """
     return {
         'driver': 'zarr',
         'kvstore': {'driver': 'file', 'path': zarr_level_path},
@@ -218,6 +227,7 @@ def zarr2_store_spec(zarr_level_path, shape, chunks):
             'chunks': chunks,
             'dtype': "|u1",
             'compressor': {'id': 'zstd', 'level': 5},
+            'order': 'F' if use_fortran_order else 'C',  # Preserve source order
             'dimension_separator': "/"
         }
     }
@@ -1909,6 +1919,107 @@ def extract_n5_voxel_sizes(n5_attrs, level=0):
     return None, None
 
 
+def read_n5_attributes(n5_path):
+    """
+    Read N5 attributes.json from both level and root directories.
+
+    Args:
+        n5_path: Path to N5 level (e.g., /path/to/data.n5/ch0tp0/s0)
+                 Can be local path, http://, https://, gs://, or s3://
+
+    Returns:
+        tuple: (source_attrs, root_attrs)
+            source_attrs: attributes.json from the specified level path
+            root_attrs: attributes.json from the root .n5 directory (for multiscales)
+    """
+    import json
+
+    source_attrs = None
+    root_attrs = None
+
+    try:
+        if n5_path.startswith(("http://", "https://", "gs://", "s3://")):
+            # Remote path
+            attr_url = f"{n5_path}/attributes.json"
+            source_attrs = fetch_remote_json(attr_url)
+            # For remote, we can't easily find root, caller should handle
+        else:
+            # Local path
+            # Read level attributes
+            attr_path = os.path.join(n5_path, "attributes.json")
+            if os.path.exists(attr_path):
+                with open(attr_path, 'r') as f:
+                    source_attrs = json.load(f)
+
+            # Find and read root N5 attributes
+            # n5_path format: .../dataset.n5/ch0tp0/s0
+            # Need to find: .../dataset.n5/attributes.json
+            path_parts = n5_path.split(os.sep)
+            for i in range(len(path_parts) - 1, -1, -1):
+                if path_parts[i].endswith('.n5'):
+                    root_n5_path = os.sep.join(path_parts[:i+1])
+                    root_attr_path = os.path.join(root_n5_path, "attributes.json")
+                    if os.path.exists(root_attr_path):
+                        with open(root_attr_path, 'r') as f:
+                            root_attrs = json.load(f)
+                    break
+
+    except Exception as e:
+        print(f"Warning: Could not read N5 attributes: {e}")
+
+    return source_attrs, root_attrs
+
+
+def extract_n5_metadata(n5_attrs, level=0):
+    """
+    Extract comprehensive metadata from N5 attributes.json including axes order.
+
+    Args:
+        n5_attrs: Parsed N5 attributes.json dictionary
+        level: Scale level (0, 1, 2, etc.)
+
+    Returns:
+        dict: {
+            'voxel_sizes_um': [x, y, z] in micrometers or None,
+            'dataset_name': Name from N5 multiscales or None,
+            'axes_order': ['x', 'y', 'z'] or None (from N5 metadata)
+        }
+    """
+    result = {
+        'voxel_sizes_um': None,
+        'dataset_name': None,
+        'axes_order': None
+    }
+
+    if not n5_attrs or 'multiscales' not in n5_attrs:
+        return result
+
+    try:
+        multiscales = n5_attrs['multiscales'][0]
+        result['dataset_name'] = multiscales.get('name', None)
+
+        # Find the dataset for this level
+        datasets = multiscales.get('datasets', [])
+        if level >= len(datasets):
+            return result
+
+        transform = datasets[level].get('transform', {})
+        voxel_sizes_nm = transform.get('scale', None)
+        axes_order = transform.get('axes', None)  # Extract axes from metadata
+
+        if voxel_sizes_nm:
+            # Convert nm to micrometers
+            result['voxel_sizes_um'] = [v / 1000.0 for v in voxel_sizes_nm]
+
+        if axes_order:
+            result['axes_order'] = axes_order
+
+    except Exception as e:
+        print(f"Warning: Could not extract metadata from N5: {e}")
+
+    return result
+
+
 def convert_ims_to_zarr3_metadata(ims_file, array_shape, voxel_sizes=None):
     """Convert IMS metadata to zarr3 OME-ZARR format."""
     image_name = os.path.splitext(os.path.basename(ims_file))[0]
@@ -1990,13 +2101,32 @@ def auto_detect_max_level(output_path):
     
     return max(levels)
 
-def create_zarr2_ome_metadata(ome_xml, array_shape, image_name, pixel_sizes=None):
-    """Create OME-ZARR metadata structure for zarr2 format (.zattrs)."""
+def create_zarr2_ome_metadata(ome_xml, array_shape, image_name, pixel_sizes=None, axes_order=None):
+    """Create OME-ZARR metadata structure for zarr2 format (.zattrs).
+
+    Args:
+        axes_order: List of axis names (e.g., ["x", "y", "z"] or ["z", "y", "x"])
+                    If provided, this overrides the automatic detection
+    """
 
     # Build axes information based on OME-XML metadata if available
     axes = []
 
-    if ome_xml:
+    # Check if axes_order was provided (e.g., from N5 source metadata or order detection)
+    if axes_order and len(axes_order) == len(array_shape):
+        # Use provided axes order
+        for axis_name in axes_order:
+            if axis_name in ['x', 'y', 'z']:
+                axes.append({"name": axis_name, "type": "space", "unit": "micrometer"})
+            elif axis_name == 'c':
+                axes.append({"name": axis_name, "type": "channel"})
+            elif axis_name == 't':
+                axes.append({"name": axis_name, "type": "time", "unit": "millisecond"})
+            else:
+                axes.append({"name": axis_name, "type": "space"})
+        print(f"Using provided axes order: {axes_order}")
+
+    if not axes and ome_xml:
         # Extract dimension information from OME-XML
         try:
             # Parse XML to find DimensionOrder and sizes
@@ -2100,8 +2230,11 @@ def create_zarr2_ome_metadata(ome_xml, array_shape, image_name, pixel_sizes=None
     # Extract pixel sizes from OME XML if available
     scale_factors = [1.0] * len(array_shape)
     if pixel_sizes is not None:
-        # Map pixel sizes to the correct axes
-        if len(array_shape) == 3:  # ZYX
+        # Map pixel sizes to the correct axes based on axes_order or fallback
+        if axes_order and len(axes_order) == len(array_shape):
+            # Use axes_order to map pixel sizes
+            scale_factors = [pixel_sizes.get(axis, 1.0) for axis in axes_order]
+        elif len(array_shape) == 3:  # ZYX (default)
             scale_factors = [pixel_sizes.get('z', 1.0), pixel_sizes.get('y', 1.0), pixel_sizes.get('x', 1.0)]
         elif len(array_shape) == 4:  # CZYX
             scale_factors = [1.0, pixel_sizes.get('z', 1.0), pixel_sizes.get('y', 1.0), pixel_sizes.get('x', 1.0)]
