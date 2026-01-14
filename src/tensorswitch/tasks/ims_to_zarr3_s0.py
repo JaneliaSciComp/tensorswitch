@@ -4,7 +4,7 @@ from ..utils import (load_ims_stack, zarr3_store_spec, get_chunk_domains, commit
                     convert_ims_to_zarr3_metadata, write_zarr3_group_metadata,
                     write_dual_zarr_metadata, detect_anisotropic_voxels,
                     update_zarr_metadata_from_source, precreate_shard_directories_inline,
-                    get_tensorstore_context)
+                    get_tensorstore_context, detect_source_order)
 import tensorstore as ts
 import numpy as np
 import psutil
@@ -12,12 +12,34 @@ import time
 import os
 import json
 
-def process(base_path, output_path, use_shard=False, memory_limit=50, start_idx=0, stop_idx=None, use_ome_structure=True, custom_shard_shape=None, custom_chunk_shape=None, create_dual_metadata=True, use_v2_encoding=True, use_fortran_order=False):
+def process(base_path, output_path, use_shard=False, memory_limit=50, start_idx=0, stop_idx=None, use_ome_structure=True, custom_shard_shape=None, custom_chunk_shape=None, create_dual_metadata=True, use_v2_encoding=True, use_fortran_order=None):
     print(f"Loading IMS file from: {base_path}", flush=True)
 
     volume, h5_file = load_ims_stack(base_path)
     print(f"Original volume shape: {volume.shape}, dtype: {volume.dtype}", flush=True)
     print(f"Original chunk structure from dask: {volume.chunksize}", flush=True)
+
+    # Detect source data order (C-order vs F-order)
+    source_order_info = detect_source_order(volume)
+    print(f"Source data order: {source_order_info['description']}")
+    print(f"  Detected axes: {source_order_info['suggested_axes']}")
+
+    # Determine final use_fortran_order based on:
+    # 1. User explicit override (if use_fortran_order is not None)
+    # 2. Otherwise, preserve source order (auto-detect)
+    if use_fortran_order is not None:
+        # User explicitly set use_fortran_order → respect it
+        if use_fortran_order:
+            print(f"✓ Using F-order output (user override)")
+        else:
+            print(f"✓ Using C-order output (user override)")
+    else:
+        # No user override → preserve source order (auto-detect)
+        use_fortran_order = source_order_info['is_fortran_order']
+        if use_fortran_order:
+            print(f"✓ Preserving F-order from source (auto-detected)")
+        else:
+            print(f"✓ Preserving C-order from source (auto-detected)")
 
     # DEBUG
     print(f"Volume dimensions: {len(volume.shape)}D")
