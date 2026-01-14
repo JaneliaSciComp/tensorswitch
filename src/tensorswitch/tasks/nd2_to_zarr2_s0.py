@@ -3,7 +3,7 @@ from ..utils import (load_nd2_stack, zarr2_store_spec, get_chunk_domains, commit
                     get_total_chunks_from_store, extract_nd2_ome_metadata,
                     update_ome_multiscale_metadata_zarr2, create_zarr2_ome_metadata,
                     write_zarr2_group_metadata, convert_ome_to_zarr3_metadata,
-                    detect_anisotropic_voxels, get_tensorstore_context)
+                    detect_anisotropic_voxels, get_tensorstore_context, detect_source_order)
 import tensorstore as ts
 import numpy as np
 import psutil
@@ -48,12 +48,34 @@ def update_zarr2_ome_xml_nd2(zarr_path, source_nd2_path):
     else:
         print("No OME XML found in source ND2")
 
-def process(base_path, output_path, memory_limit=50, start_idx=0, stop_idx=None, use_ome_structure=True, custom_shard_shape=None, custom_chunk_shape=None):
+def process(base_path, output_path, memory_limit=50, start_idx=0, stop_idx=None, use_ome_structure=True, custom_shard_shape=None, custom_chunk_shape=None, use_fortran_order=None):
     print(f"Loading ND2 file from: {base_path}", flush=True)
 
     volume = load_nd2_stack(base_path)
     print(f"Original volume shape: {volume.shape}, dtype: {volume.dtype}", flush=True)
     print(f"Original chunk structure from dask: {volume.chunksize}", flush=True)
+
+    # Detect source data order (C-order vs F-order)
+    source_order_info = detect_source_order(volume)
+    print(f"Source data order: {source_order_info['description']}")
+    print(f"  Detected axes: {source_order_info['suggested_axes']}")
+
+    # Determine final use_fortran_order based on:
+    # 1. User explicit override (if use_fortran_order is not None)
+    # 2. Otherwise, preserve source order (auto-detect)
+    if use_fortran_order is not None:
+        # User explicitly set use_fortran_order → respect it
+        if use_fortran_order:
+            print(f"✓ Using F-order output (user override)")
+        else:
+            print(f"✓ Using C-order output (user override)")
+    else:
+        # No user override → preserve source order (auto-detect)
+        use_fortran_order = source_order_info['is_fortran_order']
+        if use_fortran_order:
+            print(f"✓ Preserving F-order from source (auto-detected)")
+        else:
+            print(f"✓ Preserving C-order from source (auto-detected)")
 
     # Extract voxel sizes from ND2 metadata and detect anisotropic voxels
     try:
@@ -128,7 +150,8 @@ def process(base_path, output_path, memory_limit=50, start_idx=0, stop_idx=None,
     store_spec = zarr2_store_spec(
         zarr_level_path,
         volume.shape,
-        chunk_shape
+        chunk_shape,
+        use_fortran_order=use_fortran_order
     )
     
     # Update dtype in store spec - convert numpy dtype to zarr format
