@@ -14,14 +14,14 @@ if not __package__:
 from . import tasks
 from .utils import (get_total_chunks, downsample_spec, zarr3_store_spec, get_chunk_domains,
                     estimate_total_chunks_for_tiff, get_input_driver, get_total_chunks_from_store,
-                    load_tiff_stack, load_nd2_stack, load_ims_stack, update_ome_metadata_if_needed,
+                    load_tiff_stack, load_nd2_stack, load_ims_stack, load_czi_stack, update_ome_metadata_if_needed,
                     calculate_num_multiscale_levels, calculate_anisotropic_downsample_factors,
                     generate_auto_multiscale, calculate_pyramid_plan, generate_cli_coordinator_script,
                     precreate_shard_directories as precreate_shard_directories_universal,
                     get_chunk_linear_indices_in_shard)
 from .tasks import (downsample_shard_zarr3, n5_to_n5, n5_to_zarr2, n5_to_zarr3_s0, tiff_to_zarr3_s0,
                     nd2_to_zarr3_s0, ims_to_zarr3_s0, nd2_to_zarr2_s0, ims_to_zarr2_s0,
-                    tiff_to_zarr2_s0, downsample_zarr2, precomputed_to_n5)
+                    tiff_to_zarr2_s0, downsample_zarr2, precomputed_to_n5, czi_to_zarr3_s0)
 
 # Set umask to allow group write access
 os.umask(0o0002)
@@ -72,6 +72,36 @@ def get_total_chunks_for_task(args, use_v2_encoding=True):
     custom_chunk_shape = None
     if args.custom_chunk_shape:
         custom_chunk_shape = [int(x) for x in args.custom_chunk_shape.split(',')]
+
+    # Handle single-file formats first (before get_input_driver which expects directories)
+    if args.task == "czi_to_zarr3_s0":
+        volume, czi_handle = load_czi_stack(args.base_path)
+        if czi_handle:
+            try:
+                czi_handle.__exit__(None, None, None)
+            except:
+                pass
+
+        # Apply chunk shape adjustment for 5D data
+        adjusted_chunk_shape = custom_chunk_shape
+        if custom_chunk_shape and len(volume.shape) > len(custom_chunk_shape):
+            extra_dims = len(volume.shape) - len(custom_chunk_shape)
+            adjusted_chunk_shape = [1] * extra_dims + custom_chunk_shape
+
+        store_spec = zarr3_store_spec(
+            path=args.output_path,
+            shape=volume.shape,
+            dtype=str(volume.dtype),
+            use_shard=bool(args.use_shard),
+            level_path="s0",
+            use_ome_structure=bool(args.use_ome_structure),
+            custom_shard_shape=custom_shard_shape,
+            custom_chunk_shape=adjusted_chunk_shape,
+            use_v2_encoding=use_v2_encoding
+        )
+        temp_store = ts.open(store_spec, create=True, delete_existing=True).result()
+        total_chunks = get_total_chunks_from_store(temp_store, chunk_shape=temp_store.chunk_layout.write_chunk.shape)
+        return total_chunks
 
     input_driver = "n5" if args.base_path.startswith("http") else get_input_driver(args.base_path)
 
@@ -172,6 +202,27 @@ def get_total_chunks_for_task(args, use_v2_encoding=True):
         )
         temp_store = ts.open(store_spec, create=True, delete_existing=True).result()
         total_chunks = get_total_chunks_from_store(temp_store)
+
+    elif args.task == "czi_to_zarr3_s0":
+        volume, czi_handle = load_czi_stack(args.base_path)
+        if czi_handle:
+            try:
+                czi_handle.__exit__(None, None, None)
+            except:
+                pass
+        store_spec = zarr3_store_spec(
+            path=args.output_path,
+            shape=volume.shape,
+            dtype=str(volume.dtype),
+            use_shard=bool(args.use_shard),
+            level_path="s0",
+            use_ome_structure=bool(args.use_ome_structure),
+            custom_shard_shape=custom_shard_shape,
+            custom_chunk_shape=custom_chunk_shape,
+            use_v2_encoding=use_v2_encoding
+        )
+        temp_store = ts.open(store_spec, create=True, delete_existing=True).result()
+        total_chunks = get_total_chunks_from_store(temp_store, chunk_shape=temp_store.chunk_layout.write_chunk.shape)
 
     elif args.task == "precomputed_to_n5":
         # Import precomputed-specific utilities
@@ -546,6 +597,15 @@ def submit_job(args, use_v2_encoding=True):
         volume = load_ims_stack(args.base_path)
         volume_shape = volume.shape
         volume_dtype = volume.dtype
+    elif args.task == "czi_to_zarr3_s0":
+        volume, czi_handle = load_czi_stack(args.base_path)
+        volume_shape = volume.shape
+        volume_dtype = volume.dtype
+        if czi_handle:
+            try:
+                czi_handle.__exit__(None, None, None)
+            except:
+                pass
     elif args.task == "downsample_shard_zarr3":
         # For downsampling, get shape from the source zarr and calculate output shape
         store = ts.open({'driver': 'zarr3', 'kvstore': {'driver': 'file', 'path': args.base_path}}).result()
@@ -1112,7 +1172,7 @@ def submit_job(args, use_v2_encoding=True):
 
 def main():
     parser = argparse.ArgumentParser(description="Unified Pipeline Manager")
-    parser.add_argument("--task", required=True, choices=["n5_to_zarr2", "n5_to_zarr3_s0", "n5_to_n5", "downsample_shard_zarr3", "tiff_to_zarr3_s0", "nd2_to_zarr3_s0", "ims_to_zarr3_s0", "nd2_to_zarr2_s0", "ims_to_zarr2_s0", "tiff_to_zarr2_s0", "downsample_zarr2", "precomputed_to_n5"])
+    parser.add_argument("--task", required=True, choices=["n5_to_zarr2", "n5_to_zarr3_s0", "n5_to_n5", "downsample_shard_zarr3", "tiff_to_zarr3_s0", "nd2_to_zarr3_s0", "ims_to_zarr3_s0", "czi_to_zarr3_s0", "nd2_to_zarr2_s0", "ims_to_zarr2_s0", "tiff_to_zarr2_s0", "downsample_zarr2", "precomputed_to_n5"])
     parser.add_argument("--base_path", required=True, help="Input dataset path")
     parser.add_argument("--output_path", required=True, help="Output dataset path (only needed for conversions)")
     parser.add_argument("--level", type=int, default=0, help="Levels to process")
@@ -1344,6 +1404,8 @@ def main():
             nd2_to_zarr3_s0.process(args.base_path, args.output_path, bool(args.use_shard), args.memory_limit, args.start_idx, args.stop_idx, bool(args.use_ome_structure), custom_shard_shape, custom_chunk_shape, create_dual_metadata, use_v2_encoding, use_fortran_order=bool(args.use_fortran_order))
         elif args.task == "ims_to_zarr3_s0":
             ims_to_zarr3_s0.process(args.base_path, args.output_path, bool(args.use_shard), args.memory_limit, args.start_idx, args.stop_idx, bool(args.use_ome_structure), custom_shard_shape, custom_chunk_shape, create_dual_metadata, use_v2_encoding, use_fortran_order=bool(args.use_fortran_order))
+        elif args.task == "czi_to_zarr3_s0":
+            czi_to_zarr3_s0.process(args.base_path, args.output_path, bool(args.use_shard), args.memory_limit, args.start_idx, args.stop_idx, bool(args.use_ome_structure), custom_shard_shape, custom_chunk_shape, create_dual_metadata, use_v2_encoding, use_fortran_order=bool(args.use_fortran_order))
         elif args.task == "nd2_to_zarr2_s0":
             nd2_to_zarr2_s0.process(args.base_path, args.output_path, args.memory_limit, args.start_idx, args.stop_idx, bool(args.use_ome_structure), custom_shard_shape, custom_chunk_shape)
         elif args.task == "ims_to_zarr2_s0":
@@ -1360,7 +1422,7 @@ def main():
         # Auto-multiscale generation (local mode only)
         if args.auto_multiscale:
             # Only trigger for s0 tasks
-            if args.task in ["tiff_to_zarr3_s0", "nd2_to_zarr3_s0", "ims_to_zarr3_s0", "tiff_to_zarr2_s0", "nd2_to_zarr2_s0", "ims_to_zarr2_s0"]:
+            if args.task in ["tiff_to_zarr3_s0", "nd2_to_zarr3_s0", "ims_to_zarr3_s0", "czi_to_zarr3_s0", "tiff_to_zarr2_s0", "nd2_to_zarr2_s0", "ims_to_zarr2_s0"]:
                 print("\n" + "="*80)
                 print("AUTO-MULTISCALE ENABLED - Starting pyramid generation")
                 print("="*80)
