@@ -15,10 +15,11 @@ This package provides a unified entry point for managing N5/Zarr dataset convers
 - **Remote Data Support**: Direct conversion from HTTP, Google Cloud Storage (GCS), and S3-served datasets
 - **Comprehensive Test Suite**: 31 verified tests covering CLI, GUI, and OME-Zarr workflows
 
-### Format Support (12 Conversion Tasks)
+### Format Support (13 Conversion Tasks)
 - **TIFF → Zarr2/Zarr3/N5**: Full s0 level conversion with enhanced OME-Zarr metadata and ImageJ voxel extraction
 - **ND2 → Zarr2/Zarr3**: Native ND2 support with OME metadata preservation
 - **IMS → Zarr2/Zarr3**: Imaris file format support with HDF5 metadata extraction
+- **CZI → Zarr3**: ZEISS CZI format support with XSLT-based OME-XML metadata transformation
 - **N5 → Zarr2/Zarr3**: High-performance N5 conversion with dual metadata and voxel size preservation
 - **Precomputed → N5**: Neuroglancer Precomputed format support
 - **Zarr2/Zarr3 Downsampling**: Multi-resolution pyramid generation with anisotropic factors
@@ -94,7 +95,7 @@ tensorswitch/
 │   └── tensorswitch
 │       ├── __init__.py
 │       ├── __main__.py                   # Main dispatcher script
-│       ├── tasks                         # 12 conversion tasks
+│       ├── tasks                         # 13 conversion tasks
 │       │   ├── __init__.py
 │       │   ├── downsample_shard_zarr3.py # Downsample Zarr V3 using shards (with auto-multiscale)
 │       │   ├── downsample_zarr2.py       # Downsample Zarr V2 datasets (with auto-multiscale)
@@ -107,7 +108,11 @@ tensorswitch/
 │       │   ├── nd2_to_zarr2_s0.py        # ND2 to Zarr V2 s0 with OME-Zarr metadata
 │       │   ├── nd2_to_zarr3_s0.py        # ND2 to Zarr V3 s0 with OME-Zarr metadata and Fortran order
 │       │   ├── ims_to_zarr2_s0.py        # IMS to Zarr V2 s0 with OME-Zarr metadata
-│       │   └── ims_to_zarr3_s0.py        # IMS to Zarr V3 s0 with OME-Zarr metadata and Fortran order
+│       │   ├── ims_to_zarr3_s0.py        # IMS to Zarr V3 s0 with OME-Zarr metadata and Fortran order
+│       │   └── czi_to_zarr3_s0.py        # CZI to Zarr V3 s0 with XSLT-based OME-XML metadata
+│       ├── xslt/                         # Vendored XSLT files for CZI→OME-XML transformation
+│       │   ├── czi-to-ome.xsl            # Main XSLT stylesheet (from Allen Institute czi-to-ome-xslt)
+│       │   └── LICENSE.czi-to-ome-xslt   # BSD-3 license
 │       ├── utils.py                      # Common utilities, OME-Zarr metadata, auto-multiscale
 │       ├── dask_utils.py                 # Dask JobQueue integration for cluster execution
 │       └── gui/                          # Web GUI interface
@@ -307,7 +312,7 @@ pixi run python src/tensorswitch/gui/launch_gui.py
 - **Real-time progress monitoring**: Job status tracking and log viewing
 - **Dual format support**: Create Zarr files compatible with both v2 and v3 tools
 - **Local or cluster job submission**: Flexible execution options
-- **All conversion tasks supported**: TIFF, ND2, IMS to Zarr2/Zarr3
+- **All conversion tasks supported**: TIFF, ND2, IMS, CZI to Zarr2/Zarr3
 
 See [GUI Documentation](src/tensorswitch/gui/README_GUI.md) for detailed usage.
 
@@ -352,6 +357,7 @@ python -m tensorswitch --task downsample_shard_zarr3 \
 | `nd2_to_zarr3_s0`        | Convert ND2 file to Zarr V3 (s0) with OME-Zarr metadata |
 | `ims_to_zarr2_s0`        | Convert IMS file to Zarr V2 (s0) with OME-Zarr metadata |
 | `ims_to_zarr3_s0`        | Convert IMS file to Zarr V3 (s0) with OME-Zarr metadata |
+| `czi_to_zarr3_s0`        | Convert CZI file to Zarr V3 (s0) with XSLT-based OME-XML metadata |
 | `precomputed_to_n5`      | Convert Neuroglancer Precomputed to N5 format |
 
 All s0 conversion tasks create multiscale-compatible Zarr structures with proper OME-Zarr metadata and correct dimension ordering.
@@ -361,7 +367,7 @@ All s0 conversion tasks create multiscale-compatible Zarr structures with proper
 All conversion tasks now support both Zarr V2 and Zarr V3 formats with automatic metadata preservation:
 
 **Zarr V2 Tasks:** `tiff_to_zarr2_s0`, `nd2_to_zarr2_s0`, `ims_to_zarr2_s0`, `downsample_zarr2`
-**Zarr V3 Tasks:** `tiff_to_zarr3_s0`, `nd2_to_zarr3_s0`, `ims_to_zarr3_s0`, `downsample_shard_zarr3`
+**Zarr V3 Tasks:** `tiff_to_zarr3_s0`, `nd2_to_zarr3_s0`, `ims_to_zarr3_s0`, `czi_to_zarr3_s0`, `downsample_shard_zarr3`
 
 - **Automatic OME XML Extraction**: Source metadata is automatically preserved
 - **Correct Dimension Ordering**: Fixes dimension mapping issues (e.g., XYCTZ → [c,y,x])
@@ -634,6 +640,42 @@ python -m tensorswitch --task ims_to_zarr3_s0 \
   --submit
 ```
 
+#### Convert CZI to Zarr v3 with sharding (recommended for ML training)
+```bash
+# With sharding: 256³ inner chunks, 1024³ shards (optimal for random 256³ crops)
+python -m tensorswitch --task czi_to_zarr3_s0 \
+  --base_path /path/to/file.czi \
+  --output_path /path/to/output.zarr \
+  --use_shard 1 \
+  --custom_chunk_shape 256,256,256 \
+  --custom_shard_shape 1024,1024,1024 \
+  --use_ome_structure 1 \
+  --wall_time 4:00 \
+  --project your_project_name \
+  --submit --use_single_job
+```
+
+#### Convert CZI to Zarr v3 without sharding
+```bash
+# Without sharding: 256³ chunks directly
+python -m tensorswitch --task czi_to_zarr3_s0 \
+  --base_path /path/to/file.czi \
+  --output_path /path/to/output.zarr \
+  --use_shard 0 \
+  --custom_chunk_shape 256,256,256 \
+  --use_ome_structure 1 \
+  --wall_time 16:00 \
+  --project your_project_name \
+  --submit --use_single_job
+```
+
+**CZI Conversion Features:**
+- **XSLT-based OME-XML**: Rich metadata transformation using vendored Allen Institute XSLT stylesheets
+- **Multi-view support**: Handles CZI files with multiple views (V dimension)
+- **Voxel size extraction**: Automatic extraction of X, Y, Z pixel sizes from CZI metadata
+- **Sharding support**: Optional sharding for efficient random access (recommended for ML training)
+- **Automatic dimension handling**: Supports 3D, 4D, and 5D arrays (V, C, Z, Y, X)
+
 #### Convert Neuroglancer Precomputed to N5 (local or from GCS)
 ```bash
 # Local conversion - single scale
@@ -833,6 +875,9 @@ This structure is compatible with neuroglancer and other OME-Zarr viewers.
 - Dask + tifffile (for TIFF conversion)
 - nd2 + ome-zarr (for ND2 conversion with OME metadata)
 - h5py (for IMS conversion)
+- pylibCZIrw (for CZI reading - ZEISS official library)
+- aicspylibczi (for CZI metadata extraction)
+- lxml (for XSLT-based OME-XML transformation)
 - json (for metadata handling)
 - glob (for file pattern matching)
 

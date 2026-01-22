@@ -9,6 +9,7 @@ environments:
       linux-64:
       - conda: https://conda.anaconda.org/conda-forge/linux-64/_libgcc_mutex-0.1-conda_forge.tar.bz2
       - conda: https://conda.anaconda.org/conda-forge/linux-64/_openmp_mutex-4.5-2_gnu.tar.bz2
+      - conda: https://conda.anaconda.org/conda-forge/linux-64/aicspylibczi-3.3.1-py312h1289d80_2.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/alsa-lib-1.2.14-hb9d3cd8_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/annotated-types-0.7.0-pyhd8ed1ab_1.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/anyio-4.10.0-pyhe01879c_0.conda
@@ -330,10 +331,14 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/linux-64/zlib-1.3.1-hb9d3cd8_2.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/zlib-ng-2.2.4-h7955e40_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/zstd-1.5.7-hb8e6e7a_2.conda
+      - pypi: https://files.pythonhosted.org/packages/28/19/b54ff2e03946beeef785e6407d965a9493d26c50dd1aa09ffc7b53fbf9a5/cmake-4.2.1-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/3a/cb/28ce52eb94390dda42599c98ea0204d74799e4d8047a0eb559b6fd648056/ml_dtypes-0.5.4-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
-      - pypi: git+https://github.com/ome-zarr-models/ome-zarr-models-py.git#e91be2abb83085e0f02939d82081ddf108ffdf08
+      - pypi: git+https://github.com/ome-zarr-models/ome-zarr-models-py.git#7f7f5d3b65e61960751d5d9e9a4967e75910615c
       - pypi: https://files.pythonhosted.org/packages/1b/6d/1cdd70b6ab7bc2879b08521bf688a86b1ea4a29521da2ea2c2e613d5508e/pydantic_zarr-0.8.2-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/9a/a8/3a5fbf90757dad3cede386d407f9000808985836d21bb95a6d9c622039ca/pylibczirw-5.1.1-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/87/4a/60e234147570e21bbab4ac70ab79dd794a5ef9a4945d36c34c1914a73205/tensorstore-0.1.79-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
+      - pypi: https://files.pythonhosted.org/packages/fa/6e/3e955517e22cbdd565f2f8b2e73d52528b14b8bcfdb04f62466b071de847/validators-0.35.0-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/c0/20/69a0e6058bc5ea74892d089d64dfc3a62ba78917ec5e2cfa70f7c92ba3a5/xmltodict-1.0.2-py3-none-any.whl
       - pypi: ./
   jupyter:
     channels:
@@ -344,6 +349,7 @@ environments:
       linux-64:
       - conda: https://conda.anaconda.org/conda-forge/linux-64/_libgcc_mutex-0.1-conda_forge.tar.bz2
       - conda: https://conda.anaconda.org/conda-forge/linux-64/_openmp_mutex-4.5-2_gnu.tar.bz2
+      - conda: https://conda.anaconda.org/conda-forge/linux-64/aicspylibczi-3.3.1-py312h1289d80_2.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/alsa-lib-1.2.14-hb9d3cd8_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/annotated-types-0.7.0-pyhd8ed1ab_1.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/anyio-4.10.0-pyhe01879c_0.conda
@@ -686,10 +692,14 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/linux-64/zlib-1.3.1-hb9d3cd8_2.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/zlib-ng-2.2.4-h7955e40_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/zstd-1.5.7-hb8e6e7a_2.conda
+      - pypi: https://files.pythonhosted.org/packages/28/19/b54ff2e03946beeef785e6407d965a9493d26c50dd1aa09ffc7b53fbf9a5/cmake-4.2.1-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/3a/cb/28ce52eb94390dda42599c98ea0204d74799e4d8047a0eb559b6fd648056/ml_dtypes-0.5.4-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
-      - pypi: git+https://github.com/ome-zarr-models/ome-zarr-models-py.git#e91be2abb83085e0f02939d82081ddf108ffdf08
+      - pypi: git+https://github.com/ome-zarr-models/ome-zarr-models-py.git#7f7f5d3b65e61960751d5d9e9a4967e75910615c
       - pypi: https://files.pythonhosted.org/packages/1b/6d/1cdd70b6ab7bc2879b08521bf688a86b1ea4a29521da2ea2c2e613d5508e/pydantic_zarr-0.8.2-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/9a/a8/3a5fbf90757dad3cede386d407f9000808985836d21bb95a6d9c622039ca/pylibczirw-5.1.1-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/87/4a/60e234147570e21bbab4ac70ab79dd794a5ef9a4945d36c34c1914a73205/tensorstore-0.1.79-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
+      - pypi: https://files.pythonhosted.org/packages/fa/6e/3e955517e22cbdd565f2f8b2e73d52528b14b8bcfdb04f62466b071de847/validators-0.35.0-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/c0/20/69a0e6058bc5ea74892d089d64dfc3a62ba78917ec5e2cfa70f7c92ba3a5/xmltodict-1.0.2-py3-none-any.whl
       - pypi: ./
 packages:
 - conda: https://conda.anaconda.org/conda-forge/linux-64/_libgcc_mutex-0.1-conda_forge.tar.bz2
@@ -713,6 +723,22 @@ packages:
   purls: []
   size: 23621
   timestamp: 1650670423406
+- conda: https://conda.anaconda.org/conda-forge/linux-64/aicspylibczi-3.3.1-py312h1289d80_2.conda
+  sha256: 9d1c67964cd50af1ae0660055d7fb9a7cbbb09c01b75232141df28a85ba5172e
+  md5: 76492276e3b96708d076b8db0a269794
+  depends:
+  - __glibc >=2.17,<3.0.a0
+  - libgcc >=14
+  - libstdcxx >=14
+  - numpy >=1.14.1
+  - python >=3.12,<3.13.0a0
+  - python_abi 3.12.* *_cp312
+  license: GPL-3.0-only
+  license_family: GPL
+  purls:
+  - pkg:pypi/aicspylibczi?source=hash-mapping
+  size: 818821
+  timestamp: 1757121827518
 - conda: https://conda.anaconda.org/conda-forge/linux-64/alsa-lib-1.2.14-hb9d3cd8_0.conda
   sha256: b9214bc17e89bf2b691fad50d952b7f029f6148f4ac4fe7c60c08f093efdf745
   md5: 76df83c2a9035c54df5d04ff81bcc02d
@@ -1472,6 +1498,11 @@ packages:
   - pkg:pypi/cloudpickle?source=hash-mapping
   size: 25870
   timestamp: 1736947650712
+- pypi: https://files.pythonhosted.org/packages/28/19/b54ff2e03946beeef785e6407d965a9493d26c50dd1aa09ffc7b53fbf9a5/cmake-4.2.1-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl
+  name: cmake
+  version: 4.2.1
+  sha256: 6333a2b16e1d55373419b9c1572a155b315bfb9d834fbdbba0f7d3428437c785
+  requires_python: '>=3.8'
 - conda: https://conda.anaconda.org/conda-forge/noarch/colorama-0.4.6-pyhd8ed1ab_1.conda
   sha256: ab29d57dc70786c1269633ba3dff20288b81664d3ff8d21af995742e2bb03287
   md5: 962b9857ee8e7018c22f2776ffa0b2d7
@@ -4533,15 +4564,15 @@ packages:
   - pkg:pypi/ome-types?source=hash-mapping
   size: 131554
   timestamp: 1740747270805
-- pypi: git+https://github.com/ome-zarr-models/ome-zarr-models-py.git#e91be2abb83085e0f02939d82081ddf108ffdf08
+- pypi: git+https://github.com/ome-zarr-models/ome-zarr-models-py.git#7f7f5d3b65e61960751d5d9e9a4967e75910615c
   name: ome-zarr-models
-  version: 1.4.dev7+ge91be2abb
+  version: 1.6.dev4+g7f7f5d3b6
   requires_dist:
   - pydantic-zarr>=0.8.2
   - pydantic>=2.11.5
   - zarr>=3.1.1
   - fsspec[http]==2025.9.0 ; extra == 'docs'
-  - griffe-pydantic==1.1.7 ; extra == 'docs'
+  - griffe-fieldz==0.4.0 ; extra == 'docs'
   - matplotlib==3.10.6 ; extra == 'docs'
   - mkdocs-jupyter==0.25.1 ; extra == 'docs'
   - mkdocs-material==9.6.21 ; extra == 'docs'
@@ -5223,6 +5254,17 @@ packages:
   - pkg:pypi/pygments?source=hash-mapping
   size: 889287
   timestamp: 1750615908735
+- pypi: https://files.pythonhosted.org/packages/9a/a8/3a5fbf90757dad3cede386d407f9000808985836d21bb95a6d9c622039ca/pylibczirw-5.1.1-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
+  name: pylibczirw
+  version: 5.1.1
+  sha256: d94830141208e3a198c9a42c56dcd57b7a2acf43380806f268d99ba2ca6d481b
+  requires_dist:
+  - numpy
+  - cmake
+  - xmltodict
+  - validators
+  - packaging
+  requires_python: '>=3.9,<3.14'
 - conda: https://conda.anaconda.org/conda-forge/noarch/pyparsing-3.2.3-pyhe01879c_2.conda
   sha256: afe32182b1090911b64ac0f29eb47e03a015d142833d8a917defd65d91c99b74
   md5: aa0028616c0750c773698fdc254b2b8d
@@ -5901,7 +5943,7 @@ packages:
 - pypi: ./
   name: tensorswitch
   version: 0.1.0
-  sha256: ea195e1e84ddf77e9536eb7545f0cd979f054cbe8aae31252af2b9dfb15ba7f0
+  sha256: 8e1ce51999a0aa50f799591c0379a7097df6187d4a6b2c6d10334be5129c0904
   requires_dist:
   - tensorstore>=0.1.79,<0.2
   - psutil
@@ -5915,6 +5957,7 @@ packages:
   - openai
   - pydantic
   - watchdog
+  - pylibczirw>=5.1.1,<6
   requires_python: '>=3.11'
   editable: true
 - conda: https://conda.anaconda.org/conda-forge/noarch/tifffile-2025.6.11-pyhd8ed1ab_0.conda
@@ -6155,6 +6198,13 @@ packages:
   - pkg:pypi/urllib3?source=hash-mapping
   size: 115586
   timestamp: 1761321225593
+- pypi: https://files.pythonhosted.org/packages/fa/6e/3e955517e22cbdd565f2f8b2e73d52528b14b8bcfdb04f62466b071de847/validators-0.35.0-py3-none-any.whl
+  name: validators
+  version: 0.35.0
+  sha256: e8c947097eae7892cb3d26868d637f79f47b4a0554bc6b80065dfe5aac3705dd
+  requires_dist:
+  - eth-hash[pycryptodome]>=0.7.0 ; extra == 'crypto-eth-addresses'
+  requires_python: '>=3.9'
 - conda: https://conda.anaconda.org/conda-forge/linux-64/watchdog-4.0.1-py312h7900ff3_0.conda
   sha256: c4786da0c938a65cea07e2bb3fe76dbeed6968c322994c66395176307cf78425
   md5: 7cc94a3b5e9698eecc2c39dbf7a173db
@@ -6326,6 +6376,14 @@ packages:
   purls: []
   size: 392406
   timestamp: 1749375847832
+- pypi: https://files.pythonhosted.org/packages/c0/20/69a0e6058bc5ea74892d089d64dfc3a62ba78917ec5e2cfa70f7c92ba3a5/xmltodict-1.0.2-py3-none-any.whl
+  name: xmltodict
+  version: 1.0.2
+  sha256: 62d0fddb0dcbc9f642745d8bbf4d81fd17d6dfaec5a15b5c1876300aad92af0d
+  requires_dist:
+  - pytest ; extra == 'test'
+  - pytest-cov ; extra == 'test'
+  requires_python: '>=3.9'
 - conda: https://conda.anaconda.org/conda-forge/linux-64/xorg-libice-1.1.2-hb9d3cd8_0.conda
   sha256: c12396aabb21244c212e488bbdc4abcdef0b7404b15761d9329f5a4a39113c4b
   md5: fb901ff28063514abb6046c9ec2c4a45
