@@ -13,7 +13,7 @@ dependencies = [
     "apscheduler",
     "openai",
     "pydantic",
-    "watchdog",
+    "watchdog", "pylibczirw>=5.1.1,<6",
 ]
 description = "This package provides a unified entry point and organized task modules for managing N5/Zarr dataset conversions and downsampling. It centralizes your workflow into a single pipeline to reduce manual work and errors."
 readme = "README.md"
@@ -74,6 +74,7 @@ watchdog = ">=4.0.0,<5"
 pandas = "*"
 openpyxl = "*"
 awscli = ">=2.28.1,<3"
+aicspylibczi = ">=3.3.1,<4"
 
 [tool.pixi.feature.ipykernel.dependencies]
 ipykernel = "*"

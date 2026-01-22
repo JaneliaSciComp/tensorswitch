@@ -313,18 +313,27 @@ def zarr3_store_spec(path, shape, dtype, use_shard=True, level_path="s0", use_om
             {'name': 'bytes', 'configuration': {'endian': 'little'}},
             {'name': 'zstd', 'configuration': {'level': 1}}
         ])
-        # Handle 5D to 1D arrays, assuming order
-        # TODO: Make this depend on axes metadata detection
-        if len(shape) == 5:
-            chunk_shape = [1, 1, 64, 64, 64] # TCZYX
-        elif len(shape) == 4:
-            chunk_shape = [1, 64, 64, 64] # CZYX
-        elif len(shape) == 3:
-            chunk_shape = [64, 64, 64] # ZYX
-        elif len(shape) == 2:
-            chunk_shape = [64, 64] # YX
-        elif len(shape) == 1:
-            chunk_shape = [64] # X
+        # Use custom_chunk_shape if provided, otherwise use defaults
+        if custom_chunk_shape is not None:
+            # Adjust chunk shape for array dimensions if needed
+            if len(custom_chunk_shape) < len(shape):
+                extra_dims = len(shape) - len(custom_chunk_shape)
+                chunk_shape = [1] * extra_dims + list(custom_chunk_shape)
+            else:
+                chunk_shape = list(custom_chunk_shape)
+            print(f"Using custom chunk shape for non-sharded: {chunk_shape}")
+        else:
+            # Default chunk shapes for different dimensionalities
+            if len(shape) == 5:
+                chunk_shape = [1, 1, 64, 64, 64] # TCZYX
+            elif len(shape) == 4:
+                chunk_shape = [1, 64, 64, 64] # CZYX
+            elif len(shape) == 3:
+                chunk_shape = [64, 64, 64] # ZYX
+            elif len(shape) == 2:
+                chunk_shape = [64, 64] # YX
+            elif len(shape) == 1:
+                chunk_shape = [64] # X
 
     # Create path based on whether OME-ZARR structure is needed
     if use_ome_structure:
@@ -4229,5 +4238,334 @@ def add_labels_to_zarr(
     print(f"  Labels: {', '.join(label_names)}")
     print(f"  Format: Zarr {zarr_version}, NGFF {'0.5' if zarr_version == 'v3' else '0.4'}")
     print(f"{'='*80}\n")
+
+
+# ============================================================================
+# CZI Support (ZEISS microscopy format)
+# ============================================================================
+
+def _read_czi_plane(czi_file, plane_dict, y_size, x_size):
+    """
+    Read a single plane from CZI file.
+
+    This function opens and closes the file for each read, which is necessary
+    for dask delayed execution where each task runs independently.
+    """
+    from pylibCZIrw import czi
+
+    with czi.open_czi(czi_file) as czidoc:
+        result = czidoc.read(plane=plane_dict)
+        # pylibCZIrw returns (Y, X, 1) - squeeze the last dimension
+        if result.ndim == 3 and result.shape[2] == 1:
+            result = result[:, :, 0]
+        return result
+
+
+def load_czi_stack(czi_file, view_index=None):
+    """
+    Load CZI data as a dask array using pylibCZIrw.
+
+    For large CZI files, we build a dask array that lazily reads planes/subblocks.
+    Each dask task opens its own file handle for thread safety.
+
+    Args:
+        czi_file: Path to CZI file
+        view_index: Optional specific view index to load. If None and multiple views exist,
+                   loads all views as a 5D array (VCZYX). If None and single view, returns CZYX or ZYX.
+
+    Returns:
+        tuple: (dask_array, None) - dask array and None (no persistent handle needed)
+    """
+    from pylibCZIrw import czi
+    import dask.array as da
+    import dask
+
+    if not os.path.isfile(czi_file):
+        raise ValueError(f"CZI file does not exist: {czi_file}")
+
+    # Open CZI document temporarily to get metadata
+    with czi.open_czi(czi_file) as czidoc:
+        bbox = czidoc.total_bounding_box
+        pixel_types = czidoc.pixel_types
+        pixel_type = pixel_types.get(0, 'Gray16')
+
+    # Map pixel type to numpy dtype
+    dtype_map = {
+        'Gray8': np.uint8,
+        'Gray16': np.uint16,
+        'Gray32Float': np.float32,
+        'Bgr24': np.uint8,
+        'Bgr48': np.uint16,
+    }
+    dtype = dtype_map.get(pixel_type, np.uint16)
+
+    # Extract dimension sizes from bounding box
+    def get_dim_size(dim_name):
+        if dim_name in bbox:
+            return bbox[dim_name][1] - bbox[dim_name][0]
+        return 1
+
+    v_size = get_dim_size('V')
+    c_size = get_dim_size('C')
+    z_size = get_dim_size('Z')
+    y_size = get_dim_size('Y')
+    x_size = get_dim_size('X')
+
+    print(f"CZI dimensions: V={v_size}, C={c_size}, Z={z_size}, Y={y_size}, X={x_size}")
+    print(f"CZI dtype: {dtype}")
+
+    # Handle view selection
+    if view_index is not None:
+        if view_index < 0 or view_index >= v_size:
+            raise ValueError(f"View index {view_index} out of range (0-{v_size-1})")
+        v_range = [view_index]
+        include_v_dim = False
+        print(f"Loading single view V={view_index}")
+    elif v_size > 1:
+        v_range = range(v_size)
+        include_v_dim = True
+        print(f"Loading all {v_size} views")
+    else:
+        v_range = [0]
+        include_v_dim = False
+        print("Single view file")
+
+    # Build dask array using delayed reads
+    # Each delayed task opens its own file handle for thread safety
+
+    # Build the array structure based on dimensions present
+    if include_v_dim:
+        # 5D: VCZYX
+        v_chunks = []
+        for v in v_range:
+            c_chunks = []
+            for c in range(c_size):
+                z_chunks = []
+                for z in range(z_size):
+                    plane_dict = {'V': v, 'C': c, 'Z': z}
+                    delayed_read = dask.delayed(_read_czi_plane)(czi_file, plane_dict, y_size, x_size)
+                    arr = da.from_delayed(delayed_read, shape=(y_size, x_size), dtype=dtype)
+                    z_chunks.append(arr)
+                c_chunks.append(da.stack(z_chunks, axis=0))  # Stack Z
+            v_chunks.append(da.stack(c_chunks, axis=0))  # Stack C
+        dask_array = da.stack(v_chunks, axis=0)  # Stack V
+        print(f"Created 5D dask array (VCZYX): {dask_array.shape}")
+
+    elif c_size > 1:
+        # 4D: CZYX
+        c_chunks = []
+        for c in range(c_size):
+            z_chunks = []
+            for z in range(z_size):
+                v = v_range[0]
+                plane_dict = {'V': v, 'C': c, 'Z': z} if v_size > 1 else {'C': c, 'Z': z}
+                delayed_read = dask.delayed(_read_czi_plane)(czi_file, plane_dict, y_size, x_size)
+                arr = da.from_delayed(delayed_read, shape=(y_size, x_size), dtype=dtype)
+                z_chunks.append(arr)
+            c_chunks.append(da.stack(z_chunks, axis=0))  # Stack Z
+        dask_array = da.stack(c_chunks, axis=0)  # Stack C
+        print(f"Created 4D dask array (CZYX): {dask_array.shape}")
+
+    else:
+        # 3D: ZYX
+        z_chunks = []
+        for z in range(z_size):
+            v = v_range[0]
+            plane_dict = {'V': v, 'Z': z} if v_size > 1 else {'Z': z}
+            delayed_read = dask.delayed(_read_czi_plane)(czi_file, plane_dict, y_size, x_size)
+            arr = da.from_delayed(delayed_read, shape=(y_size, x_size), dtype=dtype)
+            z_chunks.append(arr)
+        dask_array = da.stack(z_chunks, axis=0)  # Stack Z
+        print(f"Created 3D dask array (ZYX): {dask_array.shape}")
+
+    print(f"Dask array shape: {dask_array.shape}, chunks: {dask_array.chunksize}")
+
+    # Return None for handle since we don't keep one open
+    return dask_array, None
+
+
+def extract_czi_metadata(czi_file):
+    """
+    Extract metadata and voxel sizes from CZI file.
+
+    Args:
+        czi_file: Path to CZI file
+
+    Returns:
+        tuple: (raw_xml_metadata, voxel_sizes_dict)
+            voxel_sizes_dict: {'x': float, 'y': float, 'z': float} in micrometers
+    """
+    from pylibCZIrw import czi
+    import xml.etree.ElementTree as ET
+
+    if not os.path.isfile(czi_file):
+        raise ValueError(f"CZI file does not exist: {czi_file}")
+
+    with czi.open_czi(czi_file) as czidoc:
+        raw_meta = czidoc.raw_metadata
+        voxel_sizes = None
+
+        if raw_meta:
+            try:
+                root = ET.fromstring(raw_meta)
+
+                # Find scaling information
+                scaling = root.find('.//Scaling')
+                if scaling is not None:
+                    items = scaling.find('Items')
+                    if items is not None:
+                        voxel_sizes = {'x': 1.0, 'y': 1.0, 'z': 1.0}
+                        for dist in items.findall('Distance'):
+                            id_attr = dist.get('Id')
+                            value = dist.find('Value')
+                            if value is not None and id_attr:
+                                # Convert meters to micrometers
+                                val_um = float(value.text) * 1e6
+                                if id_attr.upper() == 'X':
+                                    voxel_sizes['x'] = val_um
+                                elif id_attr.upper() == 'Y':
+                                    voxel_sizes['y'] = val_um
+                                elif id_attr.upper() == 'Z':
+                                    voxel_sizes['z'] = val_um
+
+                        print(f"Extracted CZI voxel sizes: x={voxel_sizes['x']:.4f}, y={voxel_sizes['y']:.4f}, z={voxel_sizes['z']:.4f} um")
+
+            except Exception as e:
+                print(f"Warning: Could not parse CZI metadata: {e}")
+
+        return raw_meta, voxel_sizes
+
+
+def transform_czi_to_ome_xml(raw_czi_metadata):
+    """
+    Transform CZI XML metadata to OME-XML using vendored XSLT.
+
+    Uses the czi-to-ome-xslt stylesheets from Allen Institute for Cell Science.
+    License: BSD-3-Clause (see xslt/LICENSE.czi-to-ome-xslt)
+
+    Args:
+        raw_czi_metadata: Raw CZI XML metadata string
+
+    Returns:
+        str: OME-XML string, or None if transformation fails
+    """
+    from lxml import etree
+    from pathlib import Path
+
+    try:
+        # Path to vendored XSLT files
+        xslt_dir = Path(__file__).parent / "xslt"
+        xslt_path = xslt_dir / "czi-to-ome.xsl"
+
+        if not xslt_path.exists():
+            print(f"Warning: XSLT file not found at {xslt_path}")
+            return None
+
+        # Parse XSLT stylesheet
+        xslt_doc = etree.parse(str(xslt_path))
+        transform = etree.XSLT(xslt_doc)
+
+        # Parse CZI metadata
+        if isinstance(raw_czi_metadata, str):
+            raw_czi_metadata = raw_czi_metadata.encode('utf-8')
+        czi_doc = etree.fromstring(raw_czi_metadata)
+
+        # Apply transformation
+        ome_doc = transform(czi_doc)
+
+        # Convert to string
+        ome_xml = etree.tostring(ome_doc, pretty_print=True, encoding='unicode')
+
+        print(f"Successfully transformed CZI metadata to OME-XML ({len(ome_xml)} chars)")
+        return ome_xml
+
+    except Exception as e:
+        print(f"Warning: Could not transform CZI to OME-XML: {e}")
+        return None
+
+
+def convert_czi_to_zarr3_metadata(czi_file, volume_shape, voxel_sizes):
+    """
+    Convert CZI metadata to Zarr3 OME-NGFF format.
+
+    Args:
+        czi_file: Path to source CZI file
+        volume_shape: Shape of the volume array
+        voxel_sizes: Dict with 'x', 'y', 'z' voxel sizes in micrometers
+
+    Returns:
+        dict: Zarr3 group metadata with OME attributes
+    """
+    image_name = os.path.splitext(os.path.basename(czi_file))[0]
+
+    # Build axes based on number of dimensions
+    ndim = len(volume_shape)
+
+    if ndim == 3:  # ZYX
+        axes = [
+            {'name': 'z', 'type': 'space', 'unit': 'micrometer'},
+            {'name': 'y', 'type': 'space', 'unit': 'micrometer'},
+            {'name': 'x', 'type': 'space', 'unit': 'micrometer'}
+        ]
+        scale = [
+            voxel_sizes.get('z', 1.0) if voxel_sizes else 1.0,
+            voxel_sizes.get('y', 1.0) if voxel_sizes else 1.0,
+            voxel_sizes.get('x', 1.0) if voxel_sizes else 1.0
+        ]
+    elif ndim == 4:  # CZYX
+        axes = [
+            {'name': 'c', 'type': 'channel'},
+            {'name': 'z', 'type': 'space', 'unit': 'micrometer'},
+            {'name': 'y', 'type': 'space', 'unit': 'micrometer'},
+            {'name': 'x', 'type': 'space', 'unit': 'micrometer'}
+        ]
+        scale = [
+            1.0,
+            voxel_sizes.get('z', 1.0) if voxel_sizes else 1.0,
+            voxel_sizes.get('y', 1.0) if voxel_sizes else 1.0,
+            voxel_sizes.get('x', 1.0) if voxel_sizes else 1.0
+        ]
+    elif ndim == 5:  # VCZYX or TCZYX
+        axes = [
+            {'name': 'v', 'type': 'space'},  # View dimension
+            {'name': 'c', 'type': 'channel'},
+            {'name': 'z', 'type': 'space', 'unit': 'micrometer'},
+            {'name': 'y', 'type': 'space', 'unit': 'micrometer'},
+            {'name': 'x', 'type': 'space', 'unit': 'micrometer'}
+        ]
+        scale = [
+            1.0,
+            1.0,
+            voxel_sizes.get('z', 1.0) if voxel_sizes else 1.0,
+            voxel_sizes.get('y', 1.0) if voxel_sizes else 1.0,
+            voxel_sizes.get('x', 1.0) if voxel_sizes else 1.0
+        ]
+    else:
+        # Generic fallback
+        axes = [{'name': f'dim_{i}', 'type': 'space'} for i in range(ndim)]
+        scale = [1.0] * ndim
+
+    zarr3_metadata = {
+        'zarr_format': 3,
+        'node_type': 'group',
+        'attributes': {
+            'ome': {
+                'multiscales': [{
+                    'version': '0.5',
+                    'name': image_name,
+                    'axes': axes,
+                    'datasets': [{
+                        'path': 's0',
+                        'coordinateTransformations': [{
+                            'type': 'scale',
+                            'scale': scale
+                        }]
+                    }]
+                }]
+            }
+        }
+    }
+
+    return zarr3_metadata
 
 
