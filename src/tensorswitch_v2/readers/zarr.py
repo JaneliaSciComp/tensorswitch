@@ -152,9 +152,9 @@ class Zarr3Reader(BaseReader):
                 zarr_metadata = json.load(f)
                 metadata['zarr_metadata'] = zarr_metadata
 
-                # Extract shape and dtype
+                # Extract shape and dtype (convert to tuple for consistency)
                 if 'shape' in zarr_metadata:
-                    metadata['shape'] = zarr_metadata['shape']
+                    metadata['shape'] = tuple(zarr_metadata['shape'])
                 if 'data_type' in zarr_metadata:
                     metadata['dtype'] = zarr_metadata['data_type']
                 if 'chunk_grid' in zarr_metadata:

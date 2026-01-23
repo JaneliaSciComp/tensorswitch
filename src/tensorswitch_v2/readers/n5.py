@@ -116,21 +116,8 @@ class N5Reader(BaseReader):
         if self.dataset_path:
             spec['path'] = self.dataset_path
 
-        # Try to get dimension names from metadata
-        metadata = self.get_metadata()
-        if 'dimensions' in metadata:
-            ndim = len(metadata['dimensions'])
-            # Infer dimension names based on number of dimensions
-            if ndim == 3:
-                dimension_names = ['z', 'y', 'x']
-            elif ndim == 4:
-                dimension_names = ['c', 'z', 'y', 'x']
-            elif ndim == 5:
-                dimension_names = ['t', 'c', 'z', 'y', 'x']
-            else:
-                dimension_names = [f'dim_{i}' for i in range(ndim)]
-
-            spec['schema'] = {'dimension_names': dimension_names}
+        # Note: N5 driver doesn't support dimension_names in schema
+        # Dimension names are stored separately in metadata for reference
 
         return spec
 
@@ -180,6 +167,9 @@ class N5Reader(BaseReader):
             try:
                 with open(attributes_path, 'r') as f:
                     self._metadata_cache = json.load(f)
+                # Add 'shape' for consistency with other readers (N5 uses 'dimensions')
+                if 'dimensions' in self._metadata_cache:
+                    self._metadata_cache['shape'] = tuple(self._metadata_cache['dimensions'])
             except (json.JSONDecodeError, IOError) as e:
                 print(f"Warning: Failed to read N5 attributes: {e}")
                 self._metadata_cache = {}

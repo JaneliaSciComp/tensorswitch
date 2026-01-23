@@ -112,11 +112,23 @@ class DistributedConverter:
         if verbose:
             print(f"Opening input: {self.reader}")
         input_spec = self.reader.get_tensorstore_spec()
-        input_spec['context'] = get_tensorstore_context()
-        self._input_store = ts.open(input_spec, read=True).result()
 
-        input_shape = tuple(self._input_store.shape)
-        input_dtype = str(self._input_store.dtype)
+        # Handle Tier 2 readers (dask arrays) vs Tier 1 (native TensorStore)
+        if input_spec.get('driver') == 'array' and 'array' in input_spec:
+            # Tier 2: Reader returns a dask array wrapped in 'array' driver
+            self._dask_array = input_spec['array']
+            self._input_store = None  # Will use dask array directly
+            input_shape = tuple(self._dask_array.shape)
+            input_dtype = str(self._dask_array.dtype)
+            self._is_tier2 = True
+        else:
+            # Tier 1: Native TensorStore driver
+            input_spec['context'] = get_tensorstore_context()
+            self._input_store = ts.open(input_spec, read=True).result()
+            input_shape = tuple(self._input_store.shape)
+            input_dtype = str(self._input_store.dtype)
+            self._is_tier2 = False
+            self._dask_array = None
 
         if verbose:
             print(f"  Shape: {input_shape}, dtype: {input_dtype}")
@@ -193,8 +205,14 @@ class DistributedConverter:
 
         for idx, chunk_domain in enumerate(chunk_domains, start=start_idx):
             try:
-                # Read from input
-                data = self._input_store[chunk_domain].read().result()
+                # Read from input (handle both Tier 1 and Tier 2 readers)
+                if self._is_tier2:
+                    # Tier 2: Read from dask array, need to convert domain to slices
+                    slices = self._domain_to_slices(chunk_domain)
+                    data = self._dask_array[slices].compute()
+                else:
+                    # Tier 1: Read from TensorStore directly
+                    data = self._input_store[chunk_domain].read().result()
 
                 # Write to output using per-chunk transaction (Mark's fix)
                 with ts.Transaction() as txn:
@@ -280,13 +298,20 @@ class DistributedConverter:
         if self._total_chunks is not None:
             return self._total_chunks
 
-        # Need to open stores to calculate
+        # Get input shape (handle both Tier 1 and Tier 2 readers)
         input_spec = self.reader.get_tensorstore_spec()
-        input_spec['context'] = get_tensorstore_context()
-        input_store = ts.open(input_spec, read=True).result()
 
-        input_shape = tuple(input_store.shape)
-        input_dtype = str(input_store.dtype)
+        if input_spec.get('driver') == 'array' and 'array' in input_spec:
+            # Tier 2: Get shape from dask array
+            dask_array = input_spec['array']
+            input_shape = tuple(dask_array.shape)
+            input_dtype = str(dask_array.dtype)
+        else:
+            # Tier 1: Open TensorStore to get shape
+            input_spec['context'] = get_tensorstore_context()
+            input_store = ts.open(input_spec, read=True).result()
+            input_shape = tuple(input_store.shape)
+            input_dtype = str(input_store.dtype)
 
         # Create temp output spec to get chunk layout
         output_spec = self.writer.create_output_spec(
@@ -338,6 +363,23 @@ class DistributedConverter:
             start = stop
 
         return ranges
+
+    def _domain_to_slices(self, domain) -> tuple:
+        """
+        Convert TensorStore IndexDomain to Python slice tuple for dask array indexing.
+
+        Args:
+            domain: TensorStore IndexDomain
+
+        Returns:
+            tuple: Tuple of slices for array indexing
+        """
+        slices = []
+        for i in range(domain.ndim):
+            start = int(domain.origin[i])
+            stop = start + int(domain.shape[i])
+            slices.append(slice(start, stop))
+        return tuple(slices)
 
     def __repr__(self) -> str:
         return f"DistributedConverter(reader={self.reader}, writer={self.writer})"

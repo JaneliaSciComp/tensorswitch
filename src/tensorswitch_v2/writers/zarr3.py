@@ -153,12 +153,20 @@ class Zarr3Writer(BaseWriter):
         if spec is None:
             raise ValueError("No spec available. Call create_output_spec first.")
 
-        self._store = ts.open(
-            spec,
-            create=create,
-            open=True,
-            delete_existing=delete_existing
-        ).result()
+        # Note: TensorStore doesn't allow open=True with delete_existing=True
+        # When creating new store, use create=True only; for opening existing use open=True
+        if delete_existing:
+            self._store = ts.open(
+                spec,
+                create=create,
+                delete_existing=delete_existing
+            ).result()
+        else:
+            self._store = ts.open(
+                spec,
+                create=create,
+                open=not create  # Only open if not creating new
+            ).result()
 
         return self._store
 

@@ -101,7 +101,7 @@ class TiffReader(BaseReader):
         Return TIFF metadata using existing extract_tiff_ome_metadata function.
 
         Returns:
-            dict: TIFF metadata including OME-XML and voxel sizes if available
+            dict: TIFF metadata including shape, dtype, OME-XML and voxel sizes
 
         Example:
             >>> reader = TiffReader("/data.tif")
@@ -113,9 +113,15 @@ class TiffReader(BaseReader):
             - Returns (ome_xml, voxel_sizes) tuple, converted to dict
         """
         if self._metadata_cache is None:
+            # Ensure dask array is loaded to get shape/dtype
+            if self._dask_array is None:
+                self._dask_array = load_tiff_stack(self.path)
+
             try:
                 ome_xml, voxel_sizes = extract_tiff_ome_metadata(self.path)
                 self._metadata_cache = {
+                    'shape': tuple(self._dask_array.shape),
+                    'dtype': str(self._dask_array.dtype),
                     'ome_xml': ome_xml,
                     'voxel_size_x': voxel_sizes.get('x', 1.0) if voxel_sizes else 1.0,
                     'voxel_size_y': voxel_sizes.get('y', 1.0) if voxel_sizes else 1.0,
@@ -123,7 +129,10 @@ class TiffReader(BaseReader):
                 }
             except Exception as e:
                 print(f"Warning: Failed to extract TIFF metadata: {e}")
-                self._metadata_cache = {}
+                self._metadata_cache = {
+                    'shape': tuple(self._dask_array.shape),
+                    'dtype': str(self._dask_array.dtype),
+                }
 
         return self._metadata_cache
 

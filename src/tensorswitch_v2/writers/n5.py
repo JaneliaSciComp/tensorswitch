@@ -197,12 +197,19 @@ class N5Writer(BaseWriter):
         if spec is None:
             raise ValueError("No spec available. Call create_output_spec first.")
 
-        self._store = ts.open(
-            spec,
-            create=create,
-            open=True,
-            delete_existing=delete_existing
-        ).result()
+        # Note: TensorStore doesn't allow open=True with delete_existing=True
+        if delete_existing:
+            self._store = ts.open(
+                spec,
+                create=create,
+                delete_existing=delete_existing
+            ).result()
+        else:
+            self._store = ts.open(
+                spec,
+                create=create,
+                open=not create
+            ).result()
 
         return self._store
 
