@@ -1,0 +1,212 @@
+"""
+Unit tests for tensorswitch_v2 readers.
+
+Tests all reader implementations (Tier 1, 2, 3) for correct behavior.
+"""
+
+import os
+import pytest
+import numpy as np
+
+from tensorswitch_v2.readers import (
+    BaseReader,
+    N5Reader,
+    Zarr3Reader,
+    Zarr2Reader,
+    PrecomputedReader,
+    TiffReader,
+)
+from tensorswitch_v2.api import Readers
+
+
+class TestTiffReader:
+    """Tests for TiffReader (Tier 2)."""
+
+    def test_init(self, sample_tiff_path):
+        """Test TiffReader initialization."""
+        reader = TiffReader(sample_tiff_path)
+        assert reader.path == sample_tiff_path
+
+    def test_get_tensorstore_spec(self, sample_tiff_path):
+        """Test getting TensorStore spec from TIFF."""
+        reader = TiffReader(sample_tiff_path)
+        spec = reader.get_tensorstore_spec()
+
+        assert spec is not None
+        assert 'driver' in spec
+
+    def test_get_metadata(self, sample_tiff_path):
+        """Test getting metadata from TIFF."""
+        reader = TiffReader(sample_tiff_path)
+        metadata = reader.get_metadata()
+
+        assert metadata is not None
+        assert 'shape' in metadata
+        assert metadata['shape'] == (32, 64, 64)
+
+    def test_factory_method(self, sample_tiff_path):
+        """Test Readers.tiff() factory method."""
+        reader = Readers.tiff(sample_tiff_path)
+        assert isinstance(reader, TiffReader)
+
+    def test_auto_detect_tiff(self, sample_tiff_path):
+        """Test auto_detect returns TiffReader for .tif files."""
+        reader = Readers.auto_detect(sample_tiff_path)
+        assert isinstance(reader, TiffReader)
+
+
+class TestZarr3Reader:
+    """Tests for Zarr3Reader (Tier 1)."""
+
+    def test_init(self, sample_zarr3_path):
+        """Test Zarr3Reader initialization."""
+        reader = Zarr3Reader(sample_zarr3_path)
+        assert reader.path == sample_zarr3_path
+
+    def test_get_tensorstore_spec(self, sample_zarr3_path):
+        """Test getting TensorStore spec from Zarr3."""
+        reader = Zarr3Reader(sample_zarr3_path, dataset_path="s0")
+        spec = reader.get_tensorstore_spec()
+
+        assert spec is not None
+        assert spec['driver'] == 'zarr3'
+
+    def test_get_metadata(self, sample_zarr3_path):
+        """Test getting metadata from Zarr3."""
+        reader = Zarr3Reader(sample_zarr3_path, dataset_path="s0")
+        metadata = reader.get_metadata()
+
+        assert metadata is not None
+        assert 'shape' in metadata
+        assert metadata['shape'] == (32, 64, 64)
+
+    def test_factory_method(self, sample_zarr3_path):
+        """Test Readers.zarr3() factory method."""
+        reader = Readers.zarr3(sample_zarr3_path, dataset_path="s0")
+        assert isinstance(reader, Zarr3Reader)
+
+
+class TestZarr2Reader:
+    """Tests for Zarr2Reader (Tier 1)."""
+
+    def test_init(self, sample_zarr2_path):
+        """Test Zarr2Reader initialization."""
+        reader = Zarr2Reader(sample_zarr2_path)
+        assert reader.path == sample_zarr2_path
+
+    def test_get_tensorstore_spec(self, sample_zarr2_path):
+        """Test getting TensorStore spec from Zarr2."""
+        reader = Zarr2Reader(sample_zarr2_path, dataset_path="s0")
+        spec = reader.get_tensorstore_spec()
+
+        assert spec is not None
+        assert spec['driver'] == 'zarr'
+
+    def test_factory_method(self, sample_zarr2_path):
+        """Test Readers.zarr2() factory method."""
+        reader = Readers.zarr2(sample_zarr2_path, dataset_path="s0")
+        assert isinstance(reader, Zarr2Reader)
+
+
+class TestN5Reader:
+    """Tests for N5Reader (Tier 1)."""
+
+    def test_init(self, sample_n5_path):
+        """Test N5Reader initialization."""
+        reader = N5Reader(sample_n5_path)
+        assert reader.path == sample_n5_path
+
+    def test_get_tensorstore_spec(self, sample_n5_path):
+        """Test getting TensorStore spec from N5."""
+        reader = N5Reader(sample_n5_path, dataset_path="s0")
+        spec = reader.get_tensorstore_spec()
+
+        assert spec is not None
+        assert spec['driver'] == 'n5'
+
+    def test_get_metadata(self, sample_n5_path):
+        """Test getting metadata from N5."""
+        reader = N5Reader(sample_n5_path, dataset_path="s0")
+        metadata = reader.get_metadata()
+
+        assert metadata is not None
+        assert 'shape' in metadata
+        assert metadata['shape'] == (32, 64, 64)
+
+    def test_factory_method(self, sample_n5_path):
+        """Test Readers.n5() factory method."""
+        reader = Readers.n5(sample_n5_path, dataset_path="s0")
+        assert isinstance(reader, N5Reader)
+
+    def test_auto_detect_n5(self, sample_n5_path):
+        """Test auto_detect returns N5Reader for .n5 paths."""
+        reader = Readers.auto_detect(sample_n5_path)
+        assert isinstance(reader, N5Reader)
+
+
+class TestReadersFactory:
+    """Tests for Readers factory class."""
+
+    def test_auto_detect_tiff(self, sample_tiff_path):
+        """Test auto-detection for TIFF files."""
+        reader = Readers.auto_detect(sample_tiff_path)
+        assert isinstance(reader, TiffReader)
+
+    def test_auto_detect_n5(self, sample_n5_path):
+        """Test auto-detection for N5 datasets."""
+        reader = Readers.auto_detect(sample_n5_path)
+        assert isinstance(reader, N5Reader)
+
+    def test_auto_detect_zarr3(self, sample_zarr3_path):
+        """Test auto-detection for Zarr3 datasets."""
+        reader = Readers.auto_detect(sample_zarr3_path)
+        assert isinstance(reader, (Zarr3Reader, Zarr2Reader))
+
+    def test_explicit_reader_selection(self, sample_tiff_path):
+        """Test explicit reader selection via factory."""
+        reader = Readers.tiff(sample_tiff_path)
+        assert isinstance(reader, TiffReader)
+
+
+class TestReaderDataAccess:
+    """Tests for actual data access through readers."""
+
+    def test_tiff_read_data(self, sample_tiff_path, sample_3d_array):
+        """Test reading data through TiffReader."""
+        import tensorstore as ts
+
+        reader = TiffReader(sample_tiff_path)
+        spec = reader.get_tensorstore_spec()
+        store = ts.open(spec, read=True).result()
+
+        # Read all data
+        data = store[...].read().result()
+
+        assert data.shape == sample_3d_array.shape
+        assert np.array_equal(data, sample_3d_array)
+
+    def test_zarr3_read_data(self, sample_zarr3_path, sample_3d_array):
+        """Test reading data through Zarr3Reader."""
+        import tensorstore as ts
+
+        reader = Zarr3Reader(sample_zarr3_path, dataset_path="s0")
+        spec = reader.get_tensorstore_spec()
+        store = ts.open(spec, read=True).result()
+
+        data = store[...].read().result()
+
+        assert data.shape == sample_3d_array.shape
+        assert np.array_equal(data, sample_3d_array)
+
+    def test_n5_read_data(self, sample_n5_path, sample_3d_array):
+        """Test reading data through N5Reader."""
+        import tensorstore as ts
+
+        reader = N5Reader(sample_n5_path, dataset_path="s0")
+        spec = reader.get_tensorstore_spec()
+        store = ts.open(spec, read=True).result()
+
+        data = store[...].read().result()
+
+        assert data.shape == sample_3d_array.shape
+        assert np.array_equal(data, sample_3d_array)

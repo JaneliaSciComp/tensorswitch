@@ -21,8 +21,19 @@ Output Formats:
 
 Public API:
     - BaseWriter: Abstract base class for all writers
+    - Zarr3Writer: Zarr v3 with sharding and OME-NGFF v0.5
+    - Zarr2Writer: Zarr v2 with OME-NGFF v0.4 (legacy)
+    - N5Writer: N5 format for Java tools
 """
 
 from .base import BaseWriter
+from .zarr3 import Zarr3Writer
+from .zarr2 import Zarr2Writer
+from .n5 import N5Writer
 
-__all__ = ['BaseWriter']
+__all__ = [
+    'BaseWriter',
+    'Zarr3Writer',
+    'Zarr2Writer',
+    'N5Writer',
+]

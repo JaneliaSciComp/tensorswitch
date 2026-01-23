@@ -55,8 +55,10 @@ class Writers:
     def zarr3(
         output_path: str,
         use_sharding: bool = True,
-        compression: str = "blosc",
+        compression: str = "zstd",
         compression_level: int = 5,
+        use_ome_structure: bool = True,
+        level_path: str = "s0",
         **kwargs
     ) -> BaseWriter:
         """
@@ -73,6 +75,8 @@ class Writers:
             use_sharding: Enable sharding_indexed codec (default: True)
             compression: Compression codec ('blosc', 'gzip', 'zstd', 'none')
             compression_level: Compression level (1-9, default: 5)
+            use_ome_structure: Use OME-ZARR directory structure (default: True)
+            level_path: Level subdirectory name (default: "s0")
             **kwargs: Additional format-specific options
 
         Returns:
@@ -90,21 +94,23 @@ class Writers:
             ...     compression="zstd",
             ...     compression_level=7
             ... )
-
-        Implementation Status:
-            🚧 Week 8-9 (Phase 5.5 - Writers + Distributed)
         """
-        raise NotImplementedError(
-            "Zarr3Writer not yet implemented. "
-            "Will be added in Week 8-9 (Phase 5.5 - Writers + Distributed). "
-            "See PLAN_phase5.md for timeline."
+        from ..writers.zarr3 import Zarr3Writer
+        return Zarr3Writer(
+            output_path=output_path,
+            use_sharding=use_sharding,
+            compression=compression,
+            compression_level=compression_level,
+            use_ome_structure=use_ome_structure,
+            level_path=level_path
         )
 
     @staticmethod
     def zarr2(
         output_path: str,
-        compression: str = "blosc",
+        compression: str = "zstd",
         compression_level: int = 5,
+        level_path: str = "s0",
         **kwargs
     ) -> BaseWriter:
         """
@@ -119,6 +125,7 @@ class Writers:
             output_path: Path to output Zarr2 dataset
             compression: Compression codec ('blosc', 'gzip', 'zstd', 'none')
             compression_level: Compression level (1-9, default: 5)
+            level_path: Level subdirectory name (default: "s0")
             **kwargs: Additional format-specific options
 
         Returns:
@@ -138,14 +145,13 @@ class Writers:
             - Use Zarr3 for new projects (sharding, better performance)
             - Use Zarr2 for compatibility with existing tools
             - No sharding means many small files (performance impact)
-
-        Implementation Status:
-            🚧 Week 8-9 (Phase 5.5 - Writers + Distributed)
         """
-        raise NotImplementedError(
-            "Zarr2Writer not yet implemented. "
-            "Will be added in Week 8-9 (Phase 5.5 - Writers + Distributed). "
-            "See PLAN_phase5.md for timeline."
+        from ..writers.zarr2 import Zarr2Writer
+        return Zarr2Writer(
+            output_path=output_path,
+            compression=compression,
+            compression_level=compression_level,
+            level_path=level_path
         )
 
     @staticmethod
@@ -153,6 +159,7 @@ class Writers:
         output_path: str,
         compression: str = "gzip",
         compression_level: int = 5,
+        dataset_path: str = "s0",
         **kwargs
     ) -> BaseWriter:
         """
@@ -167,6 +174,7 @@ class Writers:
             output_path: Path to output N5 dataset
             compression: Compression type ('gzip', 'bzip2', 'xz', 'raw')
             compression_level: Compression level (1-9, default: 5)
+            dataset_path: Dataset path within N5 (default: "s0")
             **kwargs: Additional format-specific options
 
         Returns:
@@ -178,7 +186,7 @@ class Writers:
         Example (Custom compression):
             >>> writer = Writers.n5(
             ...     "/output.n5",
-            ...     compression="bzip2",
+            ...     compression="blosc",
             ...     compression_level=9
             ... )
 
@@ -187,12 +195,11 @@ class Writers:
             - No sharding support
             - Compatible with BigDataViewer, Java ecosystem
             - Metadata in attributes.json (different from Zarr)
-
-        Implementation Status:
-            🚧 Week 8-9 (Phase 5.5 - Writers + Distributed)
         """
-        raise NotImplementedError(
-            "N5Writer not yet implemented. "
-            "Will be added in Week 8-9 (Phase 5.5 - Writers + Distributed). "
-            "See PLAN_phase5.md for timeline."
+        from ..writers.n5 import N5Writer
+        return N5Writer(
+            output_path=output_path,
+            compression=compression,
+            compression_level=compression_level,
+            dataset_path=dataset_path
         )
