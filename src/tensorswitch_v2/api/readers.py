@@ -153,50 +153,48 @@ class Readers:
         return N5Reader(path, dataset_path=dataset_path)
 
     @staticmethod
-    def zarr3(path: str) -> BaseReader:
+    def zarr3(path: str, dataset_path: str = "") -> BaseReader:
         """
         Create Zarr3 reader (Tier 1 - Native TensorStore).
 
         Args:
             path: Path to Zarr3 dataset
+            dataset_path: Path within store to specific array (e.g., "s0")
 
         Returns:
             Zarr3Reader instance
 
         Example:
             >>> reader = Readers.zarr3("/data.zarr")
+            >>> reader = Readers.zarr3("/data.zarr", dataset_path="s0")
 
         Implementation Status:
-            🚧 Week 3-4 (Phase 5.2 - Tier 1 Readers)
+            ✅ Complete (Tier 1 - Native TensorStore)
         """
-        raise NotImplementedError(
-            "Zarr3Reader not yet implemented. "
-            "Will be added in Week 3-4 (Phase 5.2 - Tier 1 Readers). "
-            "See PLAN_phase5.md for timeline."
-        )
+        from ..readers.zarr import Zarr3Reader
+        return Zarr3Reader(path, dataset_path=dataset_path)
 
     @staticmethod
-    def zarr2(path: str) -> BaseReader:
+    def zarr2(path: str, dataset_path: str = "") -> BaseReader:
         """
         Create Zarr2 reader (Tier 1 - Native TensorStore).
 
         Args:
             path: Path to Zarr2 dataset
+            dataset_path: Path within store to specific array (e.g., "0")
 
         Returns:
             Zarr2Reader instance
 
         Example:
             >>> reader = Readers.zarr2("/data.zarr")
+            >>> reader = Readers.zarr2("/data.zarr", dataset_path="0")
 
         Implementation Status:
-            🚧 Week 3-4 (Phase 5.2 - Tier 1 Readers)
+            ✅ Complete (Tier 1 - Native TensorStore)
         """
-        raise NotImplementedError(
-            "Zarr2Reader not yet implemented. "
-            "Will be added in Week 3-4 (Phase 5.2 - Tier 1 Readers). "
-            "See PLAN_phase5.md for timeline."
-        )
+        from ..readers.zarr import Zarr2Reader
+        return Zarr2Reader(path, dataset_path=dataset_path)
 
     @staticmethod
     def precomputed(path: str, scale_index: int = 0) -> BaseReader:
@@ -264,17 +262,13 @@ class Readers:
             >>> reader = Readers.nd2("/data.nd2")
 
         Implementation Status:
-            🚧 Week 5-6 (Phase 5.3 - Tier 2 Readers)
+            ✅ Complete (Tier 2 - reuses load_nd2_stack())
         """
-        raise NotImplementedError(
-            "ND2Reader not yet implemented. "
-            "Will be added in Week 5-6 (Phase 5.3 - Tier 2 Readers). "
-            "Will reuse existing load_nd2_stack() from utils.py. "
-            "See PLAN_phase5.md for timeline."
-        )
+        from ..readers.nd2 import ND2Reader
+        return ND2Reader(path)
 
     @staticmethod
-    def ims(path: str) -> BaseReader:
+    def ims(path: str, resolution_level: int = 0) -> BaseReader:
         """
         Create IMS reader (Tier 2 - Custom Optimized).
 
@@ -282,6 +276,7 @@ class Readers:
 
         Args:
             path: Path to IMS file
+            resolution_level: Which resolution level to read (0 = highest)
 
         Returns:
             IMSReader instance
@@ -290,44 +285,45 @@ class Readers:
             >>> reader = Readers.ims("/data.ims")
 
         Implementation Status:
-            🚧 Week 5-6 (Phase 5.3 - Tier 2 Readers)
+            ✅ Complete (Tier 2 - reuses load_ims_stack())
         """
-        raise NotImplementedError(
-            "IMSReader not yet implemented. "
-            "Will be added in Week 5-6 (Phase 5.3 - Tier 2 Readers). "
-            "Will reuse existing load_ims_stack() from utils.py. "
-            "See PLAN_phase5.md for timeline."
-        )
+        from ..readers.ims import IMSReader
+        return IMSReader(path, resolution_level=resolution_level)
 
     @staticmethod
-    def hdf5(path: str) -> BaseReader:
+    def hdf5(path: str, dataset_path: Optional[str] = None) -> BaseReader:
         """
         Create HDF5 reader (Tier 2 - Custom Optimized).
 
         Args:
             path: Path to HDF5 file
+            dataset_path: Path to dataset within HDF5 (auto-detected if None)
 
         Returns:
             HDF5Reader instance
 
         Example:
             >>> reader = Readers.hdf5("/data.h5")
+            >>> reader = Readers.hdf5("/data.h5", dataset_path="/volume")
 
         Implementation Status:
-            🚧 Week 5-6 (Phase 5.3 - Tier 2 Readers)
+            ✅ Complete (Tier 2 - uses h5py + dask)
         """
-        raise NotImplementedError(
-            "HDF5Reader not yet implemented. "
-            "Will be added in Week 5-6 (Phase 5.3 - Tier 2 Readers). "
-            "See PLAN_phase5.md for timeline."
-        )
+        from ..readers.hdf5 import HDF5Reader
+        return HDF5Reader(path, dataset_path=dataset_path)
 
     # ========================================================================
     # Tier 3: BIOIO Adapter (Week 7)
     # ========================================================================
 
     @staticmethod
-    def bioio(path: str, format: Optional[str] = None) -> BaseReader:
+    def bioio(
+        path: str,
+        scene_index: int = 0,
+        channel_index: Optional[int] = None,
+        time_index: Optional[int] = None,
+        reader: Optional[object] = None
+    ) -> BaseReader:
         """
         Create BIOIO adapter reader (Tier 3 - Broad Compatibility).
 
@@ -336,7 +332,10 @@ class Readers:
 
         Args:
             path: Path to input file
-            format: Optional format hint for BIOIO (auto-detects if None)
+            scene_index: Which scene to load for multi-scene files (default: 0)
+            channel_index: Optional specific channel to extract (None = all)
+            time_index: Optional specific timepoint to extract (None = all)
+            reader: Optional explicit BIOIO reader class (auto-detects if None)
 
         Returns:
             BIOIOReader instance
@@ -345,22 +344,26 @@ class Readers:
             >>> # Auto-detect format
             >>> reader = Readers.bioio("/data.czi")
 
-            >>> # Explicit format
-            >>> reader = Readers.bioio("/data.czi", format="czi")
+            >>> # Specific scene in multi-scene file
+            >>> reader = Readers.bioio("/data.lif", scene_index=2)
+
+            >>> # Extract single channel
+            >>> reader = Readers.bioio("/data.czi", channel_index=0)
 
         Supported Formats:
             CZI, LIF, SLDY, DV, OME-TIFF, and 20+ more via BIOIO plugins.
             See https://github.com/bioio-devs/bioio for full list.
 
         Implementation Status:
-            🚧 Week 7 (Phase 5.4 - BIOIO Adapter)
-            Strategic unlock: 1 adapter (~200 LOC) = 20+ formats
+            ✅ Complete - Strategic unlock: 1 adapter (~200 LOC) = 20+ formats
         """
-        raise NotImplementedError(
-            "BIOIOReader not yet implemented. "
-            "Will be added in Week 7 (Phase 5.4 - BIOIO Adapter). "
-            "This is the strategic unlock: one adapter, 20+ formats. "
-            "See PLAN_phase5.md for timeline."
+        from ..readers.bioio_adapter import BIOIOReader
+        return BIOIOReader(
+            path,
+            scene_index=scene_index,
+            channel_index=channel_index,
+            time_index=time_index,
+            reader=reader
         )
 
 
@@ -380,13 +383,34 @@ def _is_zarr3(path: str) -> bool:
     Returns:
         bool: True if Zarr3, False if Zarr2
 
-    Implementation:
-        🚧 Placeholder - will be implemented in Week 3-4
-        Currently returns False (assume Zarr2 by default)
+    Detection Logic:
+        1. Check for zarr.json at root → Zarr3
+        2. Check for zarr.json in subdirectories (s0/, 0/) → Zarr3
+        3. Check for .zarray or .zgroup → Zarr2
+        4. Default to Zarr2 if unclear
     """
-    # Placeholder: Will check for zarr.json (Zarr3) vs .zarray (Zarr2)
-    # For now, assume Zarr2 by default
     import os
+
+    # Check root for zarr.json (Zarr3 indicator)
     if os.path.exists(os.path.join(path, 'zarr.json')):
         return True
+
+    # Check common subdirectories for zarr.json (multiscale Zarr3)
+    for subdir in ['s0', '0', 'data']:
+        subpath = os.path.join(path, subdir, 'zarr.json')
+        if os.path.exists(subpath):
+            return True
+
+    # Check for Zarr2 indicators
+    if os.path.exists(os.path.join(path, '.zarray')):
+        return False
+    if os.path.exists(os.path.join(path, '.zgroup')):
+        return False
+
+    # Check subdirectories for Zarr2
+    for subdir in ['s0', '0', 'data']:
+        if os.path.exists(os.path.join(path, subdir, '.zarray')):
+            return False
+
+    # Default to Zarr2 for backwards compatibility
     return False

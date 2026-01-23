@@ -15,15 +15,48 @@ Tier Strategy:
 - Tier 3 (BIOIO Adapter): CZI, LIF, + 20 more formats - Broad compatibility
 
 Public API:
+    Tier 1 (Native TensorStore):
+    - N5Reader: Native TensorStore N5 reader
+    - Zarr3Reader: Native TensorStore Zarr v3 reader
+    - Zarr2Reader: Native TensorStore Zarr v2 reader
+    - PrecomputedReader: Neuroglancer Precomputed reader
+
+    Tier 2 (Custom Optimized):
+    - TiffReader: TIFF reader using load_tiff_stack()
+    - ND2Reader: Nikon ND2 reader using load_nd2_stack()
+    - IMSReader: Imaris IMS reader using load_ims_stack()
+    - HDF5Reader: Generic HDF5 reader
+
+    Tier 3 (BIOIO Adapter):
+    - BIOIOReader: BIOIO adapter for 20+ formats (CZI, LIF, etc.)
+
+    Base:
     - BaseReader: Abstract base class for all readers
-    - N5Reader: Tier 1 - Native TensorStore N5 reader
-    - PrecomputedReader: Tier 1 - Neuroglancer Precomputed reader
-    - TiffReader: Tier 2 - Custom optimized TIFF reader
 """
 
 from .base import BaseReader
-from .n5 import N5Reader
-from .precomputed import PrecomputedReader
-from .tiff import TiffReader
 
-__all__ = ['BaseReader', 'N5Reader', 'PrecomputedReader', 'TiffReader']
+# Tier 1: Native TensorStore
+from .n5 import N5Reader
+from .zarr import Zarr3Reader, Zarr2Reader
+from .precomputed import PrecomputedReader
+
+# Tier 2: Custom Optimized
+from .tiff import TiffReader
+from .nd2 import ND2Reader
+from .ims import IMSReader
+from .hdf5 import HDF5Reader
+
+# Tier 3: BIOIO Adapter
+from .bioio_adapter import BIOIOReader
+
+__all__ = [
+    # Base
+    'BaseReader',
+    # Tier 1
+    'N5Reader', 'Zarr3Reader', 'Zarr2Reader', 'PrecomputedReader',
+    # Tier 2
+    'TiffReader', 'ND2Reader', 'IMSReader', 'HDF5Reader',
+    # Tier 3
+    'BIOIOReader',
+]

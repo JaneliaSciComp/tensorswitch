@@ -1,58 +1,54 @@
 """
-TIFF reader implementation wrapping existing load_tiff_stack function.
+ND2 reader implementation wrapping existing load_nd2_stack function.
 
 Tier 2 reader - reuses proven production code with minimal overhead.
 """
 
 from typing import Dict
-from tensorswitch.utils import load_tiff_stack, extract_tiff_ome_metadata
+from tensorswitch.utils import load_nd2_stack, extract_nd2_ome_metadata
 from .base import BaseReader
 
 
-class TiffReader(BaseReader):
+class ND2Reader(BaseReader):
     """
-    Reader for TIFF format using existing load_tiff_stack function.
+    Reader for Nikon ND2 format using existing load_nd2_stack function.
 
-    Wraps the proven load_tiff_stack() from tensorswitch/utils.py which
+    Wraps the proven load_nd2_stack() from tensorswitch/utils.py which
     returns a Dask array. Then wraps that Dask array in TensorStore's
     'array' driver for compatibility with the unified architecture.
 
     Tier: 2 (Custom Optimized - Production Ready)
     - Reuses existing optimized code
-    - Minimal conversion overhead (Dask → TensorStore)
+    - Minimal conversion overhead (Dask -> TensorStore)
     - Production-tested implementation
-    - Supports single files and directories
+    - Supports multi-channel and time-lapse data
 
     Features:
-    - Multi-page TIFF support
-    - Directory of TIFFs (Z-stack)
-    - OME-TIFF metadata extraction
-    - ImageJ metadata support
+    - Native ND2 metadata extraction via nd2 library
+    - OME-XML metadata support
+    - Physical pixel sizes extraction
+    - Multi-channel support
 
     Example:
-        >>> from tensorswitch_v2.readers import TiffReader
-        >>> reader = TiffReader("/path/to/data.tif")
+        >>> from tensorswitch_v2.readers import ND2Reader
+        >>> reader = ND2Reader("/path/to/data.nd2")
         >>> spec = reader.get_tensorstore_spec()
 
     Example (with TensorSwitchDataset):
         >>> from tensorswitch_v2.api import TensorSwitchDataset, Readers
-        >>> reader = Readers.tiff("/path/to/stack/")
-        >>> dataset = TensorSwitchDataset("/path/to/stack/", reader=reader)
+        >>> dataset = TensorSwitchDataset("/path/to/data.nd2")
+        >>> ts_array = dataset.get_tensorstore_array()
     """
 
     def __init__(self, path: str):
         """
-        Initialize TIFF reader.
+        Initialize ND2 reader.
 
         Args:
-            path: Path to TIFF file or directory containing TIFFs
+            path: Path to ND2 file
 
         Example:
-            >>> # Single TIFF file
-            >>> reader = TiffReader("/data/image.tif")
-            >>>
-            >>> # Directory of TIFFs (Z-stack)
-            >>> reader = TiffReader("/data/stack/")
+            >>> reader = ND2Reader("/data/experiment.nd2")
         """
         super().__init__(path)
         self._dask_array = None
@@ -60,28 +56,28 @@ class TiffReader(BaseReader):
 
     def get_tensorstore_spec(self) -> Dict:
         """
-        Return TensorStore spec wrapping Dask array from load_tiff_stack.
+        Return TensorStore spec wrapping Dask array from load_nd2_stack.
 
-        Reuses existing load_tiff_stack() function which returns a Dask array,
+        Reuses existing load_nd2_stack() function which returns a Dask array,
         then wraps it in TensorStore's 'array' driver.
 
         Returns:
             dict: TensorStore spec with 'array' driver wrapping Dask array
 
         Example:
-            >>> reader = TiffReader("/data.tif")
+            >>> reader = ND2Reader("/data.nd2")
             >>> spec = reader.get_tensorstore_spec()
             >>> print(spec['driver'])
             'array'
 
         Notes:
-            - Tier 2 approach: Dask array → TensorStore 'array' driver
+            - Tier 2 approach: Dask array -> TensorStore 'array' driver
             - Minimal overhead (one Dask layer)
-            - Proven production code (load_tiff_stack already optimized)
+            - Proven production code (load_nd2_stack already optimized)
         """
         if self._dask_array is None:
-            # Reuse existing load_tiff_stack from utils.py
-            self._dask_array = load_tiff_stack(self.path)
+            # Reuse existing load_nd2_stack from utils.py
+            self._dask_array = load_nd2_stack(self.path)
 
         # Wrap Dask array in TensorStore 'array' driver
         spec = {
@@ -98,23 +94,23 @@ class TiffReader(BaseReader):
 
     def get_metadata(self) -> Dict:
         """
-        Return TIFF metadata using existing extract_tiff_ome_metadata function.
+        Return ND2 metadata using existing extract_nd2_ome_metadata function.
 
         Returns:
-            dict: TIFF metadata including OME-XML and voxel sizes if available
+            dict: ND2 metadata including OME-XML and voxel sizes
 
         Example:
-            >>> reader = TiffReader("/data.tif")
+            >>> reader = ND2Reader("/data.nd2")
             >>> metadata = reader.get_metadata()
 
         Notes:
-            - Reuses extract_tiff_ome_metadata from utils.py
+            - Reuses extract_nd2_ome_metadata from utils.py
             - Cached after first read
-            - Returns (ome_xml, voxel_sizes) tuple, converted to dict
+            - Returns OME-XML and voxel sizes
         """
         if self._metadata_cache is None:
             try:
-                ome_xml, voxel_sizes = extract_tiff_ome_metadata(self.path)
+                ome_xml, voxel_sizes = extract_nd2_ome_metadata(self.path)
                 self._metadata_cache = {
                     'ome_xml': ome_xml,
                     'voxel_size_x': voxel_sizes.get('x', 1.0) if voxel_sizes else 1.0,
@@ -122,40 +118,35 @@ class TiffReader(BaseReader):
                     'voxel_size_z': voxel_sizes.get('z', 1.0) if voxel_sizes else 1.0,
                 }
             except Exception as e:
-                print(f"Warning: Failed to extract TIFF metadata: {e}")
+                print(f"Warning: Failed to extract ND2 metadata: {e}")
                 self._metadata_cache = {}
 
         return self._metadata_cache
 
     def get_voxel_sizes(self) -> Dict[str, float]:
         """
-        Return voxel dimensions from TIFF metadata.
+        Return voxel dimensions from ND2 metadata.
 
-        Extracts voxel sizes from OME-XML or ImageJ metadata if available.
+        Extracts voxel sizes from OME metadata via nd2 library.
 
         Returns:
             dict: Voxel dimensions with keys 'x', 'y', 'z' in micrometers
 
         Example:
-            >>> reader = TiffReader("/data.tif")
+            >>> reader = ND2Reader("/data.nd2")
             >>> voxel_sizes = reader.get_voxel_sizes()
 
         Notes:
             - Returns 1.0 for each dimension if metadata unavailable
-            - Checks OME-XML first, then ImageJ metadata
+            - ND2 files typically have good voxel size metadata
         """
         metadata = self.get_metadata()
 
-        # Try to extract from metadata
-        if 'voxel_size_x' in metadata:
-            return {
-                'x': metadata.get('voxel_size_x', 1.0),
-                'y': metadata.get('voxel_size_y', 1.0),
-                'z': metadata.get('voxel_size_z', 1.0)
-            }
-
-        # Default
-        return {'x': 1.0, 'y': 1.0, 'z': 1.0}
+        return {
+            'x': metadata.get('voxel_size_x', 1.0),
+            'y': metadata.get('voxel_size_y', 1.0),
+            'z': metadata.get('voxel_size_z', 1.0)
+        }
 
     def _infer_dimension_names(self, shape):
         """Infer dimension names from array shape."""
@@ -170,5 +161,5 @@ class TiffReader(BaseReader):
             return [f'dim_{i}' for i in range(ndim)]
 
     def __repr__(self) -> str:
-        """String representation of TIFF reader."""
-        return f"TiffReader(path='{self.path}')"
+        """String representation of ND2 reader."""
+        return f"ND2Reader(path='{self.path}')"
