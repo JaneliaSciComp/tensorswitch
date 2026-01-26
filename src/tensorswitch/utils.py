@@ -1508,45 +1508,76 @@ def create_zarr3_ome_metadata(ome_xml, array_shape, image_name, pixel_sizes=None
     """Create OME-ZARR metadata structure for zarr3 format.
 
     Args:
-        axes_order: List of axis names (e.g., ["x", "y", "z"] or ["z", "y", "x"])
+        ome_xml: OME-XML string to include in metadata (can be None)
+        array_shape: Shape of the array
+        image_name: Name for the image/dataset
+        pixel_sizes: Dict with 'x', 'y', 'z' voxel sizes in micrometers
+        axes_order: List of axis names (e.g., ["v", "c", "z", "y", "x"] for CZI multi-view)
                     If provided, this overrides the automatic detection
     """
 
-    # Build axes information based on array shape
+    # Helper to determine axis type from name
+    def get_axis_type(axis_name):
+        if axis_name == 'c':
+            return 'channel'
+        elif axis_name == 't':
+            return 'time'
+        else:
+            return 'space'
+
+    # Helper to determine axis unit from name
+    def get_axis_unit(axis_name):
+        if axis_name in ['x', 'y', 'z']:
+            return 'micrometer'
+        elif axis_name == 't':
+            return 'millisecond'
+        return None
+
+    ndim = len(array_shape)
+
+    # Build axes information - use axes_order if provided, otherwise infer from shape
     axes = []
-    if len(array_shape) == 3:
-        # Check if axes_order was provided (e.g., from N5 source metadata)
-        if axes_order and len(axes_order) == 3:
-            # Use provided axes order
-            axes = [
-                {"name": axes_order[0], "type": "space", "unit": "micrometer"},
-                {"name": axes_order[1], "type": "space", "unit": "micrometer"},
-                {"name": axes_order[2], "type": "space", "unit": "micrometer"}
-            ]
+    scale_factors = [1.0] * ndim
+
+    if axes_order and len(axes_order) == ndim:
+        # Use provided axes order (from CZI, N5, or other source metadata)
+        for axis_name in axes_order:
+            axis_entry = {"name": axis_name, "type": get_axis_type(axis_name)}
+            unit = get_axis_unit(axis_name)
+            if unit:
+                axis_entry["unit"] = unit
+            axes.append(axis_entry)
+        # Map pixel sizes using axes_order
+        if pixel_sizes is not None:
+            scale_factors = [pixel_sizes.get(axis, 1.0) for axis in axes_order]
+    elif ndim == 3:
         # Check if this is 2D multi-channel (CYX) or true 3D volume (ZYX)
-        # Heuristic: if first dimension is small (<=10), treat as channels
-        elif array_shape[0] <= 10:
-            # 2D multi-channel: CYX
+        if array_shape[0] <= 10:
             axes = [
                 {"name": "c", "type": "channel"},
                 {"name": "y", "type": "space", "unit": "micrometer"},
                 {"name": "x", "type": "space", "unit": "micrometer"}
             ]
+            if pixel_sizes:
+                scale_factors = [1.0, pixel_sizes.get('y', 1.0), pixel_sizes.get('x', 1.0)]
         else:
-            # True 3D volume: ZYX (default)
             axes = [
                 {"name": "z", "type": "space", "unit": "micrometer"},
                 {"name": "y", "type": "space", "unit": "micrometer"},
                 {"name": "x", "type": "space", "unit": "micrometer"}
             ]
-    elif len(array_shape) == 4:
+            if pixel_sizes:
+                scale_factors = [pixel_sizes.get('z', 1.0), pixel_sizes.get('y', 1.0), pixel_sizes.get('x', 1.0)]
+    elif ndim == 4:
         axes = [
             {"name": "c", "type": "channel"},
             {"name": "z", "type": "space", "unit": "micrometer"},
             {"name": "y", "type": "space", "unit": "micrometer"},
             {"name": "x", "type": "space", "unit": "micrometer"}
         ]
-    elif len(array_shape) == 5:
+        if pixel_sizes:
+            scale_factors = [1.0, pixel_sizes.get('z', 1.0), pixel_sizes.get('y', 1.0), pixel_sizes.get('x', 1.0)]
+    elif ndim == 5:
         axes = [
             {"name": "t", "type": "time", "unit": "millisecond"},
             {"name": "c", "type": "channel"},
@@ -1554,28 +1585,10 @@ def create_zarr3_ome_metadata(ome_xml, array_shape, image_name, pixel_sizes=None
             {"name": "y", "type": "space", "unit": "micrometer"},
             {"name": "x", "type": "space", "unit": "micrometer"}
         ]
-    else:
-        # Fallback for other dimensions
-        axes = [{"name": f"axis_{i}", "type": "space"} for i in range(len(array_shape))]
-
-    # Extract pixel sizes from OME XML if available
-    scale_factors = [1.0] * len(array_shape)
-    if pixel_sizes is not None:
-        # Map pixel sizes to the correct axes
-        if len(array_shape) == 3:
-            if axes_order and len(axes_order) == 3:
-                # Use axes_order to map pixel sizes
-                scale_factors = [pixel_sizes.get(axis, 1.0) for axis in axes_order]
-            elif array_shape[0] <= 10:
-                # 2D multi-channel: CYX -> scale = [1.0, y, x]
-                scale_factors = [1.0, pixel_sizes.get('y', 1.0), pixel_sizes.get('x', 1.0)]
-            else:
-                # True 3D: ZYX (default) -> scale = [z, y, x]
-                scale_factors = [pixel_sizes.get('z', 1.0), pixel_sizes.get('y', 1.0), pixel_sizes.get('x', 1.0)]
-        elif len(array_shape) == 4:  # CZYX
-            scale_factors = [1.0, pixel_sizes.get('z', 1.0), pixel_sizes.get('y', 1.0), pixel_sizes.get('x', 1.0)]
-        elif len(array_shape) == 5:  # TCZYX
+        if pixel_sizes:
             scale_factors = [1.0, 1.0, pixel_sizes.get('z', 1.0), pixel_sizes.get('y', 1.0), pixel_sizes.get('x', 1.0)]
+    else:
+        axes = [{"name": f"axis_{i}", "type": "space"} for i in range(ndim)]
 
     # Create coordinate transformations for s0 level
     coordinate_transformations = [{
@@ -4274,7 +4287,8 @@ def load_czi_stack(czi_file, view_index=None):
                    loads all views as a 5D array (VCZYX). If None and single view, returns CZYX or ZYX.
 
     Returns:
-        tuple: (dask_array, None) - dask array and None (no persistent handle needed)
+        tuple: (dask_array, None, axes_order) - dask array, None (no persistent handle needed),
+               and axes_order list (e.g., ['v', 'c', 'z', 'y', 'x'] for 5D VCZYX)
     """
     from pylibCZIrw import czi
     import dask.array as da
@@ -4336,6 +4350,7 @@ def load_czi_stack(czi_file, view_index=None):
     # Build the array structure based on dimensions present
     if include_v_dim:
         # 5D: VCZYX
+        axes_order = ['v', 'c', 'z', 'y', 'x']
         v_chunks = []
         for v in v_range:
             c_chunks = []
@@ -4353,6 +4368,7 @@ def load_czi_stack(czi_file, view_index=None):
 
     elif c_size > 1:
         # 4D: CZYX
+        axes_order = ['c', 'z', 'y', 'x']
         c_chunks = []
         for c in range(c_size):
             z_chunks = []
@@ -4368,6 +4384,7 @@ def load_czi_stack(czi_file, view_index=None):
 
     else:
         # 3D: ZYX
+        axes_order = ['z', 'y', 'x']
         z_chunks = []
         for z in range(z_size):
             v = v_range[0]
@@ -4379,9 +4396,10 @@ def load_czi_stack(czi_file, view_index=None):
         print(f"Created 3D dask array (ZYX): {dask_array.shape}")
 
     print(f"Dask array shape: {dask_array.shape}, chunks: {dask_array.chunksize}")
+    print(f"CZI axes order: {axes_order}")
 
-    # Return None for handle since we don't keep one open
-    return dask_array, None
+    # Return None for handle since we don't keep one open, plus axes_order
+    return dask_array, None, axes_order
 
 
 def extract_czi_metadata(czi_file):
@@ -4482,90 +4500,5 @@ def transform_czi_to_ome_xml(raw_czi_metadata):
     except Exception as e:
         print(f"Warning: Could not transform CZI to OME-XML: {e}")
         return None
-
-
-def convert_czi_to_zarr3_metadata(czi_file, volume_shape, voxel_sizes):
-    """
-    Convert CZI metadata to Zarr3 OME-NGFF format.
-
-    Args:
-        czi_file: Path to source CZI file
-        volume_shape: Shape of the volume array
-        voxel_sizes: Dict with 'x', 'y', 'z' voxel sizes in micrometers
-
-    Returns:
-        dict: Zarr3 group metadata with OME attributes
-    """
-    image_name = os.path.splitext(os.path.basename(czi_file))[0]
-
-    # Build axes based on number of dimensions
-    ndim = len(volume_shape)
-
-    if ndim == 3:  # ZYX
-        axes = [
-            {'name': 'z', 'type': 'space', 'unit': 'micrometer'},
-            {'name': 'y', 'type': 'space', 'unit': 'micrometer'},
-            {'name': 'x', 'type': 'space', 'unit': 'micrometer'}
-        ]
-        scale = [
-            voxel_sizes.get('z', 1.0) if voxel_sizes else 1.0,
-            voxel_sizes.get('y', 1.0) if voxel_sizes else 1.0,
-            voxel_sizes.get('x', 1.0) if voxel_sizes else 1.0
-        ]
-    elif ndim == 4:  # CZYX
-        axes = [
-            {'name': 'c', 'type': 'channel'},
-            {'name': 'z', 'type': 'space', 'unit': 'micrometer'},
-            {'name': 'y', 'type': 'space', 'unit': 'micrometer'},
-            {'name': 'x', 'type': 'space', 'unit': 'micrometer'}
-        ]
-        scale = [
-            1.0,
-            voxel_sizes.get('z', 1.0) if voxel_sizes else 1.0,
-            voxel_sizes.get('y', 1.0) if voxel_sizes else 1.0,
-            voxel_sizes.get('x', 1.0) if voxel_sizes else 1.0
-        ]
-    elif ndim == 5:  # VCZYX or TCZYX
-        axes = [
-            {'name': 'v', 'type': 'space'},  # View dimension
-            {'name': 'c', 'type': 'channel'},
-            {'name': 'z', 'type': 'space', 'unit': 'micrometer'},
-            {'name': 'y', 'type': 'space', 'unit': 'micrometer'},
-            {'name': 'x', 'type': 'space', 'unit': 'micrometer'}
-        ]
-        scale = [
-            1.0,
-            1.0,
-            voxel_sizes.get('z', 1.0) if voxel_sizes else 1.0,
-            voxel_sizes.get('y', 1.0) if voxel_sizes else 1.0,
-            voxel_sizes.get('x', 1.0) if voxel_sizes else 1.0
-        ]
-    else:
-        # Generic fallback
-        axes = [{'name': f'dim_{i}', 'type': 'space'} for i in range(ndim)]
-        scale = [1.0] * ndim
-
-    zarr3_metadata = {
-        'zarr_format': 3,
-        'node_type': 'group',
-        'attributes': {
-            'ome': {
-                'multiscales': [{
-                    'version': '0.5',
-                    'name': image_name,
-                    'axes': axes,
-                    'datasets': [{
-                        'path': 's0',
-                        'coordinateTransformations': [{
-                            'type': 'scale',
-                            'scale': scale
-                        }]
-                    }]
-                }]
-            }
-        }
-    }
-
-    return zarr3_metadata
 
 
