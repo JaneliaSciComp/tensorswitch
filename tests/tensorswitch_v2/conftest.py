@@ -6,12 +6,26 @@ readers, writers, and converters.
 """
 
 import os
+import sys
+
+# Add src to path for imports - MUST be before any other imports
+_src_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../src'))
+if _src_path not in sys.path:
+    sys.path.insert(0, _src_path)
+
 import json
 import tempfile
 import shutil
 import pytest
 import numpy as np
 import tensorstore as ts
+
+
+def pytest_configure(config):
+    """Pytest hook to configure paths before collection."""
+    src_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../src'))
+    if src_path not in sys.path:
+        sys.path.insert(0, src_path)
 
 
 @pytest.fixture

@@ -153,8 +153,10 @@ class Zarr3Writer(BaseWriter):
         if spec is None:
             raise ValueError("No spec available. Call create_output_spec first.")
 
+        # TensorStore open modes:
+        # - delete_existing=True: Delete and recreate (first job)
+        # - delete_existing=False with create=True: Create or open existing (subsequent jobs)
         # Note: TensorStore doesn't allow open=True with delete_existing=True
-        # When creating new store, use create=True only; for opening existing use open=True
         if delete_existing:
             self._store = ts.open(
                 spec,
@@ -162,10 +164,12 @@ class Zarr3Writer(BaseWriter):
                 delete_existing=delete_existing
             ).result()
         else:
+            # For LSF multi-job mode: need both create=True and open=True
+            # to handle both first creation and subsequent appends
             self._store = ts.open(
                 spec,
                 create=create,
-                open=not create  # Only open if not creating new
+                open=True  # Allow opening existing store for append mode
             ).result()
 
         return self._store
@@ -205,29 +209,55 @@ class Zarr3Writer(BaseWriter):
 
         Args:
             ome_metadata: Pre-built OME metadata dict (if None, creates from voxel_sizes)
+                         Can be either:
+                         - Full zarr.json structure with zarr_format, node_type, attributes
+                         - Just the inner OME multiscales structure (will be wrapped)
             voxel_sizes: Voxel dimensions dict {"x": um, "y": um, "z": um}
             image_name: Image name for metadata
             array_shape: Array shape (required if ome_metadata is None)
             axes_order: Axis names (e.g., ["z", "y", "x"])
         """
         if ome_metadata is None:
-            # Build metadata from voxel sizes
+            # Build full metadata from voxel sizes using utility function
             if array_shape is None:
                 if self._store is not None:
                     array_shape = tuple(self._store.shape)
                 else:
                     raise ValueError("array_shape required when ome_metadata not provided")
 
-            ome_metadata = create_zarr3_ome_metadata(
+            full_metadata = create_zarr3_ome_metadata(
                 ome_xml=None,
                 array_shape=array_shape,
                 image_name=image_name,
                 pixel_sizes=voxel_sizes,
                 axes_order=axes_order
             )
+        elif 'zarr_format' in ome_metadata:
+            # Already a full zarr.json structure
+            full_metadata = ome_metadata
+        else:
+            # ome_metadata is just the inner structure (e.g., from reader.get_ome_metadata())
+            # Need to wrap it in full zarr.json structure
+            if 'multiscales' in ome_metadata:
+                # It's just the inner OME dict with multiscales
+                inner_ome = ome_metadata
+            else:
+                # Assume it's meant to be the ome attributes
+                inner_ome = ome_metadata
+
+            full_metadata = {
+                "zarr_format": 3,
+                "node_type": "group",
+                "attributes": {
+                    "ome": {
+                        "version": "0.5",
+                        **inner_ome
+                    }
+                }
+            }
 
         # Write to zarr.json at root
-        write_zarr3_group_metadata(self.output_path, ome_metadata)
+        write_zarr3_group_metadata(self.output_path, full_metadata)
 
     def get_chunk_shape(self) -> Optional[Tuple[int, ...]]:
         """Get the write chunk shape from the opened store."""

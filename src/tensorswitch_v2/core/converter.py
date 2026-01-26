@@ -22,6 +22,20 @@ from tensorswitch.utils import (
 )
 
 
+def _get_dtype_name(dtype) -> str:
+    """
+    Get dtype name string from TensorStore or numpy dtype.
+
+    TensorStore dtype has a .name attribute that returns the clean dtype string,
+    while numpy/dask dtypes use str() which also works correctly.
+    """
+    # TensorStore dtype has .name attribute
+    if hasattr(dtype, 'name'):
+        return dtype.name
+    # Fallback to str() for numpy/dask dtypes
+    return str(dtype)
+
+
 class DistributedConverter:
     """
     Format-agnostic converter with LSF/Dask distributed processing support.
@@ -119,14 +133,14 @@ class DistributedConverter:
             self._dask_array = input_spec['array']
             self._input_store = None  # Will use dask array directly
             input_shape = tuple(self._dask_array.shape)
-            input_dtype = str(self._dask_array.dtype)
+            input_dtype = _get_dtype_name(self._dask_array.dtype)
             self._is_tier2 = True
         else:
             # Tier 1: Native TensorStore driver
             input_spec['context'] = get_tensorstore_context()
             self._input_store = ts.open(input_spec, read=True).result()
             input_shape = tuple(self._input_store.shape)
-            input_dtype = str(self._input_store.dtype)
+            input_dtype = _get_dtype_name(self._input_store.dtype)
             self._is_tier2 = False
             self._dask_array = None
 
@@ -305,13 +319,13 @@ class DistributedConverter:
             # Tier 2: Get shape from dask array
             dask_array = input_spec['array']
             input_shape = tuple(dask_array.shape)
-            input_dtype = str(dask_array.dtype)
+            input_dtype = _get_dtype_name(dask_array.dtype)
         else:
             # Tier 1: Open TensorStore to get shape
             input_spec['context'] = get_tensorstore_context()
             input_store = ts.open(input_spec, read=True).result()
             input_shape = tuple(input_store.shape)
-            input_dtype = str(input_store.dtype)
+            input_dtype = _get_dtype_name(input_store.dtype)
 
         # Create temp output spec to get chunk layout
         output_spec = self.writer.create_output_spec(

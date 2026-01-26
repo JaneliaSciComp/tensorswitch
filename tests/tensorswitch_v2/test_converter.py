@@ -15,7 +15,7 @@ from tensorswitch_v2.core import DistributedConverter
 from tensorswitch_v2.readers import TiffReader, Zarr3Reader, N5Reader
 from tensorswitch_v2.writers import Zarr3Writer, Zarr2Writer, N5Writer
 
-from .conftest import validate_zarr3_output, validate_zarr2_output, validate_n5_output
+from conftest import validate_zarr3_output, validate_zarr2_output, validate_n5_output
 
 
 class TestDistributedConverterBasic:

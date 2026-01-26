@@ -18,7 +18,7 @@ from tensorswitch_v2.writers import (
 )
 from tensorswitch_v2.api import Writers
 
-from .conftest import validate_zarr3_output, validate_zarr2_output, validate_n5_output
+from conftest import validate_zarr3_output, validate_zarr2_output, validate_n5_output
 
 
 class TestZarr3Writer:

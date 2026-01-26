@@ -174,6 +174,9 @@ class Zarr2Writer(BaseWriter):
         if spec is None:
             raise ValueError("No spec available. Call create_output_spec first.")
 
+        # TensorStore open modes:
+        # - delete_existing=True: Delete and recreate (first job)
+        # - delete_existing=False with create=True: Create or open existing (subsequent jobs)
         # Note: TensorStore doesn't allow open=True with delete_existing=True
         if delete_existing:
             self._store = ts.open(
@@ -182,10 +185,12 @@ class Zarr2Writer(BaseWriter):
                 delete_existing=delete_existing
             ).result()
         else:
+            # For LSF multi-job mode: need both create=True and open=True
+            # to handle both first creation and subsequent appends
             self._store = ts.open(
                 spec,
                 create=create,
-                open=not create
+                open=True  # Allow opening existing store for append mode
             ).result()
 
         return self._store

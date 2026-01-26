@@ -1552,6 +1552,7 @@ def create_zarr3_ome_metadata(ome_xml, array_shape, image_name, pixel_sizes=None
             scale_factors = [pixel_sizes.get(axis, 1.0) for axis in axes_order]
     elif ndim == 3:
         # Check if this is 2D multi-channel (CYX) or true 3D volume (ZYX)
+        # Heuristic: if first dimension is small (<=10), treat as channels
         if array_shape[0] <= 10:
             axes = [
                 {"name": "c", "type": "channel"},
@@ -1588,6 +1589,7 @@ def create_zarr3_ome_metadata(ome_xml, array_shape, image_name, pixel_sizes=None
         if pixel_sizes:
             scale_factors = [1.0, 1.0, pixel_sizes.get('z', 1.0), pixel_sizes.get('y', 1.0), pixel_sizes.get('x', 1.0)]
     else:
+        # Fallback for other dimensions
         axes = [{"name": f"axis_{i}", "type": "space"} for i in range(ndim)]
 
     # Create coordinate transformations for s0 level
