@@ -1,7 +1,7 @@
 from dask.cache import Cache
 from ..utils import (load_czi_stack, zarr3_store_spec, get_chunk_domains, commit_tasks,
                     get_total_chunks_from_store, extract_czi_metadata,
-                    convert_czi_to_zarr3_metadata, write_zarr3_group_metadata,
+                    create_zarr3_ome_metadata, write_zarr3_group_metadata,
                     write_dual_zarr_metadata, detect_anisotropic_voxels,
                     update_zarr_metadata_from_source, precreate_shard_directories_inline,
                     get_tensorstore_context, detect_source_order, transform_czi_to_ome_xml)
@@ -42,15 +42,15 @@ def process(base_path, output_path, use_shard=False, memory_limit=50, start_idx=
         custom_chunk_shape = [256, 256, 256]
         print(f"Using default chunk shape: {custom_chunk_shape}")
 
-    # Load CZI as dask array
-    volume, czi_handle = load_czi_stack(base_path, view_index=view_index)
+    # Load CZI as dask array (returns axes_order from CZI dimension analysis)
+    volume, czi_handle, czi_axes_order = load_czi_stack(base_path, view_index=view_index)
     print(f"Original volume shape: {volume.shape}, dtype: {volume.dtype}", flush=True)
     print(f"Original chunk structure from dask: {volume.chunksize}", flush=True)
+    print(f"CZI axes order: {czi_axes_order}")
 
     # Detect source data order (C-order vs F-order)
     source_order_info = detect_source_order(volume)
     print(f"Source data order: {source_order_info['description']}")
-    print(f"  Detected axes: {source_order_info['suggested_axes']}")
 
     # Determine final use_fortran_order based on:
     # 1. User explicit override (if use_fortran_order is not None)
@@ -109,7 +109,7 @@ def process(base_path, output_path, use_shard=False, memory_limit=50, start_idx=
         print("Note: Could not extract voxel sizes from CZI metadata")
         voxel_sizes = {'x': 1.0, 'y': 1.0, 'z': 1.0}
 
-    # Create or open the output Zarr3 store
+    # Create or open the output Zarr3 store (use CZI axes order for dimension_names)
     store_spec = zarr3_store_spec(
         path=output_path,
         shape=volume.shape,
@@ -120,7 +120,8 @@ def process(base_path, output_path, use_shard=False, memory_limit=50, start_idx=
         custom_shard_shape=custom_shard_shape,
         custom_chunk_shape=custom_chunk_shape,
         use_v2_encoding=use_v2_encoding,
-        use_fortran_order=use_fortran_order
+        use_fortran_order=use_fortran_order,
+        axes_order=czi_axes_order
     )
 
     # Add TensorStore context to limit concurrency
@@ -173,14 +174,22 @@ def process(base_path, output_path, use_shard=False, memory_limit=50, start_idx=
     if use_ome_structure:
         print("Writing OME-Zarr metadata...", flush=True)
         try:
-            zarr3_metadata = convert_czi_to_zarr3_metadata(base_path, volume.shape, voxel_sizes)
-
-            # Transform CZI metadata to proper OME-XML and add to attributes
+            # CZI-specific: Transform CZI XML to OME-XML using XSLT
+            ome_xml = None
             if czi_metadata:
                 ome_xml = transform_czi_to_ome_xml(czi_metadata)
                 if ome_xml:
-                    zarr3_metadata['attributes']['ome_xml'] = ome_xml
-                    print("Added OME-XML to metadata (via XSLT transformation)")
+                    print("Transformed CZI metadata to OME-XML (via XSLT)")
+
+            # Use common function for OME-NGFF metadata structure (same as N5, TIFF, ND2, IMS)
+            image_name = os.path.splitext(os.path.basename(base_path))[0]
+            zarr3_metadata = create_zarr3_ome_metadata(
+                ome_xml=ome_xml,
+                array_shape=volume.shape,
+                image_name=image_name,
+                pixel_sizes=voxel_sizes,
+                axes_order=czi_axes_order
+            )
 
             write_zarr3_group_metadata(output_path, zarr3_metadata)
             print("OME-Zarr metadata written successfully", flush=True)
