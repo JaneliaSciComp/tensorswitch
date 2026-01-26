@@ -55,6 +55,7 @@ class IMSReader(BaseReader):
         super().__init__(path)
         self._resolution_level = resolution_level
         self._dask_array = None
+        self._h5_file = None  # Keep h5 file open for lazy loading
         self._metadata_cache = None
 
     def get_tensorstore_spec(self) -> Dict:
@@ -80,7 +81,8 @@ class IMSReader(BaseReader):
         """
         if self._dask_array is None:
             # Reuse existing load_ims_stack from utils.py
-            self._dask_array = load_ims_stack(self.path)
+            # Note: load_ims_stack returns (dask_array, h5_file) tuple
+            self._dask_array, self._h5_file = load_ims_stack(self.path)
 
         # Wrap Dask array in TensorStore 'array' driver
         spec = {
