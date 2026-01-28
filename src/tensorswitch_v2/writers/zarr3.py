@@ -202,7 +202,8 @@ class Zarr3Writer(BaseWriter):
         voxel_sizes: Optional[Dict[str, float]] = None,
         image_name: str = "image",
         array_shape: Optional[Tuple[int, ...]] = None,
-        axes_order: Optional[List[str]] = None
+        axes_order: Optional[List[str]] = None,
+        ome_xml: Optional[str] = None
     ) -> None:
         """
         Write OME-NGFF v0.5 metadata to zarr.json.
@@ -216,6 +217,7 @@ class Zarr3Writer(BaseWriter):
             image_name: Image name for metadata
             array_shape: Array shape (required if ome_metadata is None)
             axes_order: Axis names (e.g., ["z", "y", "x"])
+            ome_xml: Raw OME-XML string from source data (stored in attributes.ome_xml)
         """
         if ome_metadata is None:
             # Build full metadata from voxel sizes using utility function
@@ -226,7 +228,7 @@ class Zarr3Writer(BaseWriter):
                     raise ValueError("array_shape required when ome_metadata not provided")
 
             full_metadata = create_zarr3_ome_metadata(
-                ome_xml=None,
+                ome_xml=ome_xml,
                 array_shape=array_shape,
                 image_name=image_name,
                 pixel_sizes=voxel_sizes,
@@ -239,10 +241,8 @@ class Zarr3Writer(BaseWriter):
             # ome_metadata is just the inner structure (e.g., from reader.get_ome_metadata())
             # Need to wrap it in full zarr.json structure
             if 'multiscales' in ome_metadata:
-                # It's just the inner OME dict with multiscales
                 inner_ome = ome_metadata
             else:
-                # Assume it's meant to be the ome attributes
                 inner_ome = ome_metadata
 
             full_metadata = {
@@ -255,6 +255,13 @@ class Zarr3Writer(BaseWriter):
                     }
                 }
             }
+
+            # Add raw OME-XML if available
+            if ome_xml:
+                if isinstance(ome_xml, str):
+                    full_metadata["attributes"]["ome_xml"] = ome_xml
+                else:
+                    full_metadata["attributes"]["ome_xml"] = str(ome_xml)
 
         # Write to zarr.json at root
         write_zarr3_group_metadata(self.output_path, full_metadata)

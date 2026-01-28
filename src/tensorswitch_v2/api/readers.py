@@ -119,6 +119,14 @@ class Readers:
             return Readers.ims(path)
         elif path_lower.endswith(('.h5', '.hdf5')):
             return Readers.hdf5(path)
+        elif path_lower.endswith('.czi'):
+            # Prefer Tier 2 CZIReader (pylibCZIrw, multi-view support)
+            # Fall back to BIOIO for simpler CZI files or if pylibCZIrw unavailable
+            try:
+                from ..readers.czi import CZIReader
+                return CZIReader(path)
+            except ImportError:
+                return Readers.bioio(path)
 
         # Tier 3: BIOIO Adapter (broad compatibility)
         else:
@@ -311,6 +319,32 @@ class Readers:
         """
         from ..readers.hdf5 import HDF5Reader
         return HDF5Reader(path, dataset_path=dataset_path)
+
+    @staticmethod
+    def czi(path: str, view_index: Optional[int] = None) -> BaseReader:
+        """
+        Create CZI reader (Tier 2 - Custom Optimized).
+
+        Reuses existing load_czi_stack() from utils.py via pylibCZIrw.
+        Supports multi-view CZI files (V dimension → 5D VCZYX).
+
+        Args:
+            path: Path to CZI file
+            view_index: Optional specific view to load. If None and multiple
+                       views exist, loads all views as 5D VCZYX array.
+
+        Returns:
+            CZIReader instance
+
+        Example:
+            >>> reader = Readers.czi("/data.czi")
+            >>> reader = Readers.czi("/data.czi", view_index=0)
+
+        Implementation Status:
+            ✅ Complete (Tier 2 - reuses load_czi_stack())
+        """
+        from ..readers.czi import CZIReader
+        return CZIReader(path, view_index=view_index)
 
     # ========================================================================
     # Tier 3: BIOIO Adapter (Week 7)

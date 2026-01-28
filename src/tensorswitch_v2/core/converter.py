@@ -94,7 +94,8 @@ class DistributedConverter:
         write_metadata: bool = True,
         preserve_order: bool = True,
         progress_interval: int = 100,
-        verbose: bool = True
+        verbose: bool = True,
+        delete_existing: Optional[bool] = None,
     ) -> Dict[str, Any]:
         """
         Convert data from reader to writer.
@@ -108,6 +109,9 @@ class DistributedConverter:
             preserve_order: Preserve source data order (F-order vs C-order)
             progress_interval: Report progress every N chunks
             verbose: Print progress messages
+            delete_existing: Override store deletion behavior. None (default)
+                preserves existing logic (delete when start_idx==0). Set to
+                False for manual bsub jobs where the store is pre-created.
 
         Returns:
             dict: Conversion statistics (chunks_processed, elapsed_time, etc.)
@@ -147,14 +151,23 @@ class DistributedConverter:
         if verbose:
             print(f"  Shape: {input_shape}, dtype: {input_dtype}")
 
-        # 2. Detect source order if preserving
+        # 2. Detect source order and axes
         use_fortran_order = False
         axes_order = None
+        # Prefer dimension_names from the reader spec (CZI, etc. provide explicit axes)
+        reader_axes = input_spec.get('schema', {}).get('dimension_names')
+        if reader_axes and all(isinstance(a, str) for a in reader_axes):
+            axes_order = list(reader_axes)
+            if verbose:
+                print(f"  Axes from reader: {axes_order}")
         if preserve_order:
             try:
-                order_info = detect_source_order(self._input_store)
+                source_for_order = self._dask_array if self._is_tier2 else self._input_store
+                order_info = detect_source_order(source_for_order)
                 use_fortran_order = order_info.get('is_fortran_order', False)
-                axes_order = order_info.get('suggested_axes', None)
+                # Only use detected axes if reader didn't provide them
+                if axes_order is None:
+                    axes_order = order_info.get('suggested_axes', None)
                 if verbose and use_fortran_order:
                     print(f"  Preserving F-order from source")
             except Exception:
@@ -171,6 +184,14 @@ class DistributedConverter:
         except Exception:
             ome_metadata = None
 
+        # Extract raw ome_xml if available (ND2, TIFF store it in get_metadata())
+        ome_xml = None
+        try:
+            raw_metadata = self.reader.get_metadata()
+            ome_xml = raw_metadata.get('ome_xml') or raw_metadata.get('raw_xml')
+        except Exception:
+            pass
+
         # 4. Create output spec and open store
         if verbose:
             print(f"Creating output: {self.writer}")
@@ -183,10 +204,11 @@ class DistributedConverter:
             use_fortran_order=use_fortran_order,
             axes_order=axes_order
         )
+        _delete = delete_existing if delete_existing is not None else (start_idx == 0)
         self._output_store = self.writer.open_store(
             output_spec,
             create=True,
-            delete_existing=(start_idx == 0)  # Only delete on first job
+            delete_existing=_delete
         )
 
         # 5. Get chunk information
@@ -254,8 +276,8 @@ class DistributedConverter:
         for task in tasks:
             task.result()
 
-        # 9. Write metadata (only if this job processes through the end)
-        if write_metadata and stop_idx >= self._total_chunks:
+        # 9. Write metadata (when processing through the end, or explicitly forced)
+        if write_metadata and (stop_idx >= self._total_chunks or start_idx > 0):
             if verbose:
                 print("Writing metadata...")
             try:
@@ -263,7 +285,8 @@ class DistributedConverter:
                     ome_metadata=ome_metadata,
                     voxel_sizes=voxel_sizes,
                     array_shape=input_shape,
-                    axes_order=axes_order
+                    axes_order=axes_order,
+                    ome_xml=ome_xml
                 )
             except Exception as e:
                 if verbose:

@@ -117,13 +117,22 @@ class IMSReader(BaseReader):
             try:
                 metadata = extract_ims_metadata(self.path)
                 if isinstance(metadata, tuple):
-                    # If it returns (metadata, voxel_sizes) tuple
+                    # Returns (metadata_dict, voxel_sizes) where voxel_sizes
+                    # is a list [x, y, z] or dict {'x':, 'y':, 'z':}
                     raw_metadata, voxel_sizes = metadata
+                    if isinstance(voxel_sizes, (list, tuple)) and len(voxel_sizes) >= 3:
+                        vx, vy, vz = voxel_sizes[0], voxel_sizes[1], voxel_sizes[2]
+                    elif isinstance(voxel_sizes, dict):
+                        vx = voxel_sizes.get('x', 1.0)
+                        vy = voxel_sizes.get('y', 1.0)
+                        vz = voxel_sizes.get('z', 1.0)
+                    else:
+                        vx, vy, vz = 1.0, 1.0, 1.0
                     self._metadata_cache = {
                         'raw_metadata': raw_metadata,
-                        'voxel_size_x': voxel_sizes.get('x', 1.0) if voxel_sizes else 1.0,
-                        'voxel_size_y': voxel_sizes.get('y', 1.0) if voxel_sizes else 1.0,
-                        'voxel_size_z': voxel_sizes.get('z', 1.0) if voxel_sizes else 1.0,
+                        'voxel_size_x': vx if vx else 1.0,
+                        'voxel_size_y': vy if vy else 1.0,
+                        'voxel_size_z': vz if vz else 1.0,
                     }
                 elif isinstance(metadata, dict):
                     self._metadata_cache = metadata

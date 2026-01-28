@@ -275,12 +275,12 @@ class BaseReader(ABC):
                 scale.append(1.0)  # Default scale
 
         # Basic OME-NGFF structure
+        # Note: "version" belongs at the "ome" level only, NOT inside multiscales
         ome_metadata = {
             'multiscales': [{
-                'version': '0.5',
                 'axes': axes,
                 'datasets': [{
-                    'path': '0',
+                    'path': 's0',
                     'coordinateTransformations': [{
                         'type': 'scale',
                         'scale': scale
