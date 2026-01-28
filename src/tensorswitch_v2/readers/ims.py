@@ -2,9 +2,11 @@
 IMS (Imaris) reader implementation wrapping existing load_ims_stack function.
 
 Tier 2 reader - reuses proven production code with minimal overhead.
+Auto-detects dimension names from IMS HDF5 structure.
 """
 
-from typing import Dict
+from typing import Dict, List, Optional
+import h5py
 from tensorswitch.utils import load_ims_stack, extract_ims_metadata
 from .base import BaseReader
 
@@ -57,6 +59,48 @@ class IMSReader(BaseReader):
         self._dask_array = None
         self._h5_file = None  # Keep h5 file open for lazy loading
         self._metadata_cache = None
+        self._dimension_names: Optional[List[str]] = None
+
+    def _load(self):
+        """Lazy-load the IMS data and extract dimension names."""
+        if self._dask_array is not None:
+            return
+
+        # Load dask array
+        self._dask_array, self._h5_file = load_ims_stack(self.path)
+
+        # Extract dimension info from IMS HDF5 structure
+        # IMS files use consistent ordering: T (if >1), C (if >1), Z, Y, X
+        try:
+            with h5py.File(self.path, 'r') as f:
+                # Count dimensions from the HDF5 structure
+                dataset_path = f'DataSet/ResolutionLevel {self._resolution_level}'
+                if dataset_path in f:
+                    ds_group = f[dataset_path]
+                    # Count time points
+                    time_points = len([k for k in ds_group.keys() if k.startswith('TimePoint')])
+                    # Count channels (check first time point)
+                    if 'TimePoint 0' in ds_group:
+                        channels = len([k for k in ds_group['TimePoint 0'].keys() if k.startswith('Channel')])
+                    else:
+                        channels = 1
+
+                    # Build dimension names based on actual structure
+                    ndim = len(self._dask_array.shape)
+                    if ndim == 5:
+                        self._dimension_names = ['t', 'c', 'z', 'y', 'x']
+                    elif ndim == 4:
+                        if time_points > 1:
+                            self._dimension_names = ['t', 'z', 'y', 'x']
+                        else:
+                            self._dimension_names = ['c', 'z', 'y', 'x']
+                    elif ndim == 3:
+                        self._dimension_names = ['z', 'y', 'x']
+                    else:
+                        self._dimension_names = None
+        except Exception as e:
+            print(f"Warning: Could not extract IMS dimension names: {e}")
+            self._dimension_names = None
 
     def get_tensorstore_spec(self) -> Dict:
         """
@@ -73,16 +117,18 @@ class IMSReader(BaseReader):
             >>> spec = reader.get_tensorstore_spec()
             >>> print(spec['driver'])
             'array'
+            >>> print(spec['schema']['dimension_names'])  # Auto-detected
+            ['z', 'y', 'x']
 
         Notes:
             - Tier 2 approach: Dask array -> TensorStore 'array' driver
             - Minimal overhead (one Dask layer)
-            - Proven production code (load_ims_stack already optimized)
+            - Dimension names auto-detected from IMS HDF5 structure
         """
-        if self._dask_array is None:
-            # Reuse existing load_ims_stack from utils.py
-            # Note: load_ims_stack returns (dask_array, h5_file) tuple
-            self._dask_array, self._h5_file = load_ims_stack(self.path)
+        self._load()
+
+        # Use auto-detected dimension names, fall back to inference
+        dimension_names = self._dimension_names or self._infer_dimension_names(self._dask_array.shape)
 
         # Wrap Dask array in TensorStore 'array' driver
         spec = {
@@ -91,7 +137,7 @@ class IMSReader(BaseReader):
             'schema': {
                 'dtype': str(self._dask_array.dtype),
                 'shape': list(self._dask_array.shape),
-                'dimension_names': self._infer_dimension_names(self._dask_array.shape)
+                'dimension_names': dimension_names
             }
         }
 

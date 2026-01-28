@@ -155,6 +155,101 @@ class BaseReader(ABC):
         """
         pass
 
+    def get_source_info(self) -> Dict:
+        """
+        Return comprehensive source metadata for auto-detection.
+
+        Extracts all available properties from the source format including
+        dimension names, memory order, chunk shape, voxel sizes, and more.
+        This unified structure allows the converter to auto-configure output
+        to match source settings unless explicitly overridden.
+
+        Returns:
+            dict: Unified source metadata structure:
+                {
+                    # Dimension info
+                    'dimension_names': ['z', 'y', 'x'],  # Actual names from source
+                    'shape': (498, 2000, 2000),
+                    'dtype': 'uint16',
+
+                    # Memory layout
+                    'is_fortran_order': False,  # F-order vs C-order
+                    'memory_order': 'C',        # 'C' or 'F'
+
+                    # Chunking (native from source)
+                    'chunk_shape': (64, 64, 64),  # Source's native chunks
+                    'is_chunked': True,
+
+                    # Physical metadata
+                    'voxel_sizes': {'x': 0.16, 'y': 0.16, 'z': 0.4},
+                    'voxel_unit': 'micrometer',
+
+                    # Compression (if applicable)
+                    'compression': 'zstd',
+                    'compression_level': 5,
+
+                    # Format-specific
+                    'ome_xml': '...',        # Raw OME-XML if available
+                    'source_format': 'nd2',  # Source format identifier
+                }
+
+        Notes:
+            - Default implementation provides basic extraction
+            - Subclasses should override to extract format-specific info
+            - Missing fields will be None or have sensible defaults
+        """
+        # Get basic info from spec
+        spec = self.get_tensorstore_spec()
+        schema = spec.get('schema', {})
+
+        shape = tuple(schema.get('shape', []))
+        dtype = schema.get('dtype', 'unknown')
+        dimension_names = schema.get('dimension_names', [])
+
+        # Get voxel sizes
+        try:
+            voxel_sizes = self.get_voxel_sizes()
+        except Exception:
+            voxel_sizes = {'x': 1.0, 'y': 1.0, 'z': 1.0}
+
+        # Get raw metadata
+        try:
+            raw_metadata = self.get_metadata()
+        except Exception:
+            raw_metadata = {}
+
+        # Extract OME-XML if available
+        ome_xml = raw_metadata.get('ome_xml') or raw_metadata.get('raw_xml')
+
+        # Default source info - subclasses should override for format-specific extraction
+        return {
+            # Dimension info
+            'dimension_names': dimension_names if dimension_names else None,
+            'shape': shape,
+            'dtype': dtype,
+
+            # Memory layout (default to C-order, subclasses should detect)
+            'is_fortran_order': False,
+            'memory_order': 'C',
+
+            # Chunking (default unknown, subclasses should extract)
+            'chunk_shape': None,
+            'is_chunked': None,
+
+            # Physical metadata
+            'voxel_sizes': voxel_sizes,
+            'voxel_unit': 'micrometer',
+
+            # Compression (default unknown)
+            'compression': None,
+            'compression_level': None,
+
+            # Format-specific
+            'ome_xml': ome_xml,
+            'source_format': self.__class__.__name__.replace('Reader', '').lower(),
+            'raw_metadata': raw_metadata,
+        }
+
     def get_ome_metadata(self) -> Dict:
         """
         Return OME-NGFF compatible metadata (v0.4 or v0.5).

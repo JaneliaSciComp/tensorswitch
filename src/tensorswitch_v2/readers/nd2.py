@@ -2,9 +2,11 @@
 ND2 reader implementation wrapping existing load_nd2_stack function.
 
 Tier 2 reader - reuses proven production code with minimal overhead.
+Auto-detects dimension names, chunk shape, and memory order from source.
 """
 
-from typing import Dict
+from typing import Dict, List, Optional
+import nd2
 from tensorswitch.utils import load_nd2_stack, extract_nd2_ome_metadata
 from .base import BaseReader
 
@@ -53,6 +55,25 @@ class ND2Reader(BaseReader):
         super().__init__(path)
         self._dask_array = None
         self._metadata_cache = None
+        self._dimension_names: Optional[List[str]] = None
+
+    def _load(self):
+        """Lazy-load the ND2 data and extract dimension names."""
+        if self._dask_array is not None:
+            return
+
+        # Load dask array
+        self._dask_array = load_nd2_stack(self.path)
+
+        # Extract actual dimension names from ND2 file
+        try:
+            with nd2.ND2File(self.path) as f:
+                # f.sizes is a dict like {'Z': 498, 'Y': 2000, 'X': 2000}
+                # Keys give us the actual dimension names in order
+                self._dimension_names = [dim.lower() for dim in f.sizes.keys()]
+        except Exception as e:
+            print(f"Warning: Could not extract ND2 dimension names: {e}")
+            self._dimension_names = None
 
     def get_tensorstore_spec(self) -> Dict:
         """
@@ -69,15 +90,18 @@ class ND2Reader(BaseReader):
             >>> spec = reader.get_tensorstore_spec()
             >>> print(spec['driver'])
             'array'
+            >>> print(spec['schema']['dimension_names'])  # Auto-detected
+            ['z', 'y', 'x']
 
         Notes:
             - Tier 2 approach: Dask array -> TensorStore 'array' driver
             - Minimal overhead (one Dask layer)
-            - Proven production code (load_nd2_stack already optimized)
+            - Dimension names auto-detected from ND2 file metadata
         """
-        if self._dask_array is None:
-            # Reuse existing load_nd2_stack from utils.py
-            self._dask_array = load_nd2_stack(self.path)
+        self._load()
+
+        # Use auto-detected dimension names, fall back to inference
+        dimension_names = self._dimension_names or self._infer_dimension_names(self._dask_array.shape)
 
         # Wrap Dask array in TensorStore 'array' driver
         spec = {
@@ -86,7 +110,7 @@ class ND2Reader(BaseReader):
             'schema': {
                 'dtype': str(self._dask_array.dtype),
                 'shape': list(self._dask_array.shape),
-                'dimension_names': self._infer_dimension_names(self._dask_array.shape)
+                'dimension_names': dimension_names
             }
         }
 

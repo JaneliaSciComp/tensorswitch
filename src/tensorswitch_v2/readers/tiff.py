@@ -2,9 +2,11 @@
 TIFF reader implementation wrapping existing load_tiff_stack function.
 
 Tier 2 reader - reuses proven production code with minimal overhead.
+Auto-detects dimension names from TIFF metadata (axes string).
 """
 
-from typing import Dict
+from typing import Dict, List, Optional
+import tifffile
 from tensorswitch.utils import load_tiff_stack, extract_tiff_ome_metadata
 from .base import BaseReader
 
@@ -57,6 +59,29 @@ class TiffReader(BaseReader):
         super().__init__(path)
         self._dask_array = None
         self._metadata_cache = None
+        self._dimension_names: Optional[List[str]] = None
+
+    def _load(self):
+        """Lazy-load the TIFF data and extract dimension names."""
+        if self._dask_array is not None:
+            return
+
+        import os
+
+        # Load dask array
+        self._dask_array = load_tiff_stack(self.path)
+
+        # Extract actual dimension names from TIFF file
+        try:
+            if os.path.isfile(self.path):
+                with tifffile.TiffFile(self.path) as tif:
+                    if tif.series:
+                        # axes is a string like 'ZYX', 'CZYX', 'TZCYX'
+                        axes_str = tif.series[0].axes
+                        self._dimension_names = [c.lower() for c in axes_str]
+        except Exception as e:
+            print(f"Warning: Could not extract TIFF dimension names: {e}")
+            self._dimension_names = None
 
     def get_tensorstore_spec(self) -> Dict:
         """
@@ -73,15 +98,18 @@ class TiffReader(BaseReader):
             >>> spec = reader.get_tensorstore_spec()
             >>> print(spec['driver'])
             'array'
+            >>> print(spec['schema']['dimension_names'])  # Auto-detected
+            ['z', 'y', 'x']
 
         Notes:
             - Tier 2 approach: Dask array → TensorStore 'array' driver
             - Minimal overhead (one Dask layer)
-            - Proven production code (load_tiff_stack already optimized)
+            - Dimension names auto-detected from TIFF axes metadata
         """
-        if self._dask_array is None:
-            # Reuse existing load_tiff_stack from utils.py
-            self._dask_array = load_tiff_stack(self.path)
+        self._load()
+
+        # Use auto-detected dimension names, fall back to inference
+        dimension_names = self._dimension_names or self._infer_dimension_names(self._dask_array.shape)
 
         # Wrap Dask array in TensorStore 'array' driver
         spec = {
@@ -90,7 +118,7 @@ class TiffReader(BaseReader):
             'schema': {
                 'dtype': str(self._dask_array.dtype),
                 'shape': list(self._dask_array.shape),
-                'dimension_names': self._infer_dimension_names(self._dask_array.shape)
+                'dimension_names': dimension_names
             }
         }
 
