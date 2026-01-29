@@ -146,9 +146,9 @@ def _calculate_downsample_wall_time(
     else:
         read_overhead = 2
 
-    # Total with 2x safety margin, round to 15 min
+    # Total with 2x safety margin, round to 15 min, cap at 24 hours
     total_minutes = int(math.ceil((base_minutes + read_overhead) * 2 / 15) * 15)
-    total_minutes = max(15, min(total_minutes, 240))  # 15 min to 4 hours
+    total_minutes = max(15, min(total_minutes, 24 * 60))  # 15 min to 24 hours
 
     hours = total_minutes // 60
     minutes = total_minutes % 60

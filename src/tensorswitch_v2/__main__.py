@@ -336,13 +336,11 @@ def _calculate_wall_time(volume_shape, dtype_str, shard_shape, total_shards):
     else:
         overhead = 2
 
-    # 2x safety, round to nearest 30 min, cap at 4 hours
+    # 2x safety, round to nearest 30 min, cap at 48 hours
     safe_minutes = int(math.ceil((base_minutes + overhead) * 2 / 30) * 30)
-    safe_minutes = max(30, safe_minutes)
-    hours = min(safe_minutes // 60, 4)
+    safe_minutes = max(30, min(safe_minutes, 48 * 60))  # Cap at 48 hours
+    hours = safe_minutes // 60
     minutes = safe_minutes % 60
-    if hours >= 4:
-        return "4:00"
     return f"{hours}:{minutes:02d}"
 
 
@@ -374,7 +372,8 @@ def submit_job(args):
         if wall_time is None:
             wall_time = _calculate_wall_time(volume_shape, dtype_str, shard_shape, total_shards)
 
-    cores = args.cores if args.cores is not None else max(1, int(math.ceil(memory_gb / 15)) * 2)
+    # Cores: based on memory but capped at 8 (I/O-bound, more cores don't help much)
+    cores = args.cores if args.cores is not None else min(8, max(1, int(math.ceil(memory_gb / 15)) * 2))
 
     # Job name: tsv2_{src_ext}_to_{out_format}_{input_stem}
     input_name = os.path.basename(args.input)
@@ -430,7 +429,7 @@ def submit_job(args):
         "-n", str(cores),
         "-W", wall_time,
         "-M", f"{memory_gb}GB",
-        "-R", f"rusage[mem={memory_gb * 1024 * 1024 * 1024}]",
+        "-R", f"rusage[mem={memory_gb * 1024}]",  # GB to MB for LSF
         "-P", args.project,
         "-g", args.job_group,
         "-o", log_path,
@@ -477,7 +476,8 @@ def submit_downsample_job(args, cumulative_factors):
 
     memory_gb = args.memory or 32
     wall_time = args.wall_time or "2:00"
-    cores = args.cores or max(1, int(math.ceil(memory_gb / 15)) * 2)
+    # Cores: based on memory but capped at 8 (I/O-bound, more cores don't help much)
+    cores = args.cores or min(8, max(1, int(math.ceil(memory_gb / 15)) * 2))
 
     # Job name: tsv2_ds_s{level}_{basename}
     input_name = os.path.basename(os.path.dirname(args.input))  # e.g., dataset.zarr
@@ -520,7 +520,7 @@ def submit_downsample_job(args, cumulative_factors):
         "-n", str(cores),
         "-W", wall_time,
         "-M", f"{memory_gb}GB",
-        "-R", f"rusage[mem={memory_gb * 1024 * 1024 * 1024}]",
+        "-R", f"rusage[mem={memory_gb * 1024}]",  # GB to MB for LSF
         "-P", args.project,
         "-g", args.job_group,
         "-o", log_path,
