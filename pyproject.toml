@@ -13,7 +13,7 @@ dependencies = [
     "apscheduler",
     "openai",
     "pydantic",
-    "watchdog", "pylibczirw>=5.1.1,<6",
+    "watchdog", "pylibczirw>=5.1.1,<6", "bioio>=3.2.0,<4", "bioio-czi>=2.1.0,<3",
 ]
 description = "This package provides a unified entry point and organized task modules for managing N5/Zarr dataset conversions and downsampling. It centralizes your workflow into a single pipeline to reduce manual work and errors."
 readme = "README.md"

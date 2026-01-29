@@ -161,6 +161,10 @@ def parse_args(argv=None):
         "--job_group", type=str, default="/scicompsoft/chend/tensorstore",
         help="LSF job group path (default: /scicompsoft/chend/tensorstore)",
     )
+    parser.add_argument(
+        "--use_bioio", action="store_true",
+        help="Force BIOIO adapter (Tier 3) instead of auto-detected Tier 2 reader",
+    )
 
     return parser.parse_args(argv)
 
@@ -183,6 +187,10 @@ def create_reader(args):
 
     path = args.input
     path_lower = path.lower()
+
+    # Force BIOIO adapter if requested (for testing Tier 3)
+    if getattr(args, 'use_bioio', False):
+        return Readers.bioio(path)
 
     # CZI: use dedicated Tier 2 reader with optional view_index
     if path_lower.endswith(".czi"):
@@ -424,6 +432,8 @@ def submit_job(args):
         reinvoke += ["--view_index", str(args.view_index)]
     if args.quiet:
         reinvoke.append("--quiet")
+    if getattr(args, 'use_bioio', False):
+        reinvoke.append("--use_bioio")
 
     # Build bsub command
     command = [
