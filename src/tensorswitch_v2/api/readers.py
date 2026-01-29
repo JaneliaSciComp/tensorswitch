@@ -356,6 +356,7 @@ class Readers:
         scene_index: int = 0,
         channel_index: Optional[int] = None,
         time_index: Optional[int] = None,
+        resolution_level: int = 0,
         reader: Optional[object] = None
     ) -> BaseReader:
         """
@@ -369,6 +370,7 @@ class Readers:
             scene_index: Which scene to load for multi-scene files (default: 0)
             channel_index: Optional specific channel to extract (None = all)
             time_index: Optional specific timepoint to extract (None = all)
+            resolution_level: Resolution level for pyramid formats (0=full, default: 0)
             reader: Optional explicit BIOIO reader class (auto-detects if None)
 
         Returns:
@@ -384,6 +386,9 @@ class Readers:
             >>> # Extract single channel
             >>> reader = Readers.bioio("/data.czi", channel_index=0)
 
+            >>> # Read lower resolution pyramid level
+            >>> reader = Readers.bioio("/data.czi", resolution_level=2)
+
         Supported Formats:
             CZI, LIF, SLDY, DV, OME-TIFF, and 20+ more via BIOIO plugins.
             See https://github.com/bioio-devs/bioio for full list.
@@ -397,6 +402,7 @@ class Readers:
             scene_index=scene_index,
             channel_index=channel_index,
             time_index=time_index,
+            resolution_level=resolution_level,
             reader=reader
         )
 

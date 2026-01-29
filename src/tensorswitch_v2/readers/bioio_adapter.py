@@ -72,6 +72,7 @@ class BIOIOReader(BaseReader):
         scene_index: int = 0,
         channel_index: Optional[int] = None,
         time_index: Optional[int] = None,
+        resolution_level: int = 0,
         reader: Optional[Any] = None
     ):
         """
@@ -82,6 +83,7 @@ class BIOIOReader(BaseReader):
             scene_index: Which scene to load for multi-scene files (default: 0)
             channel_index: Optional specific channel to extract (None = all channels)
             time_index: Optional specific timepoint to extract (None = all timepoints)
+            resolution_level: Resolution level to read (0=full, higher=lower res). Default: 0
             reader: Optional explicit BIOIO reader class to use (auto-detected if None)
 
         Example:
@@ -94,6 +96,9 @@ class BIOIOReader(BaseReader):
             >>> # Extract single channel
             >>> reader = BIOIOReader("/data.czi", channel_index=0)
 
+            >>> # Read lower resolution level (if available in file)
+            >>> reader = BIOIOReader("/data.czi", resolution_level=2)
+
             >>> # Force specific reader (override auto-detection)
             >>> from bioio_czi import Reader as CZIReader
             >>> reader = BIOIOReader("/data.czi", reader=CZIReader)
@@ -102,6 +107,7 @@ class BIOIOReader(BaseReader):
         self._scene_index = scene_index
         self._channel_index = channel_index
         self._time_index = time_index
+        self._resolution_level = resolution_level
         self._explicit_reader = reader
 
         # Lazy-loaded BIOIO objects
@@ -141,6 +147,20 @@ class BIOIOReader(BaseReader):
         # Set scene if multi-scene
         if self._scene_index > 0 and len(self._bioimage.scenes) > self._scene_index:
             self._bioimage.set_scene(self._scene_index)
+
+        # Set resolution level if multi-resolution (pyramids)
+        if self._resolution_level > 0:
+            try:
+                available_levels = self._bioimage.resolution_levels
+                if self._resolution_level < len(available_levels):
+                    self._bioimage.set_resolution_level(self._resolution_level)
+                else:
+                    print(f"Warning: Resolution level {self._resolution_level} not available. "
+                          f"Available: {available_levels}. Using level 0.")
+            except (AttributeError, NotImplementedError):
+                # Format doesn't support multi-resolution
+                if self._resolution_level > 0:
+                    print(f"Warning: Format does not support multi-resolution. Using level 0.")
 
     def _get_dask_array(self):
         """
@@ -441,6 +461,114 @@ class BIOIOReader(BaseReader):
         metadata = self.get_metadata()
         return metadata.get('channel_names', [])
 
+    @property
+    def resolution_levels(self) -> List[int]:
+        """
+        Get list of available resolution levels (pyramid levels).
+
+        For formats with built-in pyramids (CZI, LIF, OME-TIFF), this returns
+        the available resolution levels. Level 0 is full resolution.
+
+        Returns:
+            list: Available resolution level indices (e.g., [0, 1, 2, 3])
+
+        Example:
+            >>> reader = BIOIOReader("/data.czi")
+            >>> print(reader.resolution_levels)
+            [0, 1, 2, 3]  # 4 pyramid levels available
+        """
+        self._load_bioimage()
+        try:
+            return list(self._bioimage.resolution_levels)
+        except (AttributeError, NotImplementedError):
+            return [0]  # Only full resolution available
+
+    @property
+    def current_resolution_level(self) -> int:
+        """
+        Get the currently selected resolution level.
+
+        Returns:
+            int: Current resolution level index
+
+        Example:
+            >>> reader = BIOIOReader("/data.czi", resolution_level=2)
+            >>> print(reader.current_resolution_level)
+            2
+        """
+        self._load_bioimage()
+        try:
+            return self._bioimage.current_resolution_level
+        except (AttributeError, NotImplementedError):
+            return 0
+
+    def set_resolution_level(self, level: int) -> None:
+        """
+        Set the resolution level for subsequent reads.
+
+        This allows switching between pyramid levels after initialization.
+        Level 0 is full resolution, higher levels are lower resolution.
+
+        Args:
+            level: Resolution level index (0 = full resolution)
+
+        Raises:
+            ValueError: If level is not available in the file
+
+        Example:
+            >>> reader = BIOIOReader("/data.czi")
+            >>> print(reader.resolution_levels)
+            [0, 1, 2, 3]
+            >>> reader.set_resolution_level(2)  # Switch to level 2
+            >>> spec = reader.get_tensorstore_spec()  # Now returns level 2 data
+        """
+        self._load_bioimage()
+        available = self.resolution_levels
+        if level not in available:
+            raise ValueError(f"Resolution level {level} not available. "
+                           f"Available levels: {available}")
+
+        try:
+            self._bioimage.set_resolution_level(level)
+            self._resolution_level = level
+            # Clear cached dask array to force reload at new resolution
+            self._dask_array = None
+            self._metadata_cache = None
+        except (AttributeError, NotImplementedError):
+            if level > 0:
+                raise ValueError(f"Format does not support multi-resolution. "
+                               f"Only level 0 is available.")
+
+    def get_resolution_level_shape(self, level: int) -> tuple:
+        """
+        Get the shape at a specific resolution level without loading data.
+
+        Args:
+            level: Resolution level index
+
+        Returns:
+            tuple: Shape at the specified resolution level
+
+        Example:
+            >>> reader = BIOIOReader("/data.czi")
+            >>> print(reader.get_resolution_level_shape(0))
+            (100, 2048, 2048)  # Full resolution
+            >>> print(reader.get_resolution_level_shape(2))
+            (100, 512, 512)    # 4x downsampled in XY
+        """
+        self._load_bioimage()
+        try:
+            # Temporarily switch level, get shape, switch back
+            current = self.current_resolution_level
+            self._bioimage.set_resolution_level(level)
+            shape = self._bioimage.shape
+            self._bioimage.set_resolution_level(current)
+            return shape
+        except (AttributeError, NotImplementedError):
+            if level == 0:
+                return self._bioimage.shape
+            raise ValueError(f"Resolution level {level} not available.")
+
     def __repr__(self) -> str:
         """String representation of BIOIO reader."""
-        return f"BIOIOReader(path='{self.path}', scene={self._scene_index})"
+        return f"BIOIOReader(path='{self.path}', scene={self._scene_index}, resolution_level={self._resolution_level})"
