@@ -1,11 +1,19 @@
 """
-CLI entry point for tensorswitch_v2 conversion.
+CLI entry point for tensorswitch_v2 conversion and downsampling.
 
 Usage:
+    # Conversion (s0)
     python -m tensorswitch_v2 -i input.tif -o output.zarr
     python -m tensorswitch_v2 -i input.n5 -o output.zarr --chunk_shape 32,256,256
-    python -m tensorswitch_v2 -i input.tif -o output.zarr --start_idx 0 --stop_idx 100
     python -m tensorswitch_v2 -i input.tif -o output.zarr --submit -P scicompsoft
+
+    # Downsampling (single level, parallel from s0)
+    python -m tensorswitch_v2 --downsample -i /path/to/s0 -o /path/to/dataset.zarr \\
+        --target_level 2 --cumulative_factors 1,4,4
+
+    # Auto-multiscale (full pyramid, all levels in parallel)
+    python -m tensorswitch_v2 --auto_multiscale -i /path/to/s0 -o /path/to/dataset.zarr \\
+        --submit -P scicompsoft
 """
 
 import os
@@ -96,6 +104,28 @@ def parse_args(argv=None):
     parser.add_argument(
         "--view_index", type=int, default=None,
         help="CZI view index (None = all views as 5D VCZYX)",
+    )
+
+    # Downsampling mode
+    parser.add_argument(
+        "--downsample", action="store_true",
+        help="Downsample mode: create a single level from s0",
+    )
+    parser.add_argument(
+        "--auto_multiscale", action="store_true",
+        help="Auto-multiscale mode: generate full pyramid from s0 (all levels in parallel)",
+    )
+    parser.add_argument(
+        "--target_level", type=int, default=None,
+        help="Target level to create in downsample mode (1=s1, 2=s2, etc.)",
+    )
+    parser.add_argument(
+        "--cumulative_factors", type=str, default=None,
+        help="Cumulative downsampling factors from s0, comma-separated (e.g., '1,4,4' for s2)",
+    )
+    parser.add_argument(
+        "--use_shard", type=int, default=1,
+        help="Use sharding for output (1=yes, 0=no, default: 1)",
     )
 
     # Output control
@@ -252,7 +282,7 @@ def _estimate_shard_info(args, volume_shape, dtype_str):
 def _calculate_memory(volume_shape, dtype_str, shard_shape, total_shards):
     """Calculate memory in GB using v1 formula.
 
-    Formula: base (file loading) + shard buffers + task overhead, then x1.3 safety.
+    Formula: base (file loading) + shard buffers + task overhead, then x1.5 safety.
     """
     dtype_bytes = np.dtype(dtype_str).itemsize
     dataset_size_gb = (np.prod(volume_shape) * dtype_bytes) / (1024 ** 3)
@@ -271,11 +301,11 @@ def _calculate_memory(volume_shape, dtype_str, shard_shape, total_shards):
     shard_buffer_mem = shard_size_gb * 2.0 * concurrent_shards
 
     # Task overhead (conversion)
-    task_overhead = 2
+    task_overhead = 4  # GB for Python, TensorStore, etc.
 
-    # Total with 30% safety margin, rounded to nearest 5 GB
+    # Total with 1.5x safety margin, rounded to nearest 5 GB
     total_mem = base_mem + shard_buffer_mem + task_overhead
-    recommended = int(math.ceil(total_mem * 1.3 / 5) * 5)
+    recommended = int(math.ceil(total_mem * 1.5 / 5) * 5)
     return max(5, min(recommended, 500))
 
 
@@ -434,10 +464,214 @@ def submit_job(args):
         raise RuntimeError(f"bsub failed with exit code {result.returncode}")
 
 
+def submit_downsample_job(args, cumulative_factors):
+    """Submit a single LSF bsub job for downsampling.
+
+    Constructs a bsub command for single-level downsampling from s0.
+    """
+    if not args.project:
+        raise ValueError(
+            "--project is required when using --submit. "
+            "Example: --submit --project scicompsoft"
+        )
+
+    memory_gb = args.memory or 32
+    wall_time = args.wall_time or "2:00"
+    cores = args.cores or max(1, int(math.ceil(memory_gb / 15)) * 2)
+
+    # Job name: tsv2_ds_s{level}_{basename}
+    input_name = os.path.basename(os.path.dirname(args.input))  # e.g., dataset.zarr
+    job_name = f"tsv2_ds_s{args.target_level}_{input_name}"
+    job_name = job_name.replace(" ", "_")[:128]
+
+    # Log directory next to output
+    output_parent = os.path.dirname(os.path.abspath(args.output))
+    log_dir = os.path.join(output_parent, "output")
+    os.makedirs(log_dir, exist_ok=True)
+
+    log_path = os.path.join(log_dir, f"output__{job_name}_%J.log")
+    error_path = os.path.join(log_dir, f"error__{job_name}_%J.log")
+
+    # Build re-invocation command
+    reinvoke = [
+        sys.executable, "-m", "tensorswitch_v2",
+        "--downsample",
+        "--input", args.input,
+        "--output", args.output,
+        "--target_level", str(args.target_level),
+        "--cumulative_factors", ",".join(map(str, cumulative_factors)),
+        "--use_shard", str(args.use_shard),
+    ]
+    if args.chunk_shape:
+        reinvoke += ["--chunk_shape", args.chunk_shape]
+    if args.shard_shape:
+        reinvoke += ["--shard_shape", args.shard_shape]
+    if args.start_idx is not None:
+        reinvoke += ["--start_idx", str(args.start_idx)]
+    if args.stop_idx is not None:
+        reinvoke += ["--stop_idx", str(args.stop_idx)]
+    if args.quiet:
+        reinvoke.append("--quiet")
+
+    # Build bsub command
+    command = [
+        "bsub",
+        "-J", job_name,
+        "-n", str(cores),
+        "-W", wall_time,
+        "-M", f"{memory_gb}GB",
+        "-R", f"rusage[mem={memory_gb * 1024 * 1024 * 1024}]",
+        "-P", args.project,
+        "-g", args.job_group,
+        "-o", log_path,
+        "-e", error_path,
+    ] + reinvoke
+
+    # Print summary and submit
+    print("=" * 72)
+    print("LSF Downsample Job Submission")
+    print("=" * 72)
+    print(f"  Job name:    {job_name}")
+    print(f"  Target:      s{args.target_level}")
+    print(f"  Factors:     {cumulative_factors}")
+    print(f"  Cores:       {cores}")
+    print(f"  Memory:      {memory_gb} GB")
+    print(f"  Wall time:   {wall_time}")
+    print(f"  Project:     {args.project}")
+    print(f"  Log:         {log_path}")
+    print("=" * 72)
+
+    result = subprocess.run(command, capture_output=True, text=True)
+
+    if result.returncode == 0:
+        print("Job submitted successfully.")
+        print(result.stdout.strip())
+    else:
+        print(f"Job submission failed (exit code {result.returncode}).")
+        if result.stderr:
+            print(result.stderr.strip())
+        raise RuntimeError(f"bsub failed with exit code {result.returncode}")
+
+
 def main(argv=None):
-    """Run single-process conversion or submit LSF job."""
+    """Run single-process conversion, downsampling, or submit LSF job."""
     args = parse_args(argv)
 
+    # Parse optional shapes
+    chunk_shape = parse_shape(args.chunk_shape) if args.chunk_shape else None
+    shard_shape = parse_shape(args.shard_shape) if args.shard_shape else None
+    verbose = not args.quiet
+    use_shard = bool(args.use_shard)
+
+    # Handle auto_multiscale mode (full pyramid generation)
+    # This is the main entry point for automatic downsampling - just point at s0 and it does the rest
+    if args.auto_multiscale:
+        from .core.pyramid import PyramidPlanner, create_pyramid_parallel
+        from tensorswitch.utils import update_ome_metadata_if_needed
+
+        # Determine s0 path and root path
+        # Input can be either the s0 path directly or the root zarr path
+        s0_path = args.input
+        if not s0_path.endswith('/s0') and not s0_path.endswith('\\s0'):
+            # Check if input is root path with s0 subdirectory
+            potential_s0 = os.path.join(s0_path, 's0')
+            if os.path.exists(potential_s0):
+                s0_path = potential_s0
+
+        root_path = os.path.dirname(s0_path) if s0_path.endswith('/s0') or s0_path.endswith('\\s0') else args.output
+
+        if args.submit:
+            if not args.project:
+                raise ValueError("--project is required with --submit")
+
+            # Use create_pyramid_parallel which handles everything automatically
+            # Pass None for memory/wall_time/cores to enable auto-calculation per level
+            result = create_pyramid_parallel(
+                s0_path=s0_path,
+                project=args.project,
+                memory=args.memory,  # None = auto-calculate per level
+                wall_time=args.wall_time,  # None = auto-calculate per level
+                cores=args.cores,  # None = auto-calculate based on memory
+                use_shard=use_shard,
+                dry_run=False,
+                verbose=verbose,
+            )
+            print(f"\nSubmitted {len(result['job_ids'])} jobs for {result['pyramid_plan']['num_levels']} levels")
+            print("Jobs will run in parallel - all levels downsample directly from s0.")
+            print("After all jobs complete, root metadata will be updated automatically.")
+        else:
+            # Local mode: run downsampling directly for each level
+            from .core.downsampler import downsample_level
+
+            planner = PyramidPlanner(s0_path)
+            plan = planner.calculate_pyramid_plan()
+            planner.print_pyramid_plan(plan)
+
+            print("\nRunning local pyramid generation...")
+
+            # Pre-create all levels first
+            planner.precreate_all_levels(plan, use_shard=use_shard, verbose=verbose)
+
+            # Process each level
+            for level_info in plan['levels']:
+                level = level_info['level']
+                cumulative_factors = level_info['cumulative_factor']
+
+                print(f"\n--- Downsampling s{level} (cumulative factor: {cumulative_factors}) ---")
+
+                downsample_level(
+                    s0_path=s0_path,
+                    output_path=root_path,
+                    target_level=level,
+                    cumulative_factors=cumulative_factors,
+                    use_shard=use_shard,
+                    custom_shard_shape=level_info.get('shard_shape'),
+                    custom_chunk_shape=level_info.get('chunk_shape'),
+                    verbose=verbose,
+                )
+
+            # Update root metadata
+            print("\nUpdating root metadata...")
+            update_ome_metadata_if_needed(root_path, use_ome_structure=True)
+
+            print(f"\n{'='*60}")
+            print(f"AUTO-MULTISCALE COMPLETE: {root_path}")
+            print(f"Generated s0 through s{plan['num_levels']}")
+            print(f"{'='*60}")
+        return
+
+    # Handle downsample mode (single level from s0)
+    if args.downsample:
+        from .core.downsampler import downsample_level
+
+        if args.target_level is None:
+            raise ValueError("--target_level is required with --downsample")
+
+        if args.cumulative_factors is None:
+            raise ValueError("--cumulative_factors is required with --downsample")
+
+        cumulative_factors = [int(x) for x in args.cumulative_factors.split(",")]
+
+        if args.submit:
+            # Submit as LSF job
+            submit_downsample_job(args, cumulative_factors)
+        else:
+            # Run locally
+            downsample_level(
+                s0_path=args.input,
+                output_path=args.output,
+                target_level=args.target_level,
+                cumulative_factors=cumulative_factors,
+                start_idx=args.start_idx or 0,
+                stop_idx=args.stop_idx,
+                use_shard=use_shard,
+                custom_shard_shape=list(shard_shape) if shard_shape else None,
+                custom_chunk_shape=list(chunk_shape) if chunk_shape else None,
+                verbose=verbose,
+            )
+        return
+
+    # Standard conversion mode (s0)
     if args.submit:
         submit_job(args)
         return
@@ -448,12 +682,6 @@ def main(argv=None):
     from .core.converter import DistributedConverter
 
     converter = DistributedConverter(reader, writer)
-
-    # Parse optional shapes
-    chunk_shape = parse_shape(args.chunk_shape) if args.chunk_shape else None
-    shard_shape = parse_shape(args.shard_shape) if args.shard_shape else None
-
-    verbose = not args.quiet
 
     if args.start_idx is not None:
         # Manual chunk-range mode (for bsub workers)

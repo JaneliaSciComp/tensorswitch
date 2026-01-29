@@ -19,6 +19,7 @@ from tensorswitch.utils import (
     get_total_chunks_from_store,
     get_tensorstore_context,
     detect_source_order,
+    update_ome_metadata_if_needed,
 )
 
 
@@ -288,6 +289,12 @@ class DistributedConverter:
                     axes_order=axes_order,
                     ome_xml=ome_xml
                 )
+                # Also update root zarr.json for OME-NGFF multiscales
+                root_path = os.path.dirname(self.writer.output_path)
+                if root_path and os.path.basename(self.writer.output_path) == 's0':
+                    if verbose:
+                        print("Writing root OME-NGFF metadata...")
+                    update_ome_metadata_if_needed(root_path, use_ome_structure=True)
             except Exception as e:
                 if verbose:
                     print(f"  Warning: Metadata write failed: {e}")

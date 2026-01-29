@@ -9,11 +9,24 @@ Architecture Layer: 3 (Processing)
 - LSF multi-job mode support
 - Dask single-job mode support
 - Chunk iteration and coordination
+- Parallel downsampling from s0
 
 Public API:
     - DistributedConverter: Format-agnostic converter with distributed support
+    - Downsampler: Single-level downsampling from s0 with cumulative factors
+    - downsample_level: Convenience function for single-level downsampling
+    - calculate_cumulative_factors: Calculate cumulative factors for a target level
 """
 
 from .converter import DistributedConverter
+from .downsampler import Downsampler, downsample_level, calculate_cumulative_factors
+from .pyramid import PyramidPlanner, create_pyramid_parallel
 
-__all__ = ['DistributedConverter']
+__all__ = [
+    'DistributedConverter',
+    'Downsampler',
+    'downsample_level',
+    'calculate_cumulative_factors',
+    'PyramidPlanner',
+    'create_pyramid_parallel',
+]
