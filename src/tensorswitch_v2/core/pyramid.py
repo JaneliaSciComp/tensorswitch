@@ -677,6 +677,9 @@ echo "=========================================="
             else:
                 level_cores = cores
 
+            # Enforce cluster policy: 15 GB per core minimum
+            level_memory = max(level_memory, level_cores * 15)
+
             cmd = [
                 python_path, "-m", "tensorswitch_v2",
                 "--downsample",

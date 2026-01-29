@@ -375,6 +375,9 @@ def submit_job(args):
     # Cores: based on memory but capped at 8 (I/O-bound, more cores don't help much)
     cores = args.cores if args.cores is not None else min(8, max(1, int(math.ceil(memory_gb / 15)) * 2))
 
+    # Enforce cluster policy: 15 GB per core minimum
+    memory_gb = max(memory_gb, cores * 15)
+
     # Job name: tsv2_{src_ext}_to_{out_format}_{input_stem}
     input_name = os.path.basename(args.input)
     input_stem = os.path.splitext(input_name)[0]
@@ -478,6 +481,9 @@ def submit_downsample_job(args, cumulative_factors):
     wall_time = args.wall_time or "2:00"
     # Cores: based on memory but capped at 8 (I/O-bound, more cores don't help much)
     cores = args.cores or min(8, max(1, int(math.ceil(memory_gb / 15)) * 2))
+
+    # Enforce cluster policy: 15 GB per core minimum
+    memory_gb = max(memory_gb, cores * 15)
 
     # Job name: tsv2_ds_s{level}_{basename}
     input_name = os.path.basename(os.path.dirname(args.input))  # e.g., dataset.zarr
