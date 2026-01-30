@@ -235,9 +235,16 @@ def zarr2_store_spec(zarr_level_path, shape, chunks, use_fortran_order=False):
 
 def zarr3_store_spec(path, shape, dtype, use_shard=True, level_path="s0", use_ome_structure=True, custom_shard_shape=None, custom_chunk_shape=None, use_v2_encoding=False, use_fortran_order=False, axes_order=None):
     if use_shard:
-        # Use custom chunk shape if provided, otherwise default
-        inner_chunk_shape = custom_chunk_shape if custom_chunk_shape is not None else [32, 32, 32]
-        
+        # Use custom chunk shape if provided, otherwise default based on dimensionality
+        if custom_chunk_shape is not None:
+            inner_chunk_shape = custom_chunk_shape
+        elif len(shape) == 5:
+            inner_chunk_shape = [1, 1, 32, 32, 32]  # TCZYX or VCZYX
+        elif len(shape) == 4:
+            inner_chunk_shape = [1, 32, 32, 32]  # CZYX
+        else:
+            inner_chunk_shape = [32, 32, 32]  # ZYX or smaller
+
         # Adjust inner chunk shape for different array dimensions
         if len(shape) == 3 and len(inner_chunk_shape) == 3:
             adjusted_inner_chunk = inner_chunk_shape
@@ -300,7 +307,13 @@ def zarr3_store_spec(path, shape, dtype, use_shard=True, level_path="s0", use_om
             else:
                 chunk_shape = custom_shard_shape
         else:
-            chunk_shape = [1024, 1024, 1024]
+            # Default shard shapes for different dimensionalities
+            if len(shape) == 5:
+                chunk_shape = [1, 1, 1024, 1024, 1024]  # TCZYX or VCZYX
+            elif len(shape) == 4:
+                chunk_shape = [1, 1024, 1024, 1024]  # CZYX
+            else:
+                chunk_shape = [1024, 1024, 1024]  # ZYX or smaller
     else:
         # Non-sharded codecs (with optional transpose for F-order)
         codecs = []
@@ -3157,12 +3170,18 @@ def calculate_anisotropic_downsample_factors(voxel_sizes, axes_names, min_ratio=
     Returns:
         List of downsampling factors (e.g., [1, 2, 2] for c, y, x)
     """
-    if not use_anisotropic:
-        # Simple mode: preserve channels/time, downsample spatial by 2
-        return [1 if axis in ['c', 't'] else 2 for axis in axes_names]
+    # Non-spatial axes that should never be downsampled:
+    # - 'c': channel (different fluorophores/wavelengths)
+    # - 't': time (temporal dimension)
+    # - 'v': view (different acquisition angles, e.g., multi-view lightsheet)
+    NON_SPATIAL_AXES = ['c', 't', 'v']
 
-    # Get spatial dimensions (skip channel and time)
-    spatial_data = [(axis, voxel_sizes[i]) for i, axis in enumerate(axes_names) if axis not in ['c', 't']]
+    if not use_anisotropic:
+        # Simple mode: preserve non-spatial dims, downsample spatial by 2
+        return [1 if axis in NON_SPATIAL_AXES else 2 for axis in axes_names]
+
+    # Get spatial dimensions (skip non-spatial axes)
+    spatial_data = [(axis, voxel_sizes[i]) for i, axis in enumerate(axes_names) if axis not in NON_SPATIAL_AXES]
 
     if not spatial_data:
         return [1] * len(axes_names)
@@ -3202,7 +3221,7 @@ def calculate_anisotropic_downsample_factors(voxel_sizes, axes_names, min_ratio=
 
     # Map spatial factors back to all axes
     spatial_factors = {k: v for k, v in zip(axes, factors)}
-    return [1 if axis in ['c', 't'] else spatial_factors[axis] for axis in axes_names]
+    return [1 if axis in NON_SPATIAL_AXES else spatial_factors[axis] for axis in axes_names]
 
 
 def calculate_num_multiscale_levels(shape, axes_names, voxel_sizes, chunk_shape=None, dtype_size=2,
@@ -3281,9 +3300,11 @@ def calculate_num_multiscale_levels(shape, axes_names, voxel_sizes, chunk_shape=
         # WebKnossos requires cumulative magnifications to be powers of 2 within ~4% tolerance
         import math
         max_power_of_2_error = 0.0
+        # Non-spatial axes: channel (c), time (t), view (v) - should not affect mag calculation
+        NON_SPATIAL_AXES = ['c', 't', 'v']
         for i in range(len(shape)):
             # Skip non-spatial dimensions
-            if axes_names[i] in ['c', 't']:
+            if axes_names[i] in NON_SPATIAL_AXES:
                 continue
 
             cumulative_mag = shape[i] / new_shape[i]
