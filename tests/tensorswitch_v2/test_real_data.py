@@ -277,7 +277,7 @@ def test_real_tiff_to_zarr3(chunk_count=3):
 
 
 def test_real_czi_to_zarr3(chunk_count=3):
-    """Test CZI -> Zarr3 conversion with real data using BIOIO reader (partial)."""
+    """Test CZI -> Zarr3 conversion with real data using CZIReader (Tier 2, partial)."""
     input_path = os.path.join(REAL_DATA_DIR, 'czi', 'Gel3_DE_Ribo647_nDapi_075x_4x9.czi')
 
     if not os.path.exists(input_path):
@@ -290,14 +290,15 @@ def test_real_czi_to_zarr3(chunk_count=3):
         print(f"Input: {input_path}")
         print(f"Output: {output_path}")
 
-        # Use BIOIO reader for CZI files
-        reader = Readers.bioio(input_path)
+        # Use Tier 2 CZI reader (pylibCZIrw) for multi-view support
+        reader = Readers.czi(input_path)
         writer = Writers.zarr3(output_path, use_sharding=False)
 
         converter = DistributedConverter(reader, writer)
 
-        # Get total chunks and process only a subset
-        total = converter.get_total_chunks(chunk_shape=(1, 512, 512))
+        # 5D VCZYX: use chunk shape matching all dims
+        chunk_shape = (1, 1, 1, 512, 512)
+        total = converter.get_total_chunks(chunk_shape=chunk_shape)
         print(f"Total chunks: {total}")
 
         # Process middle chunks for testing
@@ -309,7 +310,7 @@ def test_real_czi_to_zarr3(chunk_count=3):
         stats = converter.convert(
             start_idx=start_idx,
             stop_idx=stop_idx,
-            chunk_shape=(1, 512, 512),
+            chunk_shape=chunk_shape,
             write_metadata=True,
             verbose=True
         )
@@ -321,6 +322,18 @@ def test_real_czi_to_zarr3(chunk_count=3):
         assert os.path.exists(s0_path), f"s0 directory not created: {s0_path}"
         assert os.path.exists(os.path.join(s0_path, 'zarr.json')), "s0/zarr.json not created"
         assert stats['chunks_processed'] == chunk_count
+
+        # Validate OME metadata
+        zarr_json_path = os.path.join(output_path, 'zarr.json')
+        if os.path.exists(zarr_json_path):
+            import json
+            with open(zarr_json_path) as f:
+                meta = json.load(f)
+            ome = meta.get('attributes', {}).get('ome', {})
+            assert 'version' in ome, "ome.version missing"
+            ms = ome.get('multiscales', [{}])[0]
+            assert 'version' not in ms, "version should NOT be inside multiscales"
+            assert len(ms.get('axes', [])) == 5, f"Expected 5 axes for VCZYX, got {len(ms.get('axes', []))}"
 
         print("PASS: CZI -> Zarr3 (real data, partial)")
         return True
