@@ -234,16 +234,36 @@ def zarr2_store_spec(zarr_level_path, shape, chunks, use_fortran_order=False):
 
 
 def zarr3_store_spec(path, shape, dtype, use_shard=True, level_path="s0", use_ome_structure=True, custom_shard_shape=None, custom_chunk_shape=None, use_v2_encoding=False, use_fortran_order=False, axes_order=None):
+    """
+    Create Zarr3 store specification with smart chunking based on axes.
+
+    Non-spatial axes (c, t, v) get chunk size 1 for per-channel/per-timepoint access.
+    Spatial axes (z, y, x) get default 256 inner chunk, 1024 shard.
+    """
+    # Non-spatial axes that should have chunk size 1 for efficient per-slice access
+    NON_SPATIAL_AXES = ['c', 't', 'v']
+
+    def build_default_shape(shape, axes_order, spatial_size):
+        """Build default chunk/shard shape respecting axis types."""
+        if axes_order is None:
+            # Fallback to old behavior if no axes info
+            return [spatial_size] * len(shape)
+
+        result = []
+        for i, axis in enumerate(axes_order):
+            if axis.lower() in NON_SPATIAL_AXES:
+                result.append(1)  # Non-spatial: 1 for per-channel access
+            else:
+                result.append(spatial_size)  # Spatial: use default size
+        return result
+
     if use_shard:
-        # Use custom chunk shape if provided, otherwise default based on dimensionality
+        # Use custom chunk shape if provided, otherwise build based on axes
         if custom_chunk_shape is not None:
             inner_chunk_shape = custom_chunk_shape
-        elif len(shape) == 5:
-            inner_chunk_shape = [1, 1, 32, 32, 32]  # TCZYX or VCZYX
-        elif len(shape) == 4:
-            inner_chunk_shape = [1, 32, 32, 32]  # CZYX
         else:
-            inner_chunk_shape = [32, 32, 32]  # ZYX or smaller
+            # Default inner chunk: 1 for non-spatial, 256 for spatial
+            inner_chunk_shape = build_default_shape(shape, axes_order, 256)
 
         # Adjust inner chunk shape for different array dimensions
         if len(shape) == 3 and len(inner_chunk_shape) == 3:
@@ -307,13 +327,8 @@ def zarr3_store_spec(path, shape, dtype, use_shard=True, level_path="s0", use_om
             else:
                 chunk_shape = custom_shard_shape
         else:
-            # Default shard shapes for different dimensionalities
-            if len(shape) == 5:
-                chunk_shape = [1, 1, 1024, 1024, 1024]  # TCZYX or VCZYX
-            elif len(shape) == 4:
-                chunk_shape = [1, 1024, 1024, 1024]  # CZYX
-            else:
-                chunk_shape = [1024, 1024, 1024]  # ZYX or smaller
+            # Default shard shape: 1 for non-spatial, 1024 for spatial
+            chunk_shape = build_default_shape(shape, axes_order, 1024)
     else:
         # Non-sharded codecs (with optional transpose for F-order)
         codecs = []
