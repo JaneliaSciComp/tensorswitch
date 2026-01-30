@@ -1,14 +1,15 @@
 """
 Pyramid Planner for TensorSwitch Phase 5 architecture.
 
-Provides multi-level pyramid planning and parallel job submission.
-The key innovation is calculating cumulative factors that enable
-all levels to downsample directly from s0 in parallel.
+Provides multi-level pyramid planning and chained job submission.
+Uses the v1 chained approach where each level reads from the previous level,
+which is much more efficient for deep pyramids.
 
 Key Features:
 - Pre-calculate complete pyramid plan before submission
-- Calculate cumulative factors for each level (s0→sN direct)
-- Submit all level jobs in parallel (no bwait chaining)
+- Chained downsampling: s1←s0, s2←s1, s3←s2, etc. (not all from s0)
+- Sequential job submission with bwait between levels
+- Per-level factors (constant ~8 voxels read per output) vs cumulative (exponential)
 - Reuse Yurii Zubov's anisotropic downsampling algorithm from v1
 """
 
@@ -32,22 +33,22 @@ from .downsampler import calculate_cumulative_factors
 
 
 def _calculate_downsample_memory(
-    s0_shape: List[int],
+    source_shape: List[int],
     level_shape: List[int],
     shard_shape: List[int],
     dtype_size: int = 2,
 ) -> int:
     """
-    Calculate memory in GB for a downsampling job.
+    Calculate memory in GB for a downsampling job (chained mode).
 
-    Downsampling reads from s0 and writes to the target level.
+    In chained mode, each level reads from the previous level (not s0).
     Memory needed:
-    - Read buffer: portion of s0 that maps to output shard
+    - Read buffer: portion of source that maps to output shard (~8x for 2x downsample)
     - Write buffer: output shard
     - Processing overhead
 
     Args:
-        s0_shape: Shape of s0 array
+        source_shape: Shape of source array (previous level, e.g., s1 shape for s2 job)
         level_shape: Shape of target level
         shard_shape: Shard shape for output
         dtype_size: Bytes per element (default: 2 for uint16)
@@ -57,28 +58,20 @@ def _calculate_downsample_memory(
     """
     import math
 
-    # Calculate s0 data size
-    s0_size_gb = (np.prod(s0_shape) * dtype_size) / (1024 ** 3)
+    # Calculate source data size
+    source_size_gb = (np.prod(source_shape) * dtype_size) / (1024 ** 3)
 
     # Calculate output shard size
     shard_size_gb = (np.prod(shard_shape) * dtype_size) / (1024 ** 3)
 
-    # Calculate total shards in output
-    total_shards = int(np.prod(np.ceil(np.array(level_shape) / np.array(shard_shape)).astype(int)))
+    # In chained mode, per-level factor is small (typically 2x per spatial dim)
+    # Each output voxel needs ~8 input voxels (2x2x2 for 3D spatial)
+    per_level_factor = [source_shape[i] / level_shape[i] if level_shape[i] > 0 else 1
+                        for i in range(len(source_shape))]
+    total_factor = np.prod(per_level_factor)
 
-    # Memory estimation:
-    # 1. TensorStore downsample driver needs to read s0 data proportional to output
-    #    For each output chunk, it reads corresponding s0 region (factor x larger)
-    # 2. Write buffer for output shard
-    # 3. Processing overhead
-
-    # Estimate read buffer based on cumulative factor
-    # If level is s3 with factor [4,8,8], each output voxel needs 4*8*8=256 input voxels
-    cumulative_factor = [s0_shape[i] / level_shape[i] for i in range(len(s0_shape))]
-    total_factor = np.prod(cumulative_factor)
-
-    # Read buffer: shard_size * factor (but capped by s0 size)
-    read_buffer_gb = min(shard_size_gb * total_factor, s0_size_gb * 0.1)
+    # Read buffer: shard_size * factor (typically ~8x, much smaller than cumulative)
+    read_buffer_gb = min(shard_size_gb * total_factor, source_size_gb * 0.2)
 
     # Write buffer: shard size * 2 (read + write)
     write_buffer_gb = shard_size_gb * 2
@@ -95,16 +88,19 @@ def _calculate_downsample_memory(
 
 
 def _calculate_downsample_wall_time(
-    s0_shape: List[int],
+    source_shape: List[int],
     level_shape: List[int],
     shard_shape: List[int],
     dtype_size: int = 2,
 ) -> str:
     """
-    Calculate wall time for a downsampling job.
+    Calculate wall time for a downsampling job (chained mode).
+
+    In chained mode, each level reads from the previous level which is
+    much smaller than s0, so wall time is more predictable.
 
     Args:
-        s0_shape: Shape of s0 array
+        source_shape: Shape of source array (previous level)
         level_shape: Shape of target level
         shard_shape: Shard shape for output
         dtype_size: Bytes per element
@@ -115,7 +111,7 @@ def _calculate_downsample_wall_time(
     import math
 
     # Calculate sizes
-    s0_size_gb = (np.prod(s0_shape) * dtype_size) / (1024 ** 3)
+    source_size_gb = (np.prod(source_shape) * dtype_size) / (1024 ** 3)
     level_size_gb = (np.prod(level_shape) * dtype_size) / (1024 ** 3)
     shard_size_gb = (np.prod(shard_shape) * dtype_size) / (1024 ** 3)
 
@@ -123,32 +119,32 @@ def _calculate_downsample_wall_time(
     total_shards = int(np.prod(np.ceil(np.array(level_shape) / np.array(shard_shape)).astype(int)))
 
     # Time estimation based on empirical observations:
-    # - Small shards (<0.1 GB): ~1 min each
-    # - Medium shards (0.1-1 GB): ~3 min each
-    # - Large shards (>1 GB): ~5 min each
-    # Plus overhead for reading s0 data
+    # In chained mode, we're reading from smaller source levels
+    # - Small shards (<0.1 GB): ~0.5 min each (faster since source is smaller)
+    # - Medium shards (0.1-1 GB): ~2 min each
+    # - Large shards (>1 GB): ~4 min each
 
     if shard_size_gb < 0.1:
-        minutes_per_shard = 1
+        minutes_per_shard = 0.5
     elif shard_size_gb < 1.0:
-        minutes_per_shard = 3
+        minutes_per_shard = 2
     else:
-        minutes_per_shard = 5
+        minutes_per_shard = 4
 
     # Base time for processing
     base_minutes = minutes_per_shard * total_shards
 
-    # Add overhead for s0 reading (larger s0 = more read time)
-    if s0_size_gb > 100:
-        read_overhead = 10
-    elif s0_size_gb > 10:
+    # Add overhead for source reading (based on source size, not s0)
+    if source_size_gb > 100:
         read_overhead = 5
+    elif source_size_gb > 10:
+        read_overhead = 3
     else:
-        read_overhead = 2
+        read_overhead = 1
 
-    # Total with 2x safety margin, round to 15 min, cap at 24 hours
+    # Total with 2x safety margin, round to 15 min, cap at 12 hours
     total_minutes = int(math.ceil((base_minutes + read_overhead) * 2 / 15) * 15)
-    total_minutes = max(15, min(total_minutes, 24 * 60))  # 15 min to 24 hours
+    total_minutes = max(15, min(total_minutes, 12 * 60))  # 15 min to 12 hours
 
     hours = total_minutes // 60
     minutes = total_minutes % 60
@@ -177,25 +173,28 @@ class PyramidPlanner:
     """
     Plan and coordinate multi-level pyramid generation with parallel execution.
 
-    The key innovation over v1 is that instead of sequential downsampling
-    (s0→s1, wait, s1→s2, wait, ...), this planner enables parallel downsampling
-    where all levels are computed directly from s0 simultaneously.
+    Uses chained downsampling approach (like v1) where each level reads from
+    the previous level. This is much more efficient than parallel-from-s0 for
+    deep pyramids because:
+    - Each level reads only ~8 voxels per output (2x2x2) instead of exponential
+    - Memory and time requirements are constant per level, not exponential
+    - s4/s5 complete in minutes instead of hours
 
     Design Principles:
-    - All levels downsample from s0 (not from previous level)
-    - Jobs are independent and can run in parallel
+    - Chained: s1←s0, s2←s1, s3←s2, etc. (sequential with dependencies)
+    - Per-level factors used (constant ~8x read amplification)
+    - Coordinator script handles bwait between levels
     - Pre-creation happens before any job submission
-    - Cumulative factors are calculated for direct s0→sN downsampling
 
     Example:
         >>> planner = PyramidPlanner("/data/dataset.zarr/s0")
         >>> plan = planner.calculate_pyramid_plan()
         >>> print(f"Need {plan['num_levels']} levels")
         >>> for level in plan['levels']:
-        ...     print(f"s{level['level']}: cumulative_factor={level['cumulative_factor']}")
+        ...     print(f"s{level['level']}: factor={level['per_level_factor']}")
         >>>
-        >>> # Submit all jobs in parallel
-        >>> job_ids = planner.submit_all_levels_parallel(plan, project="scicompsoft")
+        >>> # Submit chained jobs with coordinator
+        >>> job_id = planner.submit_chained_pyramid(plan, project="scicompsoft")
     """
 
     def __init__(self, s0_path: str):
@@ -596,7 +595,7 @@ echo "=========================================="
 
         return None
 
-    def submit_all_levels_parallel(
+    def submit_chained_pyramid(
         self,
         pyramid_plan: Dict[str, Any],
         project: str,
@@ -606,13 +605,16 @@ echo "=========================================="
         use_shard: bool = True,
         dry_run: bool = False,
         verbose: bool = True,
-    ) -> List[str]:
+    ) -> str:
         """
-        Submit all downsampling jobs for all levels in parallel.
+        Submit chained pyramid generation via a coordinator job.
 
-        Each level is submitted independently since they all read from s0.
-        A coordinator job is submitted at the end to wait for all levels
-        and update the root metadata.
+        Uses the v1 chained approach where each level reads from the previous
+        level (s1←s0, s2←s1, etc.). A coordinator job runs the entire sequence
+        with bwait between levels.
+
+        This is more efficient than parallel-from-s0 for deep pyramids because
+        each level only reads ~8 voxels per output instead of exponentially more.
 
         Args:
             pyramid_plan: Output from calculate_pyramid_plan()
@@ -625,49 +627,272 @@ echo "=========================================="
             verbose: Print progress messages
 
         Returns:
-            List of all submitted job IDs (including coordinator job)
+            Coordinator job ID
         """
         if verbose:
             print(f"\n{'='*60}")
-            print(f"PARALLEL JOB SUBMISSION")
+            print(f"CHAINED PYRAMID SUBMISSION")
             print(f"{'='*60}")
             print(f"Dataset: {self.root_path}")
             print(f"Levels: s1 to s{pyramid_plan['num_levels']}")
+            print(f"Mode: Chained (s1←s0, s2←s1, s3←s2, ...)")
             print(f"Project: {project}")
             print(f"Resource mode: {'User-specified' if memory else 'Auto-calculated per level'}")
-            print(f"Dry run: {dry_run}")
 
+        # Generate coordinator script
+        script = self._generate_chained_coordinator_script(
+            pyramid_plan=pyramid_plan,
+            project=project,
+            memory=memory,
+            wall_time=wall_time,
+            cores=cores,
+            use_shard=use_shard,
+        )
+
+        # Write script to shared filesystem
+        log_dir = os.path.join(os.path.dirname(self.root_path), "output")
+        os.makedirs(log_dir, exist_ok=True)
+
+        dataset_name = os.path.basename(self.root_path)
+        script_path = os.path.join(log_dir, f"chained_pyramid_{dataset_name}.sh")
+
+        if verbose:
+            print(f"\nCoordinator script: {script_path}")
+
+        if dry_run:
+            print(f"\n[DRY RUN] Would write script to: {script_path}")
+            print(f"\n--- Script content ---\n{script}\n--- End script ---")
+            return "DRY_RUN"
+
+        with open(script_path, 'w') as f:
+            f.write(script)
+        os.chmod(script_path, 0o755)
+
+        # Calculate total wall time for coordinator (sum of all level wall times + overhead)
+        # This ensures coordinator stays alive long enough for all bwaits to complete
+        dtype_size = pyramid_plan.get('dtype_size', 2)
+        shapes = [pyramid_plan['shape']]
+        for level_info in pyramid_plan['levels']:
+            shapes.append(level_info['predicted_shape'])
+
+        total_level_minutes = 0
+        for level_info in pyramid_plan['levels']:
+            level = level_info['level']
+            source_shape = shapes[level - 1]
+            level_shape = level_info['predicted_shape']
+            level_shard_shape = level_info.get('shard_shape') or [1, 1, 1024, 1024, 1024]
+
+            if wall_time is None:
+                level_wall_time = _calculate_downsample_wall_time(
+                    source_shape, level_shape, level_shard_shape, dtype_size
+                )
+            else:
+                level_wall_time = wall_time
+
+            # Parse H:MM format and sum
+            parts = level_wall_time.split(':')
+            total_level_minutes += int(parts[0]) * 60 + int(parts[1])
+
+        # Add 1 hour overhead for bwait operations and metadata update
+        total_minutes = total_level_minutes + 60
+        # Convert to hours, round up, cap at 48 hours (typical LSF max)
+        coord_wall_hours = min((total_minutes + 59) // 60, 48)
+        coord_wall_time = f"{coord_wall_hours}:00"
+
+        # Submit coordinator job
+        job_name = f"tsv2_pyramid_{dataset_name}"[:128]
+        log_path = os.path.join(log_dir, f"output__{job_name}_%J.log")
+        error_path = os.path.join(log_dir, f"error__{job_name}_%J.log")
+
+        bsub_cmd = [
+            "bsub",
+            "-J", job_name,
+            "-n", "1",
+            "-W", coord_wall_time,
+            "-M", "8GB",
+            "-R", "rusage[mem=8192]",
+            "-P", project,
+            "-o", log_path,
+            "-e", error_path,
+            script_path
+        ]
+
+        if verbose:
+            print(f"\nSubmitting coordinator job...")
+            print(f"  Wall time: {coord_wall_time}")
+            print(f"  Log: {log_path}")
+
+        result = subprocess.run(bsub_cmd, capture_output=True, text=True)
+
+        if result.returncode != 0:
+            print(f"ERROR: {result.stderr}")
+            raise RuntimeError(f"bsub failed: {result.stderr}")
+
+        # Extract job ID
+        import re
+        match = re.search(r'Job <(\d+)>', result.stdout)
+        if match:
+            coord_job_id = match.group(1)
+            if verbose:
+                print(f"  Coordinator job submitted: {coord_job_id}")
+                print(f"\n{'='*60}")
+                print(f"SUBMISSION COMPLETE")
+                print(f"{'='*60}")
+                print(f"Coordinator job: {coord_job_id}")
+                print(f"Monitor with: bjobs {coord_job_id}")
+                print(f"View log: tail -f {log_path}")
+            return coord_job_id
+
+        raise RuntimeError(f"Could not extract job ID from: {result.stdout}")
+
+    def _generate_chained_coordinator_script(
+        self,
+        pyramid_plan: Dict[str, Any],
+        project: str,
+        memory: Optional[int] = None,
+        wall_time: Optional[str] = None,
+        cores: Optional[int] = None,
+        use_shard: bool = True,
+    ) -> str:
+        """
+        Generate bash script for chained pyramid generation.
+
+        The script submits each level sequentially, waiting (bwait) for the
+        previous level to complete before submitting the next.
+
+        Args:
+            pyramid_plan: Output from calculate_pyramid_plan()
+            project: LSF project to charge
+            memory: Memory per job in GB (None = auto-calculate)
+            wall_time: Wall time per job (None = auto-calculate)
+            cores: Cores per job (None = auto-calculate)
+            use_shard: Whether to use sharding
+
+        Returns:
+            Bash script as string
+        """
         tensorswitch_dir = os.path.dirname(os.path.dirname(os.path.dirname(
             os.path.dirname(os.path.abspath(__file__)))))
         python_path = sys.executable
 
-        all_job_ids = []
-
-        # Get s0 shape and dtype for resource calculation
-        s0_shape = pyramid_plan['shape']
+        num_levels = pyramid_plan['num_levels']
         dtype_size = pyramid_plan.get('dtype_size', 2)
 
+        # Build the script header
+        script = f"""#!/bin/bash
+set -e
+
+echo "========================================================================"
+echo "CHAINED PYRAMID GENERATION"
+echo "========================================================================"
+echo "Dataset: {self.root_path}"
+echo "Levels: s1 to s{num_levels}"
+echo "Mode: Chained (each level reads from previous level)"
+echo "Started: $(date)"
+echo ""
+
+# Helper function to extract job IDs from bsub output
+extract_job_ids() {{
+    grep -oP 'Job <\\K[0-9]+(?=>)' || true
+}}
+
+# Helper function to submit a level and wait for completion
+submit_and_wait() {{
+    local level=$1
+    local source_path=$2
+    local factor=$3
+    local mem=$4
+    local wtime=$5
+    local ncores=$6
+    local shard_shape=$7
+    local chunk_shape=$8
+
+    echo ""
+    echo "============================================================"
+    echo "LEVEL s$level (reading from $source_path)"
+    echo "============================================================"
+    echo "  Factor: $factor"
+    echo "  Memory: ${{mem}}GB, Wall time: $wtime, Cores: $ncores"
+    echo "  Submitting..."
+
+    output=$(cd {tensorswitch_dir} && {python_path} -m tensorswitch_v2 \\
+        --downsample \\
+        -i "$source_path" \\
+        -o "{self.root_path}" \\
+        --target_level $level \\
+        --cumulative_factors "$factor" \\
+        --use_shard {1 if use_shard else 0} \\
+        --shard_shape "$shard_shape" \\
+        --chunk_shape "$chunk_shape" \\
+        --submit \\
+        -P {project} \\
+        --memory $mem \\
+        --wall_time $wtime \\
+        --cores $ncores \\
+        2>&1)
+
+    job_ids=$(echo "$output" | extract_job_ids | tr '\\n' ' ')
+
+    if [ -z "$job_ids" ]; then
+        echo "ERROR: No job IDs returned for s$level"
+        echo "Output was: $output"
+        exit 1
+    fi
+
+    echo "  Jobs submitted: $job_ids"
+
+    # Build wait condition
+    wait_condition=""
+    for job_id in $job_ids; do
+        if [ -z "$wait_condition" ]; then
+            wait_condition="done($job_id)"
+        else
+            wait_condition="$wait_condition && done($job_id)"
+        fi
+    done
+
+    echo "  Waiting for jobs to complete..."
+    bwait -w "$wait_condition" 2>&1 || true
+
+    echo "  s$level complete: $(date)"
+}}
+
+"""
+
+        # Add each level with chained source path
+        # Build list of shapes for resource calculation
+        shapes = [pyramid_plan['shape']]  # s0 shape
         for level_info in pyramid_plan['levels']:
+            shapes.append(level_info['predicted_shape'])
+
+        for i, level_info in enumerate(pyramid_plan['levels']):
             level = level_info['level']
-            cumulative_factors = ",".join(map(str, level_info['cumulative_factor']))
+            per_level_factor = level_info['per_level_factor']
+            factor_str = ",".join(map(str, per_level_factor))
+
+            # Source is previous level (s0 for s1, s1 for s2, etc.)
+            source_level = level - 1
+            source_path = os.path.join(self.root_path, f"s{source_level}")
+            source_shape = shapes[source_level]  # Shape of source level
+
             level_shard_shape = level_info.get('shard_shape') or [1024, 1024, 1024]
-            level_chunk_shape = level_info.get('chunk_shape') or [32, 32, 32]
+            level_chunk_shape = level_info.get('chunk_shape') or [256, 256, 256]
             level_shape = level_info['predicted_shape']
 
             shard_shape_str = ",".join(map(str, level_shard_shape))
             chunk_shape_str = ",".join(map(str, level_chunk_shape))
 
-            # Auto-calculate resources if not specified
+            # Auto-calculate resources based on source level (not s0!)
             if memory is None:
                 level_memory = _calculate_downsample_memory(
-                    s0_shape, level_shape, level_shard_shape, dtype_size
+                    source_shape, level_shape, level_shard_shape, dtype_size
                 )
             else:
                 level_memory = memory
 
             if wall_time is None:
                 level_wall_time = _calculate_downsample_wall_time(
-                    s0_shape, level_shape, level_shard_shape, dtype_size
+                    source_shape, level_shape, level_shard_shape, dtype_size
                 )
             else:
                 level_wall_time = wall_time
@@ -680,67 +905,38 @@ echo "=========================================="
             # Enforce cluster policy: 15 GB per core minimum
             level_memory = max(level_memory, level_cores * 15)
 
-            cmd = [
-                python_path, "-m", "tensorswitch_v2",
-                "--downsample",
-                "-i", self.s0_path,
-                "-o", self.root_path,
-                "--target_level", str(level),
-                "--cumulative_factors", cumulative_factors,
-                "--use_shard", "1" if use_shard else "0",
-                "--submit",
-                "-P", project,
-                "--memory", str(level_memory),
-                "--wall_time", level_wall_time,
-                "--cores", str(level_cores),
-            ]
+            script += f"""# s{level}: reads from s{source_level}, factor {per_level_factor}
+submit_and_wait {level} "{source_path}" "{factor_str}" {level_memory} "{level_wall_time}" {level_cores} "{shard_shape_str}" "{chunk_shape_str}"
 
-            if shard_shape_str:
-                cmd.extend(["--shard_shape", shard_shape_str])
-            if chunk_shape_str:
-                cmd.extend(["--chunk_shape", chunk_shape_str])
+"""
 
-            if verbose:
-                print(f"\nSubmitting s{level} (factor: {level_info['cumulative_factor']}, "
-                      f"mem: {level_memory}GB, time: {level_wall_time}, cores: {level_cores})...")
+        # Add final metadata update and completion message
+        script += f"""
+echo ""
+echo "============================================================"
+echo "UPDATING ROOT METADATA"
+echo "============================================================"
+echo "All levels complete, updating root zarr.json..."
+{python_path} -c "import sys; sys.path.insert(0, '{tensorswitch_dir}'); from tensorswitch.utils import update_ome_metadata_if_needed; update_ome_metadata_if_needed('{self.root_path}', use_ome_structure=True)"
+echo "Metadata update complete."
 
-            if dry_run:
-                print(f"  [DRY RUN] Would execute: {' '.join(cmd)}")
-            else:
-                result = subprocess.run(
-                    cmd,
-                    capture_output=True,
-                    text=True,
-                    cwd=tensorswitch_dir
-                )
+echo ""
+echo "========================================================================"
+echo "PYRAMID GENERATION COMPLETE"
+echo "========================================================================"
+echo "Dataset: {self.root_path}"
+echo "Levels: s0 to s{num_levels}"
+echo "Completed: $(date)"
+echo ""
+"""
 
-                if result.returncode != 0:
-                    print(f"  ERROR: {result.stderr}")
-                    continue
+        return script
 
-                # Extract job IDs from output
-                import re
-                job_ids = re.findall(r'Job <(\d+)>', result.stdout)
-                all_job_ids.extend(job_ids)
-
-                if verbose:
-                    print(f"  Submitted {len(job_ids)} jobs: {job_ids}")
-
-        # NOTE: No coordinator job needed!
-        # Root metadata was already updated immediately after pre-creation
-        # since all level info (shapes, voxel sizes, paths) is known upfront.
-
-        if verbose:
-            print(f"\n{'='*60}")
-            print(f"SUBMISSION COMPLETE")
-            print(f"{'='*60}")
-            print(f"Level jobs submitted: {len(all_job_ids)}")
-            print(f"Root metadata: Already updated (no coordinator job needed)")
-            if not dry_run:
-                print(f"All job IDs: {all_job_ids}")
-                print(f"\nMonitor with: bjobs")
-
-        return all_job_ids
+    # Keep old method name as alias for backward compatibility
+    def submit_all_levels_parallel(self, *args, **kwargs):
+        """Deprecated: Use submit_chained_pyramid instead."""
+        print("WARNING: submit_all_levels_parallel is deprecated, using submit_chained_pyramid")
+        return self.submit_chained_pyramid(*args, **kwargs)
 
     def update_root_metadata(self, verbose: bool = True) -> None:
         """
@@ -802,9 +998,11 @@ def create_pyramid_parallel(
     verbose: bool = True,
 ) -> Dict[str, Any]:
     """
-    Convenience function to create full pyramid with parallel job submission.
+    Convenience function to create full pyramid with chained job submission.
 
     This is the main entry point for CLI --auto_multiscale mode.
+    Uses the chained approach where each level reads from the previous level
+    (s1←s0, s2←s1, etc.) which is much more efficient than parallel-from-s0.
 
     Args:
         s0_path: Path to s0 array
@@ -819,14 +1017,14 @@ def create_pyramid_parallel(
         verbose: Print progress messages
 
     Returns:
-        dict with 'pyramid_plan' and 'job_ids' keys
+        dict with 'pyramid_plan' and 'coordinator_job_id' keys
 
     Example:
         >>> result = create_pyramid_parallel(
         ...     s0_path="/data/dataset.zarr/s0",
         ...     project="scicompsoft"
         ... )
-        >>> print(f"Submitted {len(result['job_ids'])} jobs")
+        >>> print(f"Coordinator job: {result['coordinator_job_id']}")
     """
     planner = PyramidPlanner(s0_path)
 
@@ -839,19 +1037,14 @@ def create_pyramid_parallel(
     if verbose:
         planner.print_pyramid_plan(pyramid_plan)
 
-    # Pre-create all levels
+    # Pre-create all levels (directories and per-level zarr.json)
     if not dry_run:
         planner.precreate_all_levels(pyramid_plan, use_shard=use_shard, verbose=verbose)
+        # NOTE: Root metadata update is now done by coordinator after all levels complete
 
-        # Update root metadata IMMEDIATELY after pre-creation
-        # Since all level directories and zarr.json are pre-created, we know all metadata upfront
-        # No need to wait for level jobs to complete - metadata doesn't depend on pixel data
-        if verbose:
-            print(f"\nUpdating root metadata (all level info known from pre-creation)...")
-        planner.update_root_metadata(verbose=verbose)
-
-    # Submit all levels in parallel (no coordinator job needed!)
-    job_ids = planner.submit_all_levels_parallel(
+    # Submit chained pyramid via coordinator job
+    # Coordinator handles: submit s1 → bwait → submit s2 → bwait → ... → update metadata
+    coordinator_job_id = planner.submit_chained_pyramid(
         pyramid_plan,
         project=project,
         memory=memory,
@@ -864,5 +1057,5 @@ def create_pyramid_parallel(
 
     return {
         'pyramid_plan': pyramid_plan,
-        'job_ids': job_ids,
+        'coordinator_job_id': coordinator_job_id,
     }
