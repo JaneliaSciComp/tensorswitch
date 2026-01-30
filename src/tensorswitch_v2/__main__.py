@@ -287,10 +287,14 @@ def _estimate_shard_info(args, volume_shape, dtype_str):
     return shard_shape, total_shards
 
 
-def _calculate_memory(volume_shape, dtype_str, shard_shape, total_shards):
+def _calculate_memory(volume_shape, dtype_str, shard_shape, total_shards, use_bioio=False):
     """Calculate memory in GB using v1 formula.
 
     Formula: base (file loading) + shard buffers + task overhead, then x1.5 safety.
+
+    Args:
+        use_bioio: If True, applies 3x multiplier for BioIO's higher memory usage
+                   due to Dask caching and intermediate data structures.
     """
     dtype_bytes = np.dtype(dtype_str).itemsize
     dataset_size_gb = (np.prod(volume_shape) * dtype_bytes) / (1024 ** 3)
@@ -314,13 +318,22 @@ def _calculate_memory(volume_shape, dtype_str, shard_shape, total_shards):
     # Total with 1.5x safety margin, rounded to nearest 5 GB
     total_mem = base_mem + shard_buffer_mem + task_overhead
     recommended = int(math.ceil(total_mem * 1.5 / 5) * 5)
+
+    # BioIO uses ~3x more memory due to Dask caching and intermediate structures
+    if use_bioio:
+        recommended = int(recommended * 3)
+
     return max(5, min(recommended, 500))
 
 
-def _calculate_wall_time(volume_shape, dtype_str, shard_shape, total_shards):
+def _calculate_wall_time(volume_shape, dtype_str, shard_shape, total_shards, use_bioio=False):
     """Calculate wall time string (H:MM) using v1 formula.
 
     Formula: (per-shard time x total_shards + overhead) x 2 safety, rounded to 30 min.
+
+    Args:
+        use_bioio: If True, applies 10x multiplier for BioIO's slower Dask-based
+                   processing compared to native TensorStore readers.
     """
     dtype_bytes = np.dtype(dtype_str).itemsize
     dataset_size_gb = (np.prod(volume_shape) * dtype_bytes) / (1024 ** 3)
@@ -344,9 +357,15 @@ def _calculate_wall_time(volume_shape, dtype_str, shard_shape, total_shards):
     else:
         overhead = 2
 
-    # 2x safety, round to nearest 30 min, cap at 48 hours
+    # 2x safety, round to nearest 30 min
     safe_minutes = int(math.ceil((base_minutes + overhead) * 2 / 30) * 30)
-    safe_minutes = max(30, min(safe_minutes, 48 * 60))  # Cap at 48 hours
+
+    # BioIO is ~10-50x slower due to Dask overhead, apply 10x multiplier
+    if use_bioio:
+        safe_minutes = int(safe_minutes * 10)
+
+    # Cap at 48 hours
+    safe_minutes = max(30, min(safe_minutes, 48 * 60))
     hours = safe_minutes // 60
     minutes = safe_minutes % 60
     return f"{hours}:{minutes:02d}"
@@ -372,13 +391,16 @@ def submit_job(args):
         print("Reading input metadata for resource estimation...")
         volume_shape, dtype_str = _get_input_metadata(args)
         shard_shape, total_shards = _estimate_shard_info(args, volume_shape, dtype_str)
+        use_bioio = getattr(args, 'use_bioio', False)
         print(f"  Shape: {volume_shape}, dtype: {dtype_str}")
         print(f"  Shard shape: {shard_shape}, total shards: {total_shards}")
+        if use_bioio:
+            print(f"  BioIO mode: applying 10x wall time and 3x memory multipliers")
 
         if memory_gb is None:
-            memory_gb = _calculate_memory(volume_shape, dtype_str, shard_shape, total_shards)
+            memory_gb = _calculate_memory(volume_shape, dtype_str, shard_shape, total_shards, use_bioio=use_bioio)
         if wall_time is None:
-            wall_time = _calculate_wall_time(volume_shape, dtype_str, shard_shape, total_shards)
+            wall_time = _calculate_wall_time(volume_shape, dtype_str, shard_shape, total_shards, use_bioio=use_bioio)
 
     # Cores: based on memory but capped at 8 (I/O-bound, more cores don't help much)
     cores = args.cores if args.cores is not None else min(8, max(1, int(math.ceil(memory_gb / 15)) * 2))
