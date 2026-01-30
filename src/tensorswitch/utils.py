@@ -1364,7 +1364,21 @@ def extract_tiff_ome_metadata(tiff_file):
             # Try to get OME-XML from TIFF tags (OME-TIFF)
             if tif.ome_metadata:
                 ome_xml = tif.ome_metadata
-                # For OME-TIFF, voxel sizes will be extracted from OME-XML by converter
+                # Extract voxel sizes from OME-XML (same approach as ND2)
+                try:
+                    from ome_types import from_xml
+                    ome = from_xml(ome_xml)
+                    if ome.images and ome.images[0].pixels:
+                        pixels = ome.images[0].pixels
+                        # OME uses micrometers as the default unit
+                        voxel_sizes = {
+                            'x': float(pixels.physical_size_x) if pixels.physical_size_x else 1.0,
+                            'y': float(pixels.physical_size_y) if pixels.physical_size_y else 1.0,
+                            'z': float(pixels.physical_size_z) if pixels.physical_size_z else 1.0
+                        }
+                        return ome_xml, voxel_sizes
+                except Exception as e:
+                    print(f"Warning: Could not extract voxel sizes from OME-TIFF metadata: {e}")
                 return ome_xml, None
 
             # Fall back to ImageJ TIFF metadata

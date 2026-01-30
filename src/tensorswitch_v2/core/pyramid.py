@@ -726,28 +726,19 @@ echo "=========================================="
                 if verbose:
                     print(f"  Submitted {len(job_ids)} jobs: {job_ids}")
 
-        # Submit coordinator job to wait for all levels and update metadata
-        coordinator_job_id = None
-        if not dry_run and all_job_ids:
-            coordinator_job_id = self._submit_metadata_coordinator_job(
-                level_job_ids=all_job_ids,
-                project=project,
-                verbose=verbose
-            )
-            if coordinator_job_id:
-                all_job_ids.append(coordinator_job_id)
+        # NOTE: No coordinator job needed!
+        # Root metadata was already updated immediately after pre-creation
+        # since all level info (shapes, voxel sizes, paths) is known upfront.
 
         if verbose:
             print(f"\n{'='*60}")
             print(f"SUBMISSION COMPLETE")
             print(f"{'='*60}")
-            print(f"Level jobs submitted: {len(all_job_ids) - (1 if coordinator_job_id else 0)}")
-            if coordinator_job_id:
-                print(f"Coordinator job: {coordinator_job_id} (updates metadata after all levels complete)")
+            print(f"Level jobs submitted: {len(all_job_ids)}")
+            print(f"Root metadata: Already updated (no coordinator job needed)")
             if not dry_run:
                 print(f"All job IDs: {all_job_ids}")
                 print(f"\nMonitor with: bjobs")
-                print(f"Metadata will be updated automatically when all jobs complete.")
 
         return all_job_ids
 
@@ -852,7 +843,14 @@ def create_pyramid_parallel(
     if not dry_run:
         planner.precreate_all_levels(pyramid_plan, use_shard=use_shard, verbose=verbose)
 
-    # Submit all levels in parallel
+        # Update root metadata IMMEDIATELY after pre-creation
+        # Since all level directories and zarr.json are pre-created, we know all metadata upfront
+        # No need to wait for level jobs to complete - metadata doesn't depend on pixel data
+        if verbose:
+            print(f"\nUpdating root metadata (all level info known from pre-creation)...")
+        planner.update_root_metadata(verbose=verbose)
+
+    # Submit all levels in parallel (no coordinator job needed!)
     job_ids = planner.submit_all_levels_parallel(
         pyramid_plan,
         project=project,
