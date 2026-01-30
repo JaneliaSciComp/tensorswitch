@@ -20,6 +20,9 @@ import sys
 from typing import Optional, List, Dict, Any, Tuple
 import numpy as np
 
+# Set team permissions: rwxrwxr-x (files get rw-rw-r--)
+os.umask(0o0002)
+
 # Import utility functions from existing tensorswitch
 from tensorswitch.utils import (
     calculate_pyramid_plan as v1_calculate_pyramid_plan,

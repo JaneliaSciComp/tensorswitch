@@ -10,6 +10,9 @@ from typing import Dict, Optional, Tuple, List, Any
 import numpy as np
 import tensorstore as ts
 
+# Set team permissions: rwxrwxr-x (files get rw-rw-r--)
+os.umask(0o0002)
+
 from .base import BaseWriter
 
 # Import utility functions from existing tensorswitch

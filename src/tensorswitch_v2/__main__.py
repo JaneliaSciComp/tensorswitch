@@ -2,10 +2,17 @@
 CLI entry point for tensorswitch_v2 conversion and downsampling.
 
 Usage:
-    # Conversion (s0)
+    # Single file conversion (s0)
     python -m tensorswitch_v2 -i input.tif -o output.zarr
     python -m tensorswitch_v2 -i input.n5 -o output.zarr --chunk_shape 32,256,256
     python -m tensorswitch_v2 -i input.tif -o output.zarr --submit -P scicompsoft
+
+    # Batch conversion (directory of files)
+    python -m tensorswitch_v2 -i /path/to/tiff_dir/ -o /path/to/output_dir/ --pattern "*.tif"
+    python -m tensorswitch_v2 -i /path/to/tiff_dir/ -o /path/to/output_dir/ --submit -P project
+
+    # Check batch status
+    python -m tensorswitch_v2 --status -i /path/to/tiff_dir/ -o /path/to/output_dir/
 
     # Downsampling (single level, parallel from s0)
     python -m tensorswitch_v2 --downsample -i /path/to/s0 -o /path/to/dataset.zarr \\
@@ -164,6 +171,47 @@ def parse_args(argv=None):
     parser.add_argument(
         "--use_bioio", action="store_true",
         help="Force BIOIO adapter (Tier 3) instead of auto-detected Tier 2 reader",
+    )
+
+    # Batch processing mode
+    # NOTE: Batch mode is auto-detected when input is a directory (no file extension)
+    parser.add_argument(
+        "--pattern", default="*.tif",
+        help="File pattern for batch mode (default: *.tif)",
+    )
+    parser.add_argument(
+        "--recursive", action="store_true",
+        help="Search subdirectories in batch mode",
+    )
+    parser.add_argument(
+        "--max_concurrent", type=int, default=100,
+        help="Max concurrent LSF jobs in batch mode (default: 100)",
+    )
+    parser.add_argument(
+        "--skip_existing", action="store_true", default=True,
+        help="Skip files that already have output (default: True)",
+    )
+    parser.add_argument(
+        "--no_skip_existing", action="store_true",
+        help="Process all files even if output exists",
+    )
+    parser.add_argument(
+        "--status", action="store_true",
+        help="Check batch conversion status",
+    )
+    parser.add_argument(
+        "--dry_run", action="store_true",
+        help="Show what would be done without actually doing it",
+    )
+
+    # Batch worker mode (used by LSF job array)
+    parser.add_argument(
+        "--batch_worker", action="store_true",
+        help=argparse.SUPPRESS,  # Hidden: used by LSF job array workers
+    )
+    parser.add_argument(
+        "--index_file", type=str, default=None,
+        help=argparse.SUPPRESS,  # Hidden: index file for batch worker
     )
 
     return parser.parse_args(argv)
@@ -600,6 +648,105 @@ def main(argv=None):
     shard_shape = parse_shape(args.shard_shape) if args.shard_shape else None
     verbose = not args.quiet
     use_shard = bool(args.use_shard)
+    skip_existing = args.skip_existing and not args.no_skip_existing
+
+    # Handle batch worker mode (LSF job array worker)
+    if args.batch_worker:
+        if not args.index_file:
+            raise ValueError("--index_file is required with --batch_worker")
+
+        from .core.batch import read_index_file
+
+        # Get job array index from environment
+        job_index = int(os.environ.get('LSB_JOBINDEX', '1'))
+
+        # Read input/output paths from index file
+        input_path, output_path = read_index_file(args.index_file, job_index)
+
+        print(f"Batch worker: job index {job_index}")
+        print(f"  Input:  {input_path}")
+        print(f"  Output: {output_path}")
+
+        # Override args with paths from index file
+        args.input = input_path
+        args.output = output_path
+
+        # Create output directory
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+
+        # Run single-file conversion (fall through to standard conversion below)
+        # Skip batch/status modes
+        args.status = False
+
+    # Handle status check mode
+    if args.status:
+        from .core.batch import BatchConverter, detect_input_mode
+
+        batch = BatchConverter(
+            input_dir=args.input,
+            output_dir=args.output,
+            pattern=args.pattern,
+            output_format=args.output_format,
+            recursive=args.recursive,
+        )
+        batch.check_status()
+        return
+
+    # Detect batch mode (input is directory, not file)
+    if not args.batch_worker and not args.downsample and not args.auto_multiscale:
+        from .core.batch import detect_input_mode, BatchConverter
+
+        input_mode = detect_input_mode(args.input)
+
+        if input_mode == 'batch_directory':
+            # Batch mode: process multiple files
+            batch = BatchConverter(
+                input_dir=args.input,
+                output_dir=args.output,
+                pattern=args.pattern,
+                output_format=args.output_format,
+                recursive=args.recursive,
+            )
+
+            # Discover files
+            files = batch.discover()
+            if not files:
+                print(f"No files matching '{args.pattern}' found in {args.input}")
+                return
+
+            print(f"Discovered {len(files)} files matching '{args.pattern}'")
+
+            if args.submit:
+                # Submit as LSF job array
+                if not args.project:
+                    raise ValueError("--project is required with --submit")
+
+                result = batch.submit_lsf(
+                    project=args.project,
+                    chunk_shape=args.chunk_shape,
+                    shard_shape=args.shard_shape,
+                    compression=args.compression,
+                    compression_level=args.compression_level,
+                    memory_gb=args.memory or 30,
+                    wall_time=args.wall_time or "1:00",
+                    cores=args.cores or 2,
+                    max_concurrent=args.max_concurrent,
+                    job_group=args.job_group,
+                    skip_existing=skip_existing,
+                    dry_run=args.dry_run,
+                )
+            else:
+                # Run locally (sequential)
+                result = batch.run_local(
+                    chunk_shape=chunk_shape,
+                    shard_shape=shard_shape,
+                    compression=args.compression,
+                    compression_level=args.compression_level,
+                    skip_existing=skip_existing,
+                    verbose=verbose,
+                )
+
+            return
 
     # Handle auto_multiscale mode (full pyramid generation)
     # This is the main entry point for automatic downsampling - just point at s0 and it does the rest
