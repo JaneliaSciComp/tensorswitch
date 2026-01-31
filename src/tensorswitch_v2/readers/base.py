@@ -371,6 +371,10 @@ class BaseReader(ABC):
 
         # Basic OME-NGFF structure
         # Note: "version" belongs at the "ome" level only, NOT inside multiscales
+        # Use actual filename for name instead of generic reader class name
+        import os
+        dataset_name = os.path.splitext(os.path.basename(self.path))[0]
+
         ome_metadata = {
             'multiscales': [{
                 'axes': axes,
@@ -381,7 +385,7 @@ class BaseReader(ABC):
                         'scale': scale
                     }]
                 }],
-                'name': f'Data from {self.__class__.__name__}'
+                'name': dataset_name
             }]
         }
 

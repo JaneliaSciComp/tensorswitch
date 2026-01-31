@@ -42,13 +42,13 @@ def parse_args(argv=None):
         description="TensorSwitch v2: Convert microscopy data between formats.",
     )
 
-    # Required arguments
+    # Input/output arguments (not required for --batch_worker mode)
     parser.add_argument(
-        "--input", "-i", required=True,
+        "--input", "-i", default=None,
         help="Input path (format auto-detected from extension)",
     )
     parser.add_argument(
-        "--output", "-o", required=True,
+        "--output", "-o", default=None,
         help="Output path",
     )
 
@@ -677,6 +677,12 @@ def main(argv=None):
         # Run single-file conversion (fall through to standard conversion below)
         # Skip batch/status modes
         args.status = False
+    else:
+        # Validate required arguments for non-batch_worker mode
+        if not args.input:
+            raise ValueError("--input/-i is required")
+        if not args.output:
+            raise ValueError("--output/-o is required")
 
     # Handle status check mode
     if args.status:
