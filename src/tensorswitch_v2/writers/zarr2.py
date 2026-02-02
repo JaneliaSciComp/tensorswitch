@@ -457,6 +457,14 @@ class Zarr2Writer(BaseWriter):
         with open(zattrs_path, 'w') as f:
             json.dump(ome_metadata, f, indent=2)
 
+        # Write array-level .zattrs with _ARRAY_DIMENSIONS (xarray/dask convention for v2)
+        array_zattrs_path = os.path.join(self.output_path, self.level_path, ".zattrs")
+        array_metadata = {
+            "_ARRAY_DIMENSIONS": axes_order  # xarray/dask convention (v2 standard)
+        }
+        with open(array_zattrs_path, 'w') as f:
+            json.dump(array_metadata, f, indent=2)
+
         print(f"Zarr2 metadata written to {self.output_path}")
 
     def _build_zarr2_ome_metadata(
