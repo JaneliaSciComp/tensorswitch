@@ -37,19 +37,52 @@ os.umask(0o0002)  # Team permissions: rwxrwxr-x
 
 def parse_args(argv=None):
     """Parse command-line arguments."""
+    epilog = """
+Examples:
+  # Single file conversion (TIFF to Zarr3)
+  pixi run python -m tensorswitch_v2 -i input.tif -o output.zarr
+
+  # Convert with custom chunk/shard shapes (BigStitcher compatible)
+  pixi run python -m tensorswitch_v2 -i input.tif -o output.zarr \\
+      --chunk_shape 32,32,32 --shard_shape 256,1024,1024
+
+  # Submit to LSF cluster
+  pixi run python -m tensorswitch_v2 -i input.tif -o output.zarr \\
+      --submit -P scicompsoft
+
+  # Batch convert directory of TIFFs
+  pixi run python -m tensorswitch_v2 -i /path/to/tiffs/ -o /path/to/output/ \\
+      --pattern "*.tif" --submit -P scicompsoft --max_concurrent 100
+
+  # Check batch conversion status
+  pixi run python -m tensorswitch_v2 --status -i /path/to/tiffs/ -o /path/to/output/
+
+  # Generate multi-scale pyramid (all levels)
+  pixi run python -m tensorswitch_v2 --auto_multiscale \\
+      -i /path/to/dataset.zarr/s0 -o /path/to/dataset.zarr --submit -P scicompsoft
+
+Supported input formats:
+  TIFF, ND2, IMS, CZI, N5, Zarr v2/v3, Precomputed, HDF5, and 200+ via BIOIO
+
+Supported output formats:
+  zarr3 (default, with sharding), zarr2, n5
+"""
     parser = argparse.ArgumentParser(
         prog="tensorswitch_v2",
-        description="TensorSwitch v2: Convert microscopy data between formats.",
+        description="TensorSwitch v2: Convert microscopy data between formats with multi-scale pyramid support.",
+        epilog=epilog,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
 
     # Input/output arguments (not required for --batch_worker mode)
     parser.add_argument(
         "--input", "-i", default=None,
-        help="Input path (format auto-detected from extension)",
+        help="Input file or directory path. Format is auto-detected from extension. "
+             "For batch mode, provide a directory and use --pattern to filter files.",
     )
     parser.add_argument(
         "--output", "-o", default=None,
-        help="Output path",
+        help="Output path. For single file: output.zarr, For batch: output directory.",
     )
 
     # Output format
@@ -217,6 +250,68 @@ def parse_args(argv=None):
     return parser.parse_args(argv)
 
 
+def validate_input_path(path: str, allow_directory: bool = True) -> None:
+    """Validate that input path exists and is readable.
+
+    Args:
+        path: Input file or directory path
+        allow_directory: If True, directories are allowed (batch mode)
+
+    Raises:
+        FileNotFoundError: If path does not exist
+        PermissionError: If path is not readable
+        ValueError: If path is a directory but not allowed
+    """
+    if not os.path.exists(path):
+        raise FileNotFoundError(
+            f"Input path does not exist: {path}\n"
+            f"Please check the path and try again."
+        )
+
+    if os.path.isdir(path):
+        if not allow_directory:
+            raise ValueError(
+                f"Input path is a directory: {path}\n"
+                f"For batch mode, use --pattern to specify file pattern.\n"
+                f"For single file conversion, provide a file path."
+            )
+        if not os.access(path, os.R_OK):
+            raise PermissionError(
+                f"Input directory is not readable: {path}\n"
+                f"Check permissions with: ls -la {path}"
+            )
+    else:
+        if not os.access(path, os.R_OK):
+            raise PermissionError(
+                f"Input file is not readable: {path}\n"
+                f"Check permissions with: ls -la {path}"
+            )
+
+
+def validate_output_path(path: str) -> None:
+    """Validate that output path's parent directory exists and is writable.
+
+    Args:
+        path: Output file or directory path
+
+    Raises:
+        FileNotFoundError: If parent directory does not exist
+        PermissionError: If parent directory is not writable
+    """
+    parent = os.path.dirname(os.path.abspath(path))
+    if not os.path.exists(parent):
+        raise FileNotFoundError(
+            f"Output parent directory does not exist: {parent}\n"
+            f"Create it with: mkdir -p {parent}"
+        )
+
+    if not os.access(parent, os.W_OK):
+        raise PermissionError(
+            f"Output directory is not writable: {parent}\n"
+            f"Check permissions with: ls -la {parent}"
+        )
+
+
 def parse_shape(s: str) -> Tuple[int, ...]:
     """Parse a comma-separated shape string into a tuple of ints.
 
@@ -262,27 +357,32 @@ def create_writer(args):
 
     fmt = args.output_format
 
+    # Determine level_path: use "0" for zarr2 by default, "s0" for others
+    level_path = args.level_path
+    if level_path == "s0" and fmt == "zarr2":
+        level_path = "0"  # Default to numeric paths for OME-NGFF viewer compatibility
+
     if fmt == "zarr3":
         return Writers.zarr3(
             output_path=args.output,
             use_sharding=not args.no_sharding,
             compression=args.compression,
             compression_level=args.compression_level,
-            level_path=args.level_path,
+            level_path=level_path,
         )
     elif fmt == "zarr2":
         return Writers.zarr2(
             output_path=args.output,
             compression=args.compression,
             compression_level=args.compression_level,
-            level_path=args.level_path,
+            level_path=level_path,
         )
     elif fmt == "n5":
         return Writers.n5(
             output_path=args.output,
             compression=args.compression,
             compression_level=args.compression_level,
-            dataset_path=args.level_path,
+            dataset_path=level_path,
         )
     else:
         raise ValueError(f"Unsupported output format: {fmt}")
@@ -427,8 +527,10 @@ def submit_job(args):
     """
     if not args.project:
         raise ValueError(
-            "--project is required when using --submit. "
-            "Example: --submit --project scicompsoft"
+            "Missing required argument: --project/-P\n"
+            "When using --submit, you must specify an LSF project for billing.\n"
+            "Example: pixi run python -m tensorswitch_v2 -i input.tif -o output.zarr --submit -P scicompsoft\n"
+            "Common projects: scicompsoft, liconn, ahrens"
         )
 
     # Auto-calculate resources from source data when not explicitly provided
@@ -553,8 +655,10 @@ def submit_downsample_job(args, cumulative_factors):
     """
     if not args.project:
         raise ValueError(
-            "--project is required when using --submit. "
-            "Example: --submit --project scicompsoft"
+            "Missing required argument: --project/-P\n"
+            "When using --submit, you must specify an LSF project for billing.\n"
+            "Example: pixi run python -m tensorswitch_v2 -i input.tif -o output.zarr --submit -P scicompsoft\n"
+            "Common projects: scicompsoft, liconn, ahrens"
         )
 
     memory_gb = args.memory or 32
@@ -680,9 +784,21 @@ def main(argv=None):
     else:
         # Validate required arguments for non-batch_worker mode
         if not args.input:
-            raise ValueError("--input/-i is required")
+            raise ValueError(
+                "Missing required argument: --input/-i\n"
+                "Provide the input file or directory path.\n"
+                "Example: pixi run python -m tensorswitch_v2 -i input.tif -o output.zarr"
+            )
         if not args.output:
-            raise ValueError("--output/-o is required")
+            raise ValueError(
+                "Missing required argument: --output/-o\n"
+                "Provide the output path.\n"
+                "Example: pixi run python -m tensorswitch_v2 -i input.tif -o output.zarr"
+            )
+
+        # Validate paths exist and are accessible
+        validate_input_path(args.input, allow_directory=True)
+        validate_output_path(args.output)
 
     # Handle status check mode
     if args.status:

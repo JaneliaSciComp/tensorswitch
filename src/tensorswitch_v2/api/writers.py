@@ -110,7 +110,7 @@ class Writers:
         output_path: str,
         compression: str = "zstd",
         compression_level: int = 5,
-        level_path: str = "s0",
+        level_path: str = "0",
         **kwargs
     ) -> BaseWriter:
         """
@@ -120,12 +120,13 @@ class Writers:
         - No sharding support (many small files)
         - OME-NGFF v0.4 metadata
         - Wide tool support (neuroglancer, napari, etc.)
+        - Automatic 5D TCZYX expansion for viewer compatibility
 
         Args:
             output_path: Path to output Zarr2 dataset
             compression: Compression codec ('blosc', 'gzip', 'zstd', 'none')
             compression_level: Compression level (1-9, default: 5)
-            level_path: Level subdirectory name (default: "s0")
+            level_path: Level subdirectory name (default: "0" for OME-NGFF compatibility)
             **kwargs: Additional format-specific options
 
         Returns:
@@ -145,6 +146,7 @@ class Writers:
             - Use Zarr3 for new projects (sharding, better performance)
             - Use Zarr2 for compatibility with existing tools
             - No sharding means many small files (performance impact)
+            - Data is always expanded to 5D TCZYX format for OME-NGFF viewer compatibility
         """
         from ..writers.zarr2 import Zarr2Writer
         return Zarr2Writer(

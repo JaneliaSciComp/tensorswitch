@@ -33,6 +33,9 @@ class Zarr2Writer(BaseWriter):
 
     Note: Zarr2 does NOT support sharding. For large datasets, use Zarr3Writer.
 
+    All data is automatically expanded to 5D TCZYX format for OME-NGFF viewer
+    compatibility. Singleton dimensions are added for missing T, C, Z axes.
+
     Example:
         >>> from tensorswitch_v2.writers import Zarr2Writer
         >>> writer = Zarr2Writer("/output.zarr")
@@ -51,7 +54,7 @@ class Zarr2Writer(BaseWriter):
         output_path: str,
         compression: str = "zstd",
         compression_level: int = 5,
-        level_path: str = "s0"
+        level_path: str = "0"
     ):
         """
         Initialize Zarr2 writer.
@@ -60,7 +63,7 @@ class Zarr2Writer(BaseWriter):
             output_path: Path to output Zarr2 dataset
             compression: Compression codec ("zstd", "blosc", "gzip")
             compression_level: Compression level (1-9, default 5)
-            level_path: Level subdirectory name (default "s0")
+            level_path: Level subdirectory name (default "0" for OME-NGFF compatibility)
         """
         super().__init__(output_path)
         self.compression = compression
@@ -68,6 +71,9 @@ class Zarr2Writer(BaseWriter):
         self.level_path = level_path
         self._store = None
         self._spec = None
+        self._axes_order = None  # Original axes from source
+        self._original_shape = None  # Store original shape before expansion
+        self._expanded_axes = None  # Store expanded 5D axes
 
     def supports_sharding(self) -> bool:
         """Zarr2 does NOT support sharding."""
@@ -80,63 +86,141 @@ class Zarr2Writer(BaseWriter):
         chunk_shape: Optional[Tuple[int, ...]] = None,
         shard_shape: Optional[Tuple[int, ...]] = None,
         use_fortran_order: bool = False,
+        axes_order: Optional[List[str]] = None,
         **kwargs
     ) -> Dict:
         """
-        Create TensorStore spec for Zarr2 output.
+        Create TensorStore spec for Zarr2 output with automatic 5D TCZYX expansion.
+
+        All data is expanded to 5D TCZYX format for OME-NGFF viewer compatibility.
+        Singleton dimensions are added for missing T, C, Z axes.
+
+        Uses smart chunking:
+        - Non-spatial axes (c, t, v) get chunk size 1
+        - Spatial axes (z, y, x) get chunk size 1024 (or array size if smaller)
 
         Args:
             shape: Array shape (e.g., (100, 1024, 1024))
             dtype: Data type string (e.g., "uint16", "uint8")
-            chunk_shape: Chunk dimensions
+            chunk_shape: Chunk dimensions (auto-calculated if None)
             shard_shape: Ignored (Zarr2 doesn't support sharding)
             use_fortran_order: Use Fortran (column-major) order
+            axes_order: Axis names for smart chunking (e.g., ['c', 'y', 'x'])
             **kwargs: Additional options
 
         Returns:
-            dict: TensorStore spec for Zarr2 output
+            dict: TensorStore spec for Zarr2 output (5D TCZYX)
         """
         if shard_shape is not None:
             print("Warning: shard_shape ignored - Zarr2 doesn't support sharding")
 
-        # Convert to list
+        # Store original axes_order for domain conversion during writing
+        self._axes_order = axes_order
+        self._original_shape = tuple(shape)
+
+        # Convert to list and expand to 5D TCZYX
         shape_list = list(shape)
-
-        # Default chunk shape if not provided
-        if chunk_shape is None:
-            chunk_shape = self.get_default_chunk_shape(shape)
-        chunks_list = list(chunk_shape)
-
-        # Ensure chunks match shape dimensionality
-        if len(chunks_list) < len(shape_list):
-            extra_dims = len(shape_list) - len(chunks_list)
-            chunks_list = [1] * extra_dims + chunks_list
+        shape_list, expanded_axes, chunks_list = self._expand_to_5d(
+            shape_list, axes_order, chunk_shape
+        )
+        self._expanded_axes = expanded_axes
+        print(f"Zarr2 5D expansion: {self._original_shape} -> {shape_list}")
+        print(f"  Axes: {axes_order} -> {expanded_axes}")
 
         # Compute array path (with level subdirectory)
         array_path = os.path.join(self.output_path, self.level_path)
 
-        # Create spec using existing utility function
+        # Create spec using utility function with smart chunking
         spec = zarr2_store_spec(
             zarr_level_path=array_path,
             shape=shape_list,
-            chunks=chunks_list,
-            use_fortran_order=use_fortran_order
+            chunks=chunks_list,  # None = auto-calculate based on axes
+            use_fortran_order=use_fortran_order,
+            axes_order=self._expanded_axes,
+            dtype=self._normalize_dtype(dtype),
+            compressor={
+                'id': self.compression,
+                'level': self.compression_level
+            }
         )
-
-        # Update dtype (zarr2_store_spec hardcodes "|u1")
-        spec['metadata']['dtype'] = self._normalize_dtype(dtype)
-
-        # Update compressor
-        spec['metadata']['compressor'] = {
-            'id': self.compression,
-            'level': self.compression_level
-        }
 
         # Add context for concurrency control
         spec['context'] = get_tensorstore_context()
 
         self._spec = spec
         return spec
+
+    def _expand_to_5d(
+        self,
+        shape: List[int],
+        axes_order: Optional[List[str]],
+        chunk_shape: Optional[Tuple[int, ...]]
+    ) -> Tuple[List[int], List[str], List[int]]:
+        """
+        Expand shape and axes to 5D TCZYX format for OME-NGFF viewer compatibility.
+
+        Adds singleton dimensions for missing T, C, Z axes.
+
+        Args:
+            shape: Original array shape
+            axes_order: Original axis names
+            chunk_shape: Original chunk shape (optional)
+
+        Returns:
+            (expanded_shape, expanded_axes, expanded_chunks)
+        """
+        # Target: always 5D TCZYX
+        TARGET_AXES = ['t', 'c', 'z', 'y', 'x']
+
+        # Infer axes if not provided
+        if axes_order is None or len(axes_order) != len(shape):
+            axes_order = self._infer_axes(shape)
+
+        # Normalize to lowercase
+        axes_lower = [a.lower() for a in axes_order]
+
+        # Build expanded shape and chunks
+        expanded_shape = []
+        expanded_chunks = []
+
+        for target_axis in TARGET_AXES:
+            if target_axis in axes_lower:
+                # Axis exists - use its shape/chunk
+                idx = axes_lower.index(target_axis)
+                expanded_shape.append(shape[idx])
+                if chunk_shape and idx < len(chunk_shape):
+                    expanded_chunks.append(chunk_shape[idx])
+                elif target_axis in ['t', 'c']:
+                    expanded_chunks.append(1)  # Non-spatial: chunk=1
+                elif target_axis == 'z':
+                    expanded_chunks.append(min(shape[idx], 1024))
+                else:  # y, x
+                    expanded_chunks.append(min(shape[idx], 1024))
+            else:
+                # Axis doesn't exist - add singleton dimension
+                expanded_shape.append(1)
+                expanded_chunks.append(1)
+
+        return expanded_shape, TARGET_AXES, expanded_chunks
+
+    def _infer_axes(self, shape: List[int]) -> List[str]:
+        """Infer axis names from shape."""
+        if len(shape) == 2:
+            return ['y', 'x']
+        elif len(shape) == 3:
+            if shape[0] <= 10:
+                return ['c', 'y', 'x']
+            else:
+                return ['z', 'y', 'x']
+        elif len(shape) == 4:
+            if shape[0] <= 10:
+                return ['c', 'z', 'y', 'x']
+            else:
+                return ['t', 'z', 'y', 'x']
+        elif len(shape) == 5:
+            return ['t', 'c', 'z', 'y', 'x']
+        else:
+            return [f'dim_{i}' for i in range(len(shape))]
 
     def _normalize_dtype(self, dtype: str) -> str:
         """Convert dtype to Zarr2 format."""
@@ -207,18 +291,108 @@ class Zarr2Writer(BaseWriter):
         """
         Write a single chunk using per-chunk transaction pattern.
 
+        Automatically expands data to 5D TCZYX for writing.
+        The chunk_domain should be for the ORIGINAL shape (from input reading).
+
         Args:
-            chunk_domain: TensorStore IndexDomain or slice tuple
-            data: Numpy array data to write
+            chunk_domain: TensorStore IndexDomain or slice tuple (in input coordinates)
+            data: Input array data to write (native shape, e.g., 3D)
             output_store: TensorStore handle (uses self._store if None)
         """
         store = output_store or self._store
         if store is None:
             raise ValueError("No store available. Call open_store first.")
 
+        # Expand domain and data to 5D TCZYX
+        if self._original_shape is not None:
+            output_domain, expanded_data = self._expand_chunk_to_5d(chunk_domain, data)
+        else:
+            output_domain = chunk_domain
+            expanded_data = data
+
         # Use per-chunk transaction (Mark's fix for memory safety)
         with ts.Transaction() as txn:
-            store[chunk_domain].with_transaction(txn).write(data).result()
+            store[output_domain].with_transaction(txn).write(expanded_data).result()
+
+    def get_input_domain_from_output(self, output_domain: Any) -> Any:
+        """
+        Convert a 5D output domain back to input coordinates for reading.
+
+        Chunk domains are generated based on the 5D output shape.
+        This method converts them back to input coordinates for
+        reading from the native (e.g., 3D) input array.
+
+        Args:
+            output_domain: TensorStore IndexDomain or slice tuple in 5D
+
+        Returns:
+            Domain in input coordinates (e.g., 3D for CYX data)
+        """
+        if self._original_shape is None:
+            return output_domain
+
+        original_axes = self._axes_order or self._infer_axes(list(self._original_shape))
+        original_axes_lower = [a.lower() for a in original_axes]
+        target_axes = ['t', 'c', 'z', 'y', 'x']
+
+        # Extract slices for original axes from the 5D domain
+        input_slices = []
+        for orig_axis in original_axes_lower:
+            target_idx = target_axes.index(orig_axis)
+            if hasattr(output_domain, 'origin'):
+                # TensorStore IndexDomain
+                start = int(output_domain.origin[target_idx])
+                stop = start + int(output_domain.shape[target_idx])
+                input_slices.append(slice(start, stop))
+            else:
+                # Already a tuple of slices
+                input_slices.append(output_domain[target_idx])
+
+        return tuple(input_slices)
+
+    def _expand_chunk_to_5d(self, chunk_domain: Any, data: np.ndarray) -> Tuple[Any, np.ndarray]:
+        """
+        Expand chunk domain and data from native shape to 5D TCZYX.
+
+        Args:
+            chunk_domain: Domain for input data (in input coordinates, e.g., 3D)
+            data: Native shape numpy array
+
+        Returns:
+            (expanded_domain, expanded_data) both in 5D
+        """
+        # Get the mapping from original axes to 5D axes
+        original_axes = self._axes_order or self._infer_axes(list(self._original_shape))
+        original_axes_lower = [a.lower() for a in original_axes]
+        target_axes = ['t', 'c', 'z', 'y', 'x']
+
+        # Build the expanded domain slices
+        expanded_slices = []
+        expand_dims_positions = []  # Track where to add new dimensions to data
+
+        for i, target_axis in enumerate(target_axes):
+            if target_axis in original_axes_lower:
+                # This axis exists in original - use its slice from chunk_domain
+                orig_idx = original_axes_lower.index(target_axis)
+                if hasattr(chunk_domain, 'origin'):
+                    # TensorStore IndexDomain
+                    start = int(chunk_domain.origin[orig_idx])
+                    stop = start + int(chunk_domain.shape[orig_idx])
+                    expanded_slices.append(slice(start, stop))
+                else:
+                    # Already a tuple of slices
+                    expanded_slices.append(chunk_domain[orig_idx])
+            else:
+                # This axis doesn't exist in original - singleton dimension
+                expanded_slices.append(slice(0, 1))
+                expand_dims_positions.append(i)
+
+        # Reshape data to add singleton dimensions
+        expanded_data = data
+        for pos in expand_dims_positions:
+            expanded_data = np.expand_dims(expanded_data, axis=pos)
+
+        return tuple(expanded_slices), expanded_data
 
     def write_metadata(
         self,
@@ -226,29 +400,52 @@ class Zarr2Writer(BaseWriter):
         voxel_sizes: Optional[Dict[str, float]] = None,
         image_name: str = "image",
         array_shape: Optional[Tuple[int, ...]] = None,
-        axes_order: Optional[List[str]] = None
+        axes_order: Optional[List[str]] = None,
+        ome_xml: Optional[str] = None,
+        **kwargs
     ) -> None:
         """
         Write OME-NGFF v0.4 metadata to .zattrs files.
 
+        Always uses 5D TCZYX axes to match the expanded output format.
+
         Args:
-            ome_metadata: Pre-built OME metadata dict
+            ome_metadata: Pre-built OME metadata dict (ignored - always rebuilt for 5D)
             voxel_sizes: Voxel dimensions dict {"x": um, "y": um, "z": um}
             image_name: Image name for metadata
-            array_shape: Array shape (required if ome_metadata is None)
-            axes_order: Axis names (e.g., ["z", "y", "x"])
+            array_shape: Array shape (ignored - uses 5D expanded shape)
+            axes_order: Axis names (ignored - always uses 5D TCZYX)
+            ome_xml: Raw OME-XML string (stored in attributes if provided)
+            **kwargs: Additional arguments (ignored for compatibility)
         """
-        if array_shape is None and self._store is not None:
+        # ALWAYS use 5D expanded shape and axes for metadata
+        # This ensures metadata matches the actual 5D output format
+        if self._store is not None:
             array_shape = tuple(self._store.shape)
-
-        # Build default OME-NGFF v0.4 metadata if not provided
-        if ome_metadata is None:
-            ome_metadata = self._build_zarr2_ome_metadata(
-                array_shape=array_shape,
-                voxel_sizes=voxel_sizes,
-                image_name=image_name,
-                axes_order=axes_order
+        elif self._original_shape is not None:
+            # Calculate 5D shape from original
+            shape_list, _, _ = self._expand_to_5d(
+                list(self._original_shape), self._axes_order, None
             )
+            array_shape = tuple(shape_list)
+        else:
+            raise ValueError("array_shape required when store not available")
+
+        # Always use 5D axes
+        axes_order = self._expanded_axes or ['t', 'c', 'z', 'y', 'x']
+        print(f"Zarr2 metadata: using 5D expanded axes: {axes_order}")
+
+        # Always rebuild metadata for 5D format
+        ome_metadata = self._build_zarr2_ome_metadata(
+            array_shape=array_shape,
+            voxel_sizes=voxel_sizes,
+            image_name=image_name,
+            axes_order=axes_order
+        )
+
+        # Add ome_xml to metadata if provided
+        if ome_xml:
+            ome_metadata['ome_xml'] = ome_xml
 
         # Write root .zgroup
         zgroup_path = os.path.join(self.output_path, ".zgroup")
@@ -260,6 +457,8 @@ class Zarr2Writer(BaseWriter):
         with open(zattrs_path, 'w') as f:
             json.dump(ome_metadata, f, indent=2)
 
+        print(f"Zarr2 metadata written to {self.output_path}")
+
     def _build_zarr2_ome_metadata(
         self,
         array_shape: Tuple[int, ...],
@@ -267,24 +466,78 @@ class Zarr2Writer(BaseWriter):
         image_name: str,
         axes_order: Optional[List[str]]
     ) -> Dict:
-        """Build OME-NGFF v0.4 metadata structure."""
-        # Determine axes
+        """Build OME-NGFF v0.4 metadata structure with proper axis detection.
+
+        Same logic as Zarr3 for consistent dimension handling.
+        """
+        # Determine axes - same logic as zarr3_store_spec
         if axes_order and len(axes_order) == len(array_shape):
-            axes = axes_order
-        elif len(array_shape) == 3:
-            axes = ["z", "y", "x"] if array_shape[0] > 10 else ["c", "y", "x"]
-        elif len(array_shape) == 4:
-            axes = ["c", "z", "y", "x"]
-        elif len(array_shape) == 5:
-            axes = ["t", "c", "z", "y", "x"]
+            axes = list(axes_order)
+            print(f"Zarr2 metadata: using axes from source: {axes}")
         else:
-            axes = [f"dim_{i}" for i in range(len(array_shape))]
+            # Infer from shape - same logic as zarr3
+            if len(array_shape) == 2:
+                axes = ["y", "x"]
+            elif len(array_shape) == 3:
+                # For 3D, assume channels if first dimension is small, otherwise Z
+                if array_shape[0] <= 10:
+                    axes = ["c", "y", "x"]
+                else:
+                    axes = ["z", "y", "x"]
+            elif len(array_shape) == 4:
+                # CZYX or TZYX - check first dim
+                if array_shape[0] <= 10:
+                    axes = ["c", "z", "y", "x"]
+                else:
+                    axes = ["t", "z", "y", "x"]
+            elif len(array_shape) == 5:
+                axes = ["t", "c", "z", "y", "x"]
+            else:
+                axes = [f"dim_{i}" for i in range(len(array_shape))]
+            print(f"Zarr2 metadata: inferred axes from shape {array_shape}: {axes}")
+
+        def get_axis_type(axis_name: str) -> str:
+            """Get OME-NGFF axis type from axis name."""
+            axis_lower = axis_name.lower()
+            if axis_lower in ['x', 'y', 'z']:
+                return "space"
+            elif axis_lower == 'c':
+                return "channel"
+            elif axis_lower == 't':
+                return "time"
+            elif axis_lower == 'v':
+                return "space"  # View axis treated as space for multi-view
+            else:
+                return "space"  # Default to space for unknown axes
+
+        def get_axis_unit(axis_name: str) -> Optional[str]:
+            """Get unit for axis if applicable."""
+            axis_lower = axis_name.lower()
+            if axis_lower in ['x', 'y', 'z']:
+                return "micrometer"
+            elif axis_lower == 't':
+                return "second"
+            return None
+
+        # Build axes metadata with proper types and units
+        axes_metadata = []
+        for axis in axes:
+            axis_info = {
+                "name": axis,
+                "type": get_axis_type(axis)
+            }
+            unit = get_axis_unit(axis)
+            if unit:
+                axis_info["unit"] = unit
+            axes_metadata.append(axis_info)
 
         # Build scale factors from voxel sizes
         scale_factors = []
         for axis in axes:
             if voxel_sizes and axis in voxel_sizes:
-                scale_factors.append(voxel_sizes[axis])
+                scale_factors.append(float(voxel_sizes[axis]))
+            elif voxel_sizes and axis.lower() in voxel_sizes:
+                scale_factors.append(float(voxel_sizes[axis.lower()]))
             else:
                 scale_factors.append(1.0)
 
@@ -292,7 +545,7 @@ class Zarr2Writer(BaseWriter):
             "multiscales": [{
                 "version": "0.4",
                 "name": image_name,
-                "axes": [{"name": a, "type": "space" if a in "xyz" else "channel" if a == "c" else "time"} for a in axes],
+                "axes": axes_metadata,
                 "datasets": [{
                     "path": self.level_path,
                     "coordinateTransformations": [{

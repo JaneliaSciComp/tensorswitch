@@ -209,24 +209,80 @@ def n5_store_spec(n5_level_path):
         'kvstore': get_kvstore_spec(n5_level_path)
     }
 
-def zarr2_store_spec(zarr_level_path, shape, chunks, use_fortran_order=False):
+def zarr2_store_spec(zarr_level_path, shape, chunks=None, use_fortran_order=False, axes_order=None, dtype="|u1", compressor=None):
     """
-    Create Zarr2 store specification.
+    Create Zarr2 store specification with smart chunking based on axes.
+
+    Non-spatial axes (c, t, v) get chunk size 1 for per-channel/per-timepoint access.
+    Spatial axes (z, y, x) get default 1024 chunk size for efficient tiled access.
 
     Args:
         zarr_level_path: Path to zarr level
         shape: Array shape
-        chunks: Chunk shape
+        chunks: Chunk shape (if None, auto-calculated based on axes_order)
         use_fortran_order: If True, use F-order (column-major); if False, use C-order (row-major)
+        axes_order: List of axis names (e.g., ['c', 'y', 'x']) for smart chunking
+        dtype: Data type string (e.g., '<u2' for uint16)
+        compressor: Compressor dict (default: zstd level 5)
     """
+    # Non-spatial axes that should have chunk size 1 for efficient per-slice access
+    NON_SPATIAL_AXES = ['c', 't', 'v']
+    # Default spatial chunk size (1024 for good tile-based access)
+    DEFAULT_SPATIAL_CHUNK = 1024
+
+    def build_smart_chunks(shape, axes_order):
+        """Build chunk shape respecting axis types - same logic as zarr3."""
+        if axes_order is None or len(axes_order) != len(shape):
+            # Fallback: infer axes from shape
+            axes_order = infer_axes_from_shape(shape)
+
+        result = []
+        for i, axis in enumerate(axes_order):
+            if axis.lower() in NON_SPATIAL_AXES:
+                result.append(1)  # Non-spatial: 1 for per-channel access
+            else:
+                # Spatial: use 1024 or array size if smaller
+                result.append(min(DEFAULT_SPATIAL_CHUNK, shape[i]))
+        return result
+
+    def infer_axes_from_shape(shape):
+        """Infer axis names from shape - same logic as zarr3."""
+        if len(shape) == 2:
+            return ["y", "x"]
+        elif len(shape) == 3:
+            # For 3D, assume channels if first dimension is small, otherwise Z
+            if shape[0] <= 10:
+                return ["c", "y", "x"]
+            else:
+                return ["z", "y", "x"]
+        elif len(shape) == 4:
+            # CZYX or TZYX - check first dim
+            if shape[0] <= 10:
+                return ["c", "z", "y", "x"]
+            else:
+                return ["t", "z", "y", "x"]
+        elif len(shape) == 5:
+            return ["t", "c", "z", "y", "x"]
+        else:
+            return [f"dim_{i}" for i in range(len(shape))]
+
+    # Auto-calculate chunks if not provided
+    if chunks is None:
+        chunks = build_smart_chunks(shape, axes_order)
+        print(f"Zarr2 smart chunking: axes={axes_order or infer_axes_from_shape(shape)}, chunks={chunks}")
+
+    # Default compressor
+    if compressor is None:
+        compressor = {'id': 'zstd', 'level': 5}
+
     return {
         'driver': 'zarr',
         'kvstore': {'driver': 'file', 'path': zarr_level_path},
         'metadata': {
             'shape': shape,
             'chunks': chunks,
-            'dtype': "|u1",
-            'compressor': {'id': 'zstd', 'level': 5},
+            'dtype': dtype,
+            'compressor': compressor,
             'order': 'F' if use_fortran_order else 'C',  # Preserve source order
             'dimension_separator': "/"
         }

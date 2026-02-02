@@ -239,25 +239,34 @@ class DistributedConverter:
         )
 
         # 7. Process chunks with per-chunk transactions
-        tasks = []
         chunks_processed = 0
         last_report_time = start_time
 
         for idx, chunk_domain in enumerate(chunk_domains, start=start_idx):
             try:
+                # Convert domain for reading if writer has shape expansion (e.g., 5D Zarr2)
+                # The chunk_domain is in OUTPUT coordinates (e.g., 5D)
+                # We need INPUT coordinates (e.g., 3D) for reading
+                read_domain = chunk_domain
+                if hasattr(self.writer, 'get_input_domain_from_output'):
+                    read_domain = self.writer.get_input_domain_from_output(chunk_domain)
+
                 # Read from input (handle both Tier 1 and Tier 2 readers)
                 if self._is_tier2:
                     # Tier 2: Read from dask array, need to convert domain to slices
-                    slices = self._domain_to_slices(chunk_domain)
+                    # read_domain may already be a tuple of slices
+                    if isinstance(read_domain, tuple) and all(isinstance(s, slice) for s in read_domain):
+                        slices = read_domain
+                    else:
+                        slices = self._domain_to_slices(read_domain)
                     data = self._dask_array[slices].compute()
                 else:
                     # Tier 1: Read from TensorStore directly
-                    data = self._input_store[chunk_domain].read().result()
+                    data = self._input_store[read_domain].read().result()
 
-                # Write to output using per-chunk transaction (Mark's fix)
-                with ts.Transaction() as txn:
-                    task = self._output_store[chunk_domain].with_transaction(txn).write(data)
-                tasks.append(task)
+                # Write using writer's method (handles 5D expansion for Zarr2)
+                # Pass the INPUT domain - write_chunk will expand it for output
+                self.writer.write_chunk(read_domain, data, self._output_store)
                 chunks_processed += 1
 
                 # Progress reporting
@@ -275,10 +284,6 @@ class DistributedConverter:
                 if verbose:
                     print(f"  Warning: Skipping chunk {idx}: {e}")
                 continue
-
-        # 8. Wait for all tasks to complete
-        for task in tasks:
-            task.result()
 
         # 9. Write metadata (when processing through the end, or explicitly forced)
         if write_metadata and (stop_idx >= self._total_chunks or start_idx > 0):
