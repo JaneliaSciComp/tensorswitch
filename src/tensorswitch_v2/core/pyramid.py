@@ -212,18 +212,67 @@ class PyramidPlanner:
         self._s0_metadata = None
 
     def _load_s0_metadata(self) -> Dict[str, Any]:
-        """Load metadata from s0 array."""
+        """Load metadata from s0 array (supports both Zarr3 and Zarr2)."""
         if self._s0_metadata is not None:
             return self._s0_metadata
 
+        # Try Zarr3 first (zarr.json)
         zarr_json_path = os.path.join(self.s0_path, 'zarr.json')
-        if not os.path.exists(zarr_json_path):
-            raise FileNotFoundError(f"s0 zarr.json not found at {zarr_json_path}")
+        if os.path.exists(zarr_json_path):
+            with open(zarr_json_path, 'r') as f:
+                self._s0_metadata = json.load(f)
+            self._s0_metadata['_format'] = 'zarr3'
+            return self._s0_metadata
 
-        with open(zarr_json_path, 'r') as f:
-            self._s0_metadata = json.load(f)
+        # Try Zarr2 (.zarray + .zattrs)
+        zarray_path = os.path.join(self.s0_path, '.zarray')
+        if os.path.exists(zarray_path):
+            with open(zarray_path, 'r') as f:
+                zarray = json.load(f)
 
-        return self._s0_metadata
+            # Load .zattrs for dimension names
+            zattrs = {}
+            zattrs_path = os.path.join(self.s0_path, '.zattrs')
+            if os.path.exists(zattrs_path):
+                with open(zattrs_path, 'r') as f:
+                    zattrs = json.load(f)
+
+            # Convert Zarr2 format to unified format similar to Zarr3
+            shape = zarray.get('shape', [])
+            chunks = zarray.get('chunks', shape)
+
+            # Get dimension names from _ARRAY_DIMENSIONS (xarray convention)
+            dimension_names = zattrs.get('_ARRAY_DIMENSIONS')
+            if not dimension_names:
+                # Infer from shape
+                if len(shape) == 5:
+                    dimension_names = ['t', 'c', 'z', 'y', 'x']
+                elif len(shape) == 4:
+                    dimension_names = ['c', 'z', 'y', 'x']
+                elif len(shape) == 3:
+                    dimension_names = ['z', 'y', 'x']
+                else:
+                    dimension_names = [f'dim_{i}' for i in range(len(shape))]
+
+            self._s0_metadata = {
+                '_format': 'zarr2',
+                'shape': shape,
+                'dimension_names': dimension_names,
+                'chunk_grid': {
+                    'configuration': {
+                        'chunk_shape': chunks
+                    }
+                },
+                'data_type': zarray.get('dtype', 'uint16'),
+                # Zarr2 doesn't have sharding, use chunks as both
+                '_zarray': zarray,
+                '_zattrs': zattrs
+            }
+            return self._s0_metadata
+
+        raise FileNotFoundError(
+            f"s0 metadata not found. Expected zarr.json (Zarr3) or .zarray (Zarr2) at {self.s0_path}"
+        )
 
     def calculate_pyramid_plan(
         self,
@@ -326,9 +375,11 @@ class PyramidPlanner:
         This is critical for multi-job mode to prevent race conditions.
         All levels are pre-created so jobs can write immediately.
 
+        Supports both Zarr3 (zarr.json) and Zarr2 (.zarray/.zattrs) formats.
+
         Args:
             pyramid_plan: Output from calculate_pyramid_plan()
-            use_shard: Whether to use sharding
+            use_shard: Whether to use sharding (ignored for Zarr2)
             verbose: Print progress messages
         """
         if verbose:
@@ -336,9 +387,10 @@ class PyramidPlanner:
             print(f"PRE-CREATING {pyramid_plan['num_levels']} PYRAMID LEVELS")
             print(f"{'='*60}")
 
-        # Get s0 metadata for dtype
+        # Get s0 metadata for dtype and format
         s0_metadata = self._load_s0_metadata()
         dtype = s0_metadata.get('data_type', 'uint16')
+        zarr_format = s0_metadata.get('_format', 'zarr3')
 
         for level_info in pyramid_plan['levels']:
             level = level_info['level']
@@ -349,20 +401,29 @@ class PyramidPlanner:
                 print(f"  Shard shape: {level_info['shard_shape']}")
                 print(f"  Chunk shape: {level_info['chunk_shape']}")
 
-            # Use unified precreate_zarr3_output which handles both directories and metadata
-            # Function signature: (output_path, level, output_shape, shard_shape, chunk_shape,
-            #                       dtype, use_ome_structure, use_v2_encoding, axes_order, ...)
-            precreate_zarr3_output(
-                output_path=self.root_path,
-                level=level,
-                output_shape=level_info['predicted_shape'],
-                shard_shape=level_info['shard_shape'] if use_shard else level_info['chunk_shape'],
-                chunk_shape=level_info['chunk_shape'],
-                dtype=dtype,
-                use_ome_structure=True,
-                use_v2_encoding=False,
-                axes_order=pyramid_plan['axes_names'],
-            )
+            if zarr_format == 'zarr2':
+                # Pre-create Zarr2 level (directory + .zarray + .zattrs)
+                self._precreate_zarr2_level(
+                    level=level,
+                    shape=level_info['predicted_shape'],
+                    chunk_shape=level_info['chunk_shape'],
+                    dtype=dtype,
+                    axes_names=pyramid_plan['axes_names'],
+                    verbose=verbose,
+                )
+            else:
+                # Use Zarr3 precreation
+                precreate_zarr3_output(
+                    output_path=self.root_path,
+                    level=level,
+                    output_shape=level_info['predicted_shape'],
+                    shard_shape=level_info['shard_shape'] if use_shard else level_info['chunk_shape'],
+                    chunk_shape=level_info['chunk_shape'],
+                    dtype=dtype,
+                    use_ome_structure=True,
+                    use_v2_encoding=False,
+                    axes_order=pyramid_plan['axes_names'],
+                )
 
             if verbose:
                 print(f"  Pre-created s{level}")
@@ -371,6 +432,63 @@ class PyramidPlanner:
             print(f"\n{'='*60}")
             print(f"PRE-CREATION COMPLETE")
             print(f"{'='*60}")
+
+    def _precreate_zarr2_level(
+        self,
+        level: int,
+        shape: List[int],
+        chunk_shape: List[int],
+        dtype: str,
+        axes_names: List[str],
+        verbose: bool = True,
+    ) -> None:
+        """
+        Pre-create a Zarr2 pyramid level directory with .zarray and .zattrs.
+
+        Args:
+            level: Pyramid level number (1, 2, 3, ...)
+            shape: Array shape for this level
+            chunk_shape: Chunk shape
+            dtype: Data type string
+            axes_names: Dimension names
+            verbose: Print progress
+        """
+        # Zarr2 uses numeric level paths (1, 2, 3) not s1, s2, s3
+        level_path = os.path.join(self.root_path, str(level))
+        os.makedirs(level_path, exist_ok=True)
+
+        if verbose:
+            print(f"  Creating Zarr2 level at: {level_path}")
+
+        # Normalize dtype to Zarr2 format
+        dtype_map = {
+            'uint8': '|u1', 'uint16': '<u2', 'uint32': '<u4', 'uint64': '<u8',
+            'int8': '|i1', 'int16': '<i2', 'int32': '<i4', 'int64': '<i8',
+            'float32': '<f4', 'float64': '<f8',
+        }
+        zarr_dtype = dtype_map.get(str(dtype).replace('<', '').replace('>', '').replace('|', ''), '<u2')
+
+        # Write .zarray
+        zarray = {
+            "zarr_format": 2,
+            "shape": list(shape),
+            "chunks": list(chunk_shape),
+            "dtype": zarr_dtype,
+            "compressor": {"id": "zstd", "level": 5},
+            "fill_value": 0,
+            "order": "C",
+            "filters": None,
+            "dimension_separator": "/"
+        }
+        with open(os.path.join(level_path, '.zarray'), 'w') as f:
+            json.dump(zarray, f, indent=2)
+
+        # Write .zattrs with _ARRAY_DIMENSIONS
+        zattrs = {
+            "_ARRAY_DIMENSIONS": list(axes_names) if axes_names else None
+        }
+        with open(os.path.join(level_path, '.zattrs'), 'w') as f:
+            json.dump(zattrs, f, indent=2)
 
     def generate_parallel_submission_script(
         self,

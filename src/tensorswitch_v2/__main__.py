@@ -903,9 +903,14 @@ def main(argv=None):
                 dry_run=False,
                 verbose=verbose,
             )
-            print(f"\nSubmitted {len(result['job_ids'])} jobs for {result['pyramid_plan']['num_levels']} levels")
-            print("Jobs will run in parallel - all levels downsample directly from s0.")
-            print("After all jobs complete, root metadata will be updated automatically.")
+            num_levels = result.get('pyramid_plan', {}).get('num_levels', 0)
+            job_ids = result.get('job_ids', [])
+            if num_levels > 0:
+                print(f"\nSubmitted {len(job_ids)} jobs for {num_levels} levels")
+                print("Jobs will run in parallel - all levels downsample directly from s0.")
+                print("After all jobs complete, root metadata will be updated automatically.")
+            else:
+                print("\nNo pyramid levels needed - dataset is already at minimum size.")
         else:
             # Local mode: run downsampling directly for each level
             from .core.downsampler import downsample_level
