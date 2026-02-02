@@ -161,6 +161,13 @@ class Zarr2Writer(BaseWriter):
 
         Adds singleton dimensions for missing T, C, Z axes.
 
+        Uses small fixed chunks for Zarr2 (no sharding support):
+        - Z: max 32 (WebKnossos/Neuroglancer compatible, like v1)
+        - Y/X: max 256 (reasonable file size without sharding)
+
+        This is critical because Zarr2 has NO sharding - each chunk = 1 file.
+        Large chunks cause huge file sizes and slow random access in viewers.
+
         Args:
             shape: Original array shape
             axes_order: Original axis names
@@ -171,6 +178,11 @@ class Zarr2Writer(BaseWriter):
         """
         # Target: always 5D TCZYX
         TARGET_AXES = ['t', 'c', 'z', 'y', 'x']
+
+        # Zarr2-specific chunk limits (no sharding = small chunks needed)
+        # Matches v1's WebKnossos-compatible chunking strategy
+        DEFAULT_ZARR2_CHUNK_Z = 32    # Z: small for random Z-slice access
+        DEFAULT_ZARR2_CHUNK_YX = 256  # Y/X: reasonable tile size
 
         # Infer axes if not provided
         if axes_order is None or len(axes_order) != len(shape):
@@ -193,9 +205,11 @@ class Zarr2Writer(BaseWriter):
                 elif target_axis in ['t', 'c']:
                     expanded_chunks.append(1)  # Non-spatial: chunk=1
                 elif target_axis == 'z':
-                    expanded_chunks.append(min(shape[idx], 1024))
+                    # Small Z chunks for random access (Zarr2 has no sharding)
+                    expanded_chunks.append(min(shape[idx], DEFAULT_ZARR2_CHUNK_Z))
                 else:  # y, x
-                    expanded_chunks.append(min(shape[idx], 1024))
+                    # Reasonable tile size without sharding
+                    expanded_chunks.append(min(shape[idx], DEFAULT_ZARR2_CHUNK_YX))
             else:
                 # Axis doesn't exist - add singleton dimension
                 expanded_shape.append(1)
@@ -456,14 +470,6 @@ class Zarr2Writer(BaseWriter):
         zattrs_path = os.path.join(self.output_path, ".zattrs")
         with open(zattrs_path, 'w') as f:
             json.dump(ome_metadata, f, indent=2)
-
-        # Write array-level .zattrs with _ARRAY_DIMENSIONS (xarray/dask convention for v2)
-        array_zattrs_path = os.path.join(self.output_path, self.level_path, ".zattrs")
-        array_metadata = {
-            "_ARRAY_DIMENSIONS": axes_order  # xarray/dask convention (v2 standard)
-        }
-        with open(array_zattrs_path, 'w') as f:
-            json.dump(array_metadata, f, indent=2)
 
         print(f"Zarr2 metadata written to {self.output_path}")
 
