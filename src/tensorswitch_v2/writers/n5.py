@@ -249,7 +249,9 @@ class N5Writer(BaseWriter):
         voxel_sizes: Optional[Dict[str, float]] = None,
         image_name: str = "image",
         array_shape: Optional[Tuple[int, ...]] = None,
-        axes_order: Optional[List[str]] = None
+        axes_order: Optional[List[str]] = None,
+        ome_xml: Optional[str] = None,
+        **kwargs
     ) -> None:
         """
         Write N5 metadata to attributes.json files.
@@ -260,6 +262,8 @@ class N5Writer(BaseWriter):
             image_name: Image name for metadata
             array_shape: Array shape
             axes_order: Axis names (e.g., ["z", "y", "x"])
+            ome_xml: Ignored (N5 doesn't use OME-XML, included for API compatibility)
+            **kwargs: Additional arguments (ignored for compatibility)
         """
         if array_shape is None:
             array_shape = getattr(self, '_shape', None)

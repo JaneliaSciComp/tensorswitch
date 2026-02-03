@@ -2,13 +2,66 @@
 N5 reader implementation using native TensorStore driver.
 
 Tier 1 reader - maximum performance with zero conversion overhead.
+Supports local paths and remote URLs (HTTP, S3, GCS).
 """
 
 import json
 import os
-from typing import Dict, Optional
+from typing import Dict, Optional, Tuple
+from urllib.parse import urlparse
 import tensorstore as ts
 from .base import BaseReader
+
+
+def _parse_remote_url(url: str) -> Tuple[str, dict]:
+    """
+    Parse a URL and return the appropriate kvstore driver and spec.
+
+    Args:
+        url: Local path or remote URL (http://, https://, s3://, gs://)
+
+    Returns:
+        Tuple of (driver_name, kvstore_spec)
+
+    Examples:
+        >>> _parse_remote_url('/local/path/data.n5')
+        ('file', {'driver': 'file', 'path': '/local/path/data.n5'})
+
+        >>> _parse_remote_url('http://server.com/data.n5')
+        ('http', {'driver': 'http', 'base_url': 'http://server.com/data.n5'})
+
+        >>> _parse_remote_url('s3://bucket/data.n5')
+        ('s3', {'driver': 's3', 'bucket': 'bucket', 'path': 'data.n5'})
+    """
+    parsed = urlparse(url)
+    scheme = parsed.scheme.lower()
+
+    if scheme in ('http', 'https'):
+        # HTTP/HTTPS URL
+        return 'http', {'driver': 'http', 'base_url': url}
+
+    elif scheme == 's3':
+        # S3 URL: s3://bucket/path
+        bucket = parsed.netloc
+        path = parsed.path.lstrip('/')
+        return 's3', {'driver': 's3', 'bucket': bucket, 'path': path}
+
+    elif scheme == 'gs':
+        # Google Cloud Storage URL: gs://bucket/path
+        bucket = parsed.netloc
+        path = parsed.path.lstrip('/')
+        return 'gcs', {'driver': 'gcs', 'bucket': bucket, 'path': path}
+
+    else:
+        # Local file path (no scheme or file://)
+        path = url if not scheme else parsed.path
+        return 'file', {'driver': 'file', 'path': path}
+
+
+def _is_remote_url(path: str) -> bool:
+    """Check if path is a remote URL."""
+    parsed = urlparse(path)
+    return parsed.scheme.lower() in ('http', 'https', 's3', 'gs')
 
 
 class N5Reader(BaseReader):
@@ -103,12 +156,12 @@ class N5Reader(BaseReader):
             - Lazy evaluation (doesn't read data)
             - Compression handled by TensorStore automatically
         """
+        # Detect URL scheme and use appropriate kvstore driver
+        driver_type, kvstore_spec = _parse_remote_url(self.path)
+
         spec = {
             'driver': 'n5',
-            'kvstore': {
-                'driver': 'file',
-                'path': self.path
-            },
+            'kvstore': kvstore_spec,
             'open': True
         }
 
@@ -127,6 +180,7 @@ class N5Reader(BaseReader):
 
         Reads and parses the N5 attributes.json file which contains
         dataset metadata like dimensions, data type, compression, etc.
+        Supports both local paths and remote URLs (HTTP, S3, GCS).
 
         Returns:
             dict: N5 metadata with keys:
@@ -152,10 +206,24 @@ class N5Reader(BaseReader):
             - Cached after first read for efficiency
             - Returns empty dict if attributes.json not found
             - Custom metadata depends on how N5 was written
+            - For remote URLs, fetches via HTTP/S3/GCS
         """
         if self._metadata_cache is not None:
             return self._metadata_cache
 
+        self._metadata_cache = {}
+
+        if _is_remote_url(self.path):
+            # Remote URL - fetch attributes.json via HTTP
+            self._metadata_cache = self._fetch_remote_metadata()
+        else:
+            # Local path - read from filesystem
+            self._metadata_cache = self._read_local_metadata()
+
+        return self._metadata_cache
+
+    def _read_local_metadata(self) -> Dict:
+        """Read metadata from local filesystem."""
         # Read attributes.json from N5 container
         attributes_path = os.path.join(self._full_path, 'attributes.json')
 
@@ -166,18 +234,54 @@ class N5Reader(BaseReader):
         if os.path.exists(attributes_path):
             try:
                 with open(attributes_path, 'r') as f:
-                    self._metadata_cache = json.load(f)
+                    metadata = json.load(f)
                 # Add 'shape' for consistency with other readers (N5 uses 'dimensions')
-                if 'dimensions' in self._metadata_cache:
-                    self._metadata_cache['shape'] = tuple(self._metadata_cache['dimensions'])
+                if 'dimensions' in metadata:
+                    metadata['shape'] = tuple(metadata['dimensions'])
+                return metadata
             except (json.JSONDecodeError, IOError) as e:
                 print(f"Warning: Failed to read N5 attributes: {e}")
-                self._metadata_cache = {}
+                return {}
         else:
             print(f"Warning: N5 attributes.json not found at {attributes_path}")
-            self._metadata_cache = {}
+            return {}
 
-        return self._metadata_cache
+    def _fetch_remote_metadata(self) -> Dict:
+        """Fetch metadata from remote URL (HTTP/S3/GCS)."""
+        import urllib.request
+        import urllib.error
+
+        # Build URL to attributes.json
+        if self.dataset_path:
+            # URL with dataset path
+            base_url = self.path.rstrip('/')
+            attributes_url = f"{base_url}/{self.dataset_path}/attributes.json"
+        else:
+            attributes_url = f"{self.path.rstrip('/')}/attributes.json"
+
+        try:
+            with urllib.request.urlopen(attributes_url, timeout=30) as response:
+                content = response.read().decode('utf-8')
+                metadata = json.loads(content)
+                # Add 'shape' for consistency with other readers (N5 uses 'dimensions')
+                if 'dimensions' in metadata:
+                    metadata['shape'] = tuple(metadata['dimensions'])
+                return metadata
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                print(f"Warning: N5 attributes.json not found at {attributes_url}")
+            else:
+                print(f"Warning: HTTP error fetching N5 attributes: {e}")
+            return {}
+        except urllib.error.URLError as e:
+            print(f"Warning: URL error fetching N5 attributes: {e}")
+            return {}
+        except json.JSONDecodeError as e:
+            print(f"Warning: Invalid JSON in N5 attributes: {e}")
+            return {}
+        except Exception as e:
+            print(f"Warning: Failed to fetch N5 attributes: {e}")
+            return {}
 
     def get_voxel_sizes(self) -> Dict[str, float]:
         """
