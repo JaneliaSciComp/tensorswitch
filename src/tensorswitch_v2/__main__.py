@@ -512,8 +512,8 @@ def _calculate_wall_time(volume_shape, dtype_str, shard_shape, total_shards, use
     if use_bioio:
         safe_minutes = int(safe_minutes * 10)
 
-    # Cap at 48 hours
-    safe_minutes = max(30, min(safe_minutes, 48 * 60))
+    # Cap at 96 hours (4 days)
+    safe_minutes = max(30, min(safe_minutes, 96 * 60))
     hours = safe_minutes // 60
     minutes = safe_minutes % 60
     return f"{hours}:{minutes:02d}"
