@@ -34,6 +34,8 @@ import numpy as np
 
 os.umask(0o0002)  # Team permissions: rwxrwxr-x
 
+__version__ = "2.0.0-beta"
+
 
 def parse_args(argv=None):
     """Parse command-line arguments."""
@@ -72,6 +74,12 @@ Supported output formats:
         description="TensorSwitch v2: Convert microscopy data between formats with multi-scale pyramid support.",
         epilog=epilog,
         formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+
+    parser.add_argument(
+        "--version", "-V", action="version",
+        version=f"%(prog)s {__version__}",
+        help="Show program version and exit",
     )
 
     # Input/output arguments (not required for --batch_worker mode)
@@ -312,16 +320,40 @@ def validate_output_path(path: str) -> None:
         )
 
 
-def parse_shape(s: str) -> Tuple[int, ...]:
+def parse_shape(s: str, param_name: str = "shape") -> Tuple[int, ...]:
     """Parse a comma-separated shape string into a tuple of ints.
 
     Args:
         s: Shape string like '32,256,256'
+        param_name: Name of the parameter for error messages
 
     Returns:
         Tuple of ints, e.g. (32, 256, 256)
+
+    Raises:
+        ValueError: If shape string is invalid
     """
-    return tuple(int(x.strip()) for x in s.split(","))
+    try:
+        parts = s.split(",")
+        shape = tuple(int(x.strip()) for x in parts)
+
+        # Validate all dimensions are positive
+        for i, dim in enumerate(shape):
+            if dim <= 0:
+                raise ValueError(
+                    f"Invalid {param_name}: '{s}'\n"
+                    f"Dimension {i} has value {dim}, but all dimensions must be positive.\n"
+                    f"Example: --{param_name} 32,256,256"
+                )
+        return shape
+    except ValueError as e:
+        if "invalid literal" in str(e):
+            raise ValueError(
+                f"Invalid {param_name}: '{s}'\n"
+                f"Expected comma-separated integers (e.g., '32,256,256').\n"
+                f"Got non-integer value in: {s}"
+            )
+        raise
 
 
 def create_reader(args):
@@ -415,7 +447,7 @@ def _estimate_shard_info(args, volume_shape, dtype_str):
 
     # Determine chunk shape
     if args.chunk_shape:
-        chunk_shape = parse_shape(args.chunk_shape)
+        chunk_shape = parse_shape(args.chunk_shape, "chunk_shape")
     else:
         chunk_shape = writer.get_default_chunk_shape(volume_shape, dtype_size=dtype_bytes)
 
@@ -423,7 +455,7 @@ def _estimate_shard_info(args, volume_shape, dtype_str):
     use_sharding = args.output_format == "zarr3" and not args.no_sharding
     if use_sharding:
         if args.shard_shape:
-            shard_shape = parse_shape(args.shard_shape)
+            shard_shape = parse_shape(args.shard_shape, "shard_shape")
         else:
             shard_shape = writer.get_default_shard_shape(chunk_shape, volume_shape)
             if shard_shape is None:
@@ -748,8 +780,8 @@ def main(argv=None):
     args = parse_args(argv)
 
     # Parse optional shapes
-    chunk_shape = parse_shape(args.chunk_shape) if args.chunk_shape else None
-    shard_shape = parse_shape(args.shard_shape) if args.shard_shape else None
+    chunk_shape = parse_shape(args.chunk_shape, "chunk_shape") if args.chunk_shape else None
+    shard_shape = parse_shape(args.shard_shape, "shard_shape") if args.shard_shape else None
     verbose = not args.quiet
     use_shard = bool(args.use_shard)
     skip_existing = args.skip_existing and not args.no_skip_existing
