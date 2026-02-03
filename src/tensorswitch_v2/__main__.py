@@ -551,11 +551,18 @@ def _calculate_wall_time(volume_shape, dtype_str, shard_shape, total_shards, use
     return f"{hours}:{minutes:02d}"
 
 
-def submit_job(args):
+def submit_job(args, return_job_id=False):
     """Submit a single LSF bsub job that re-invokes tensorswitch_v2.
 
     Constructs a bsub command with the same conversion arguments (minus
     --submit and LSF-only flags) so the job runs conversion on a cluster node.
+
+    Args:
+        args: Parsed command-line arguments
+        return_job_id: If True, return the job ID instead of None
+
+    Returns:
+        Job ID string if return_job_id=True and submission succeeded, else None
     """
     if not args.project:
         raise ValueError(
@@ -671,13 +678,22 @@ def submit_job(args):
     result = subprocess.run(command, capture_output=True, text=True)
 
     if result.returncode == 0:
-        print("Job submitted successfully.")
-        print(result.stdout.strip())
+        if not return_job_id:
+            print("Job submitted successfully.")
+            print(result.stdout.strip())
+        # Extract job ID from bsub output: "Job <12345> is submitted..."
+        import re
+        match = re.search(r'Job <(\d+)>', result.stdout)
+        job_id = match.group(1) if match else None
+        if return_job_id:
+            return job_id
     else:
         print(f"Job submission failed (exit code {result.returncode}).")
         if result.stderr:
             print(result.stderr.strip())
         raise RuntimeError(f"bsub failed with exit code {result.returncode}")
+
+    return None
 
 
 def submit_downsample_job(args, cumulative_factors):
@@ -1109,7 +1125,7 @@ def main(argv=None):
             )
         return
 
-    # Standard conversion mode (s0)
+    # Standard conversion mode (single level / s0)
     if args.submit:
         submit_job(args)
         return

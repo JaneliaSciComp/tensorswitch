@@ -462,9 +462,57 @@ pixi run python -m tensorswitch_v2 \
   --dry_run
 ```
 
+### Rechunking (Same Format, Different Chunks)
+
+For rechunking existing data (e.g., N5 → N5 with different chunk shape), the **output path determines the behavior**:
+
+```bash
+# FORMAT CONVERSION: N5 → Zarr3 (different format)
+# Output to .zarr → converts to Zarr3 s0, then use --auto_multiscale for pyramid
+pixi run python -m tensorswitch_v2 \
+  -i /source/dataset.n5/setup0/timepoint0/s0 \
+  -o /output/dataset.zarr/s0 \
+  --output_format zarr3 \
+  --submit -P scicompsoft
+
+# RECHUNK: N5 → N5 (same format, new chunks)
+# Output to same level path (s0, s1, etc.) → rechunks with new chunk shape
+pixi run python -m tensorswitch_v2 \
+  -i /source/dataset.n5/setup0/timepoint0/s0 \
+  -o /output/dataset.n5/setup0/timepoint0/s0 \
+  --output_format n5 \
+  --chunk_shape 128,128,128 \
+  --submit -P liconn
+```
+
+**Key distinction**: When output format matches input format AND output path ends with a level (s0, s1, etc.), this is a rechunk operation.
+
+For datasets with multiple levels (like Keller lab N5), use a shell script to rechunk all levels in parallel:
+
+```bash
+# Rechunk all levels in parallel (shell script approach)
+for level in {0..4}; do
+  case $level in
+    0) cores=8 ;;
+    1) cores=4 ;;
+    *) cores=2 ;;
+  esac
+
+  pixi run python -m tensorswitch_v2 \
+    -i "/source/dataset.n5/setup0/timepoint0/s${level}" \
+    -o "/output/dataset.n5/setup0/timepoint0/s${level}" \
+    --output_format n5 \
+    --chunk_shape 128,128,128 \
+    --cores ${cores} \
+    --submit -P liconn
+done
+```
+
 ---
 
 ## LSF Cluster Submission
+
+> **Note**: The `-P` flag specifies your LSF project for job accounting. Replace `scicompsoft` with your own lab's project code (e.g., `-P ahrens`, `-P liconn`, `-P tavakoli`). Contact Scientific Computing if you don't know your project code.
 
 ### Auto-Calculated Resources
 
