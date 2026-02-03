@@ -412,6 +412,28 @@ pixi run python -m tensorswitch_v2 --downsample \
   --cumulative_factors 1,4,4
 ```
 
+### Batch Pyramid Generation
+
+Generate pyramids for multiple datasets at once (e.g., after batch conversion):
+
+```bash
+# Step 1: Batch convert TIFFs to Zarr3
+pixi run python -m tensorswitch_v2 \
+  -i /path/to/tiff_directory/ \
+  -o /path/to/zarr_output/ \
+  --pattern "*.tif" \
+  --submit -P scicompsoft --max_concurrent 100
+
+# Step 2: Batch generate pyramids for all zarr files
+pixi run python -m tensorswitch_v2 --auto_multiscale \
+  -i /path/to/zarr_output/ \
+  --pattern "*.zarr" \
+  --max_concurrent 50 \
+  --submit -P scicompsoft
+```
+
+Each dataset gets its own coordinator job that handles chained pyramid generation.
+
 ---
 
 ## Batch Processing

@@ -907,7 +907,101 @@ def main(argv=None):
     if args.auto_multiscale:
         from .core.pyramid import PyramidPlanner, create_pyramid_parallel
         from tensorswitch.utils import update_ome_metadata_if_needed
+        import glob as glob_module
 
+        # Detect batch mode: input is directory + pattern specified + not a single zarr/n5
+        input_path = args.input.rstrip('/')
+        is_batch_mode = (
+            os.path.isdir(input_path) and
+            not input_path.endswith('.zarr') and
+            not input_path.endswith('.n5') and
+            not os.path.exists(os.path.join(input_path, 'zarr.json')) and
+            not os.path.exists(os.path.join(input_path, '.zarray')) and
+            not os.path.exists(os.path.join(input_path, 's0'))
+        )
+
+        # Batch downsampling mode: process multiple datasets
+        if is_batch_mode and args.submit:
+            if not args.project:
+                raise ValueError("--project is required with --submit")
+
+            # Find all matching datasets
+            pattern = args.pattern if args.pattern != "*.tif" else "*.zarr"
+            search_pattern = os.path.join(input_path, pattern)
+
+            # Handle patterns like "*.zarr" or "setup*/timepoint0"
+            matches = sorted(glob_module.glob(search_pattern))
+
+            if not matches:
+                print(f"No datasets found matching pattern: {search_pattern}")
+                return
+
+            # For each match, find s0 path
+            datasets = []
+            for match in matches:
+                if match.endswith('/s0') or match.endswith('\\s0'):
+                    s0_path = match
+                elif os.path.exists(os.path.join(match, 's0')):
+                    s0_path = os.path.join(match, 's0')
+                elif os.path.exists(os.path.join(match, 'zarr.json')) or os.path.exists(os.path.join(match, '.zarray')):
+                    s0_path = match  # This is the s0 level directly
+                else:
+                    print(f"Warning: Skipping {match} - no s0 found")
+                    continue
+                datasets.append(s0_path)
+
+            if not datasets:
+                print("No valid datasets with s0 found.")
+                return
+
+            print(f"\n{'='*60}")
+            print(f"BATCH PYRAMID GENERATION")
+            print(f"{'='*60}")
+            print(f"Found {len(datasets)} datasets to process")
+            print(f"Max concurrent coordinator jobs: {args.max_concurrent}")
+            print()
+
+            # Submit coordinator job for each dataset
+            all_coordinator_jobs = []
+            for i, s0_path in enumerate(datasets):
+                root_path = os.path.dirname(s0_path)
+                dataset_name = os.path.basename(root_path)
+
+                print(f"[{i+1}/{len(datasets)}] Submitting pyramid for: {dataset_name}")
+
+                try:
+                    result = create_pyramid_parallel(
+                        s0_path=s0_path,
+                        project=args.project,
+                        memory=args.memory,
+                        wall_time=args.wall_time,
+                        cores=args.cores,
+                        use_shard=use_shard,
+                        dry_run=False,
+                        verbose=False,  # Reduce output in batch mode
+                    )
+                    coordinator_jid = result.get('coordinator_job_id')
+                    num_levels = result.get('pyramid_plan', {}).get('num_levels', 0)
+                    if coordinator_jid:
+                        all_coordinator_jobs.append(coordinator_jid)
+                        print(f"  → Coordinator job {coordinator_jid} ({num_levels} levels)")
+                except Exception as e:
+                    print(f"  → Error: {e}")
+
+                # Respect max_concurrent by waiting if we've hit the limit
+                if len(all_coordinator_jobs) >= args.max_concurrent and i < len(datasets) - 1:
+                    # Wait for oldest coordinator to finish before submitting more
+                    oldest_job = all_coordinator_jobs.pop(0)
+                    print(f"  (Waiting for job {oldest_job} to complete before continuing...)")
+                    os.system(f"bwait -w 'ended({oldest_job})' > /dev/null 2>&1")
+
+            print(f"\n{'='*60}")
+            print(f"BATCH SUBMISSION COMPLETE")
+            print(f"Submitted {len(all_coordinator_jobs)} coordinator jobs")
+            print(f"{'='*60}")
+            return
+
+        # Single dataset mode (original behavior)
         # Determine s0 path and root path
         # Input can be either the s0 path directly or the root zarr path
         s0_path = args.input
