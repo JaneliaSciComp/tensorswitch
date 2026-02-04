@@ -1677,7 +1677,9 @@ def create_zarr3_ome_metadata(ome_xml, array_shape, image_name, pixel_sizes=None
     def get_axis_type(axis_name):
         if axis_name == 'c':
             return 'channel'
-        elif axis_name == 't':
+        elif axis_name in ['t', 'v']:
+            # 'v' (view) treated as time so viewers show it as a slider
+            # rather than as a 4th spatial dimension (which breaks display)
             return 'time'
         else:
             return 'space'

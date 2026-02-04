@@ -530,10 +530,9 @@ class Zarr2Writer(BaseWriter):
                 return "space"
             elif axis_lower == 'c':
                 return "channel"
-            elif axis_lower == 't':
+            elif axis_lower in ['t', 'v']:
+                # 'v' (view) treated as time so viewers show it as a slider
                 return "time"
-            elif axis_lower == 'v':
-                return "space"  # View axis treated as space for multi-view
             else:
                 return "space"  # Default to space for unknown axes
 
