@@ -657,7 +657,7 @@ pixi run python -m tensorswitch_v2 --auto_multiscale \
 ### Example 5: CZI Multi-View Conversion
 
 ```bash
-# Convert all views as 5D VCZYX
+# Convert all views as 5D TCZYX (views mapped to time axis for viewer compatibility)
 pixi run python -m tensorswitch_v2 \
   -i /data/multiview.czi \
   -o /output/multiview.zarr \

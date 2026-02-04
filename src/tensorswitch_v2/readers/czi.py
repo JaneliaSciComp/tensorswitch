@@ -81,7 +81,7 @@ class CZIReader(BaseReader):
             'schema': {
                 'dtype': str(self._dask_array.dtype),
                 'shape': list(self._dask_array.shape),
-                'dimension_names': self._axes_order or self._infer_dimension_names(self._dask_array.shape)
+                'dimension_names': self.axes_order or self._infer_dimension_names(self._dask_array.shape)
             }
         }
         return spec
@@ -102,7 +102,7 @@ class CZIReader(BaseReader):
             raw_xml, voxel_sizes = extract_czi_metadata(self.path)
             self._metadata_cache = {
                 'raw_xml': raw_xml,
-                'axes_order': self._axes_order,
+                'axes_order': self.axes_order,  # Use property (converts 'v' to 't')
                 'voxel_size_x': voxel_sizes.get('x', 1.0) if voxel_sizes else 1.0,
                 'voxel_size_y': voxel_sizes.get('y', 1.0) if voxel_sizes else 1.0,
                 'voxel_size_z': voxel_sizes.get('z', 1.0) if voxel_sizes else 1.0,
@@ -112,7 +112,7 @@ class CZIReader(BaseReader):
         except Exception as e:
             print(f"Warning: Failed to extract CZI metadata: {e}")
             self._metadata_cache = {
-                'axes_order': self._axes_order,
+                'axes_order': self.axes_order,  # Use property (converts 'v' to 't')
                 'shape': tuple(self._dask_array.shape),
                 'dtype': str(self._dask_array.dtype),
             }
@@ -157,7 +157,8 @@ class CZIReader(BaseReader):
                 axes.append({'name': 't', 'type': 'time', 'unit': 'second'})
                 scale.append(1.0)
             elif axis_name == 'v':
-                axes.append({'name': 'v', 'type': 'space'})
+                # 'v' (view) renamed to 't' and treated as time so viewers show it as a slider
+                axes.append({'name': 't', 'type': 'time'})
                 scale.append(1.0)
             else:
                 axes.append({'name': axis_name})
@@ -179,9 +180,10 @@ class CZIReader(BaseReader):
 
     @property
     def axes_order(self) -> List[str]:
-        """Get the CZI axes order (e.g., ['v', 'c', 'z', 'y', 'x'])."""
+        """Get the CZI axes order (e.g., ['t', 'c', 'z', 'y', 'x'])."""
         self._load()
-        return self._axes_order
+        # Rename 'v' to 't' for viewer compatibility (Neuroglancer needs 't' not 'v')
+        return ['t' if ax == 'v' else ax for ax in self._axes_order]
 
     def _infer_dimension_names(self, shape):
         """Infer dimension names from array shape."""
