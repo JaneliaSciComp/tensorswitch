@@ -59,6 +59,7 @@ class Writers:
         compression_level: int = 5,
         use_ome_structure: bool = True,
         level_path: str = "s0",
+        include_omero: bool = False,
         **kwargs
     ) -> BaseWriter:
         """
@@ -102,7 +103,8 @@ class Writers:
             compression=compression,
             compression_level=compression_level,
             use_ome_structure=use_ome_structure,
-            level_path=level_path
+            level_path=level_path,
+            include_omero=include_omero
         )
 
     @staticmethod
@@ -111,6 +113,7 @@ class Writers:
         compression: str = "zstd",
         compression_level: int = 5,
         level_path: str = "0",
+        include_omero: bool = False,
         **kwargs
     ) -> BaseWriter:
         """
@@ -153,7 +156,8 @@ class Writers:
             output_path=output_path,
             compression=compression,
             compression_level=compression_level,
-            level_path=level_path
+            level_path=level_path,
+            include_omero=include_omero
         )
 
     @staticmethod

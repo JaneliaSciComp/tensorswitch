@@ -19,6 +19,7 @@ from .base import BaseWriter
 from tensorswitch.utils import (
     zarr2_store_spec,
     get_tensorstore_context,
+    extract_omero_channels,
 )
 
 
@@ -54,7 +55,8 @@ class Zarr2Writer(BaseWriter):
         output_path: str,
         compression: str = "zstd",
         compression_level: int = 5,
-        level_path: str = "0"
+        level_path: str = "0",
+        include_omero: bool = False
     ):
         """
         Initialize Zarr2 writer.
@@ -64,11 +66,13 @@ class Zarr2Writer(BaseWriter):
             compression: Compression codec ("zstd", "blosc", "gzip")
             compression_level: Compression level (1-9, default 5)
             level_path: Level subdirectory name (default "0" for OME-NGFF compatibility)
+            include_omero: Extract and include structured omero channel metadata
         """
         super().__init__(output_path)
         self.compression = compression
         self.compression_level = compression_level
         self.level_path = level_path
+        self.include_omero = include_omero
         self._store = None
         self._spec = None
         self._axes_order = None  # Original axes from source
@@ -456,6 +460,15 @@ class Zarr2Writer(BaseWriter):
             image_name=image_name,
             axes_order=axes_order
         )
+
+        # Add omero channel metadata if requested
+        if self.include_omero and ome_xml:
+            omero_channels = extract_omero_channels(ome_xml)
+            if omero_channels:
+                ome_metadata['omero'] = {
+                    "channels": omero_channels,
+                    "rdefs": {"model": "color"}
+                }
 
         # Add ome_xml to metadata if provided
         if ome_xml:

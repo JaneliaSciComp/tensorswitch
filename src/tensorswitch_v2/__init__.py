@@ -11,30 +11,33 @@ Architecture Overview:
     Layer 4: User Interface (CLI/GUI) - User-facing
 
 Hybrid Reader Strategy:
-    Tier 1 (Native TensorStore): N5, Zarr2/3, Precomputed - ⚡ Maximum performance
-    Tier 2 (Custom Optimized): TIFF, ND2, IMS, HDF5 - ✅ Production ready
-    Tier 3 (BIOIO Adapter): CZI, LIF, + 20 more - 📦 Broad compatibility
+    Tier 1 (Native TensorStore): N5, Zarr2/3, Precomputed - Maximum performance
+    Tier 2 (Custom Optimized): TIFF, ND2, IMS, HDF5, CZI - Production ready
+    Tier 3 (BIOIO Adapter): LIF, + 20 more - Broad compatibility
 
 Usage Example:
-    >>> from tensorswitch_v2.api import TensorSwitchDataset
+    >>> from tensorswitch_v2.api import TensorSwitchDataset, Readers, Writers
     >>> dataset = TensorSwitchDataset("/path/to/data.tif")
     >>> ts_array = dataset.get_tensorstore_array()
     >>> metadata = dataset.get_ome_ngff_metadata()
 
-Development Status:
-    Branch: unified-architecture
-    Phase: 5.1 - Design & Foundation (Week 1)
-    Target: March 21, 2026 (10 weeks)
+CLI Usage:
+    $ python -m tensorswitch_v2 -i input.tif -o output.zarr
+    $ python -m tensorswitch_v2 --auto_multiscale -i dataset.zarr/s0 -o dataset.zarr
+    $ tensorswitch-v2 -i input.tif -o output.zarr  # After pip install
 
-For detailed architecture, see: phase5UnifiedIntermediateFormat.md
+For detailed documentation, see: src/tensorswitch_v2/README.md
 """
 
-__version__ = 'Phase 5 Development'
+__version__ = '2.0.0-beta'
 __author__ = 'Diyi Chen'
 
-# Public API will be exported here as components are built
-# Example (when complete):
-# from .api import TensorSwitchDataset, Readers, Writers
-# from .core import DistributedConverter
+# Public API exports
+from .api import TensorSwitchDataset, Readers, Writers
 
-__all__ = []
+__all__ = [
+    '__version__',
+    'TensorSwitchDataset',
+    'Readers',
+    'Writers',
+]

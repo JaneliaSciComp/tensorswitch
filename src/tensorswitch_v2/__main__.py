@@ -244,6 +244,14 @@ Supported output formats:
         "--dry_run", action="store_true",
         help="Show what would be done without actually doing it",
     )
+    parser.add_argument(
+        "--show_spec", action="store_true",
+        help="Show input/output TensorStore specs and conversion summary, then exit without converting",
+    )
+    parser.add_argument(
+        "--omero", action="store_true",
+        help="Include structured omero channel metadata (extracted from OME-XML) for visualization tools",
+    )
 
     # Batch worker mode (used by LSF job array)
     parser.add_argument(
@@ -401,6 +409,7 @@ def create_writer(args):
             compression=args.compression,
             compression_level=args.compression_level,
             level_path=level_path,
+            include_omero=getattr(args, 'omero', False),
         )
     elif fmt == "zarr2":
         return Writers.zarr2(
@@ -408,6 +417,7 @@ def create_writer(args):
             compression=args.compression,
             compression_level=args.compression_level,
             level_path=level_path,
+            include_omero=getattr(args, 'omero', False),
         )
     elif fmt == "n5":
         return Writers.n5(
@@ -791,6 +801,125 @@ def submit_downsample_job(args, cumulative_factors):
         raise RuntimeError(f"bsub failed with exit code {result.returncode}")
 
 
+def show_conversion_spec(reader, writer, args, chunk_shape, shard_shape):
+    """Print input/output specs and conversion summary without converting.
+
+    Args:
+        reader: Configured reader instance
+        writer: Configured writer instance
+        args: Parsed CLI arguments
+        chunk_shape: Parsed chunk shape tuple or None
+        shard_shape: Parsed shard shape tuple or None
+    """
+    import json
+
+    print("\n" + "=" * 72)
+    print("TENSORSWITCH V2 - CONVERSION SPEC PREVIEW")
+    print("=" * 72)
+
+    # Input spec
+    print("\n--- INPUT ---")
+    print(f"Path: {args.input}")
+    print(f"Reader: {type(reader).__name__}")
+
+    metadata = reader.get_metadata()
+    print(f"Shape: {metadata.get('shape')}")
+    print(f"Dtype: {metadata.get('dtype')}")
+
+    voxel_sizes = reader.get_voxel_sizes()
+    if voxel_sizes:
+        print(f"Voxel sizes: {voxel_sizes}")
+
+    # Try to get TensorStore spec (may not be available for all readers)
+    try:
+        input_spec = reader.get_tensorstore_spec()
+        print(f"\nTensorStore spec:")
+        # Simplify for display
+        display_spec = {
+            "driver": input_spec.get("driver"),
+            "dtype": input_spec.get("dtype"),
+        }
+        if "kvstore" in input_spec:
+            kvstore = input_spec["kvstore"]
+            if isinstance(kvstore, dict):
+                display_spec["kvstore"] = kvstore.get("driver", kvstore)
+        print(json.dumps(display_spec, indent=2, default=str))
+    except Exception as e:
+        print(f"(TensorStore spec not available: {e})")
+
+    # Output spec
+    print("\n--- OUTPUT ---")
+    print(f"Path: {args.output}")
+    print(f"Format: {args.output_format}")
+    print(f"Writer: {type(writer).__name__}")
+
+    input_shape = metadata.get('shape', ())
+
+    # Show 5D expansion for Zarr
+    if args.output_format in ['zarr3', 'zarr2']:
+        # Zarr writers expand to 5D TCZYX
+        ndim = len(input_shape)
+        if ndim == 3:
+            expanded_shape = (1, 1) + tuple(input_shape)  # Add T, C
+            print(f"Shape: {input_shape} → {expanded_shape} (5D TCZYX expansion)")
+        elif ndim == 4:
+            expanded_shape = (1,) + tuple(input_shape)  # Add T
+            print(f"Shape: {input_shape} → {expanded_shape} (5D TCZYX expansion)")
+        else:
+            print(f"Shape: {input_shape}")
+    else:
+        print(f"Shape: {input_shape}")
+
+    # Chunk/shard info
+    effective_chunk = chunk_shape or (128, 128, 128)
+    print(f"Chunk shape: {effective_chunk}")
+
+    if args.output_format == 'zarr3' and shard_shape:
+        print(f"Shard shape: {shard_shape}")
+    elif args.output_format == 'zarr3':
+        print(f"Shard shape: (auto-calculated)")
+
+    print(f"Compression: {args.compression or 'zstd'} (level {args.compression_level or 5})")
+
+    # Conversion summary
+    print("\n--- CONVERSION SUMMARY ---")
+
+    # Calculate total chunks
+    from tensorswitch.utils import get_total_chunks_from_store
+    try:
+        # Estimate chunks based on shape and chunk size
+        shape = input_shape
+        chunks = effective_chunk
+        total_chunks = 1
+        for i, (s, c) in enumerate(zip(shape, chunks)):
+            total_chunks *= (s + c - 1) // c
+        print(f"Estimated chunks: {total_chunks:,}")
+    except Exception:
+        print(f"Estimated chunks: (calculation not available)")
+
+    # Estimate output size
+    dtype_sizes = {'uint8': 1, 'uint16': 2, 'uint32': 4, 'float32': 4, 'float64': 8}
+    dtype = str(metadata.get('dtype', 'uint16'))
+    dtype_size = dtype_sizes.get(dtype, 2)
+    raw_size = np.prod(input_shape) * dtype_size
+    # Assume ~50% compression ratio for zstd
+    estimated_size = raw_size * 0.5
+
+    def format_size(size_bytes):
+        for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
+            if size_bytes < 1024:
+                return f"{size_bytes:.1f} {unit}"
+            size_bytes /= 1024
+        return f"{size_bytes:.1f} PB"
+
+    print(f"Raw data size: {format_size(raw_size)}")
+    print(f"Estimated output: ~{format_size(estimated_size)} (assuming ~50% compression)")
+
+    print("\n" + "=" * 72)
+    print("(No conversion performed - remove --show_spec to convert)")
+    print("=" * 72 + "\n")
+
+
 def main(argv=None):
     """Run single-process conversion, downsampling, or submit LSF job."""
     args = parse_args(argv)
@@ -1132,6 +1261,11 @@ def main(argv=None):
 
     reader = create_reader(args)
     writer = create_writer(args)
+
+    # Handle --show_spec: print specs and exit without converting
+    if args.show_spec:
+        show_conversion_spec(reader, writer, args, chunk_shape, shard_shape)
+        return
 
     from .core.converter import DistributedConverter
 

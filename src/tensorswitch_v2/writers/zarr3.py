@@ -55,7 +55,8 @@ class Zarr3Writer(BaseWriter):
         compression: str = "zstd",
         compression_level: int = 5,
         use_ome_structure: bool = True,
-        level_path: str = "s0"
+        level_path: str = "s0",
+        include_omero: bool = False
     ):
         """
         Initialize Zarr3 writer.
@@ -67,6 +68,7 @@ class Zarr3Writer(BaseWriter):
             compression_level: Compression level (1-9, default 5)
             use_ome_structure: Use OME-ZARR directory structure (s0/, s1/, etc.)
             level_path: Level subdirectory name (default "s0")
+            include_omero: Extract and include structured omero channel metadata
         """
         super().__init__(output_path)
         self.use_sharding = use_sharding
@@ -74,6 +76,7 @@ class Zarr3Writer(BaseWriter):
         self.compression_level = compression_level
         self.use_ome_structure = use_ome_structure
         self.level_path = level_path
+        self.include_omero = include_omero
         self._store = None
         self._spec = None
         # 5D expansion tracking
@@ -453,7 +456,8 @@ class Zarr3Writer(BaseWriter):
             array_shape=array_shape,
             image_name=image_name,
             pixel_sizes=voxel_sizes,
-            axes_order=axes_order
+            axes_order=axes_order,
+            include_omero=self.include_omero
         )
 
         # Write to zarr.json at root

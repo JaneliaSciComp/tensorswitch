@@ -29,6 +29,9 @@ classifiers = [
 ]
 
 
+[project.scripts]
+tensorswitch-v2 = "tensorswitch_v2.__main__:main"
+
 [project.urls]
 Homepage = "https://github.com/JaneliaSciComp/tensorswitch"
 Issues = "https://github.com/JaneliaSciComp/tensorswitch/issues"

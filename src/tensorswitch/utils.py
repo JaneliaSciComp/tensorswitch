@@ -1602,7 +1602,65 @@ def convert_ome_to_zarr3_metadata(ome_metadata, array_shape, image_name=None):
         return create_zarr3_ome_metadata(ome_metadata, array_shape, image_name or "image")
 
 
-def create_zarr3_ome_metadata(ome_xml, array_shape, image_name, pixel_sizes=None, axes_order=None):
+def extract_omero_channels(ome_xml: str) -> list:
+    """Extract channel info from OME-XML for omero metadata block.
+
+    Per OME-NGFF spec, the omero block provides structured channel metadata
+    for visualization tools (napari, OMERO, BigDataViewer).
+
+    Args:
+        ome_xml: Raw OME-XML string containing Channel elements
+
+    Returns:
+        List of channel dicts with label, color, and window info,
+        or None if no channels found or parsing fails.
+    """
+    import re
+
+    if not ome_xml or not isinstance(ome_xml, str):
+        return None
+
+    channels = []
+
+    # First, find all Channel elements (with or without namespace)
+    # This handles both <Channel ...> and <OME:Channel ...>
+    channel_pattern = r'<(?:OME:)?Channel\s+([^>]+)>'
+
+    for channel_match in re.finditer(channel_pattern, ome_xml):
+        attrs = channel_match.group(1)
+
+        # Extract Name attribute
+        name_match = re.search(r'Name\s*=\s*"([^"]*)"', attrs)
+        if not name_match:
+            continue
+        name = name_match.group(1)
+
+        # Extract Color attribute
+        color_match = re.search(r'Color\s*=\s*"(-?\d+)"', attrs)
+        if not color_match:
+            continue
+        color_int = int(color_match.group(1))
+
+        # Convert integer color (ARGB) to hex RGB
+        # OME uses ARGB integer: 65280 = 0x0000FF00 = green
+        # Handle negative values (signed 32-bit)
+        if color_int < 0:
+            color_int = color_int & 0xFFFFFFFF
+        r = (color_int >> 16) & 0xFF
+        g = (color_int >> 8) & 0xFF
+        b = color_int & 0xFF
+        color_hex = f"{r:02X}{g:02X}{b:02X}"
+
+        channels.append({
+            "label": name,
+            "color": color_hex,
+            "window": {"start": 0, "end": 65535, "min": 0, "max": 65535}
+        })
+
+    return channels if channels else None
+
+
+def create_zarr3_ome_metadata(ome_xml, array_shape, image_name, pixel_sizes=None, axes_order=None, include_omero=False):
     """Create OME-ZARR metadata structure for zarr3 format.
 
     Args:
@@ -1612,6 +1670,7 @@ def create_zarr3_ome_metadata(ome_xml, array_shape, image_name, pixel_sizes=None
         pixel_sizes: Dict with 'x', 'y', 'z' voxel sizes in micrometers
         axes_order: List of axis names (e.g., ["v", "c", "z", "y", "x"] for CZI multi-view)
                     If provided, this overrides the automatic detection
+        include_omero: If True, extract and add omero channel metadata from ome_xml
     """
 
     # Helper to determine axis type from name
@@ -1719,6 +1778,15 @@ def create_zarr3_ome_metadata(ome_xml, array_shape, image_name, pixel_sizes=None
         }
     }
     
+    # Add omero channel metadata if requested
+    if include_omero and ome_xml:
+        omero_channels = extract_omero_channels(ome_xml)
+        if omero_channels:
+            metadata["attributes"]["ome"]["omero"] = {
+                "channels": omero_channels,
+                "rdefs": {"model": "color"}
+            }
+
     # Add OME XML if available - ensure it's a string at same level as ome (not inside ome)
     if ome_xml:
         if isinstance(ome_xml, str):

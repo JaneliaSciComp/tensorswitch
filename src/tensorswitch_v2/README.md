@@ -73,35 +73,63 @@ A high-performance microscopy data conversion tool with TensorStore as the unifi
 
 ## Installation
 
-TensorSwitch v2 is part of the TensorSwitch package. Ensure you have the pixi environment set up:
+TensorSwitch v2 is part of the TensorSwitch package.
+
+### Option 1: Pixi Environment (Recommended for Janelia)
 
 ```bash
 cd /path/to/tensorswitch
 pixi install
 ```
 
-Verify installation:
+### Option 2: Pip Install
 
 ```bash
-pixi run python -m tensorswitch_v2 --version
+# From local checkout (editable mode for development)
+pip install -e /path/to/tensorswitch
+
+# From GitHub
+pip install git+https://github.com/JaneliaSciComp/tensorswitch.git@unified-architecture
+```
+
+### Verify Installation
+
+```bash
+# Using pixi
+pixi run tensorswitch-v2 --version
 # Output: tensorswitch_v2 2.0.0-beta
+
+# Or using module syntax
+pixi run python -m tensorswitch_v2 --version
+
+# After pip install (no pixi needed)
+tensorswitch-v2 --version
+```
+
+### Python API
+
+```python
+from tensorswitch_v2 import __version__, TensorSwitchDataset, Readers, Writers
+print(__version__)  # 2.0.0-beta
 ```
 
 ---
 
 ## Quick Start
 
+> **Note**: Examples below show `pixi run` prefix for Janelia cluster. If you installed via pip, omit `pixi run`.
+
 ### Single File Conversion
 
 ```bash
 # Convert TIFF to Zarr3 (auto-detect format)
-pixi run python -m tensorswitch_v2 -i input.tif -o output.zarr
+pixi run tensorswitch-v2 -i input.tif -o output.zarr
 
 # Convert ND2 to Zarr3 with custom chunk shape
-pixi run python -m tensorswitch_v2 -i input.nd2 -o output.zarr --chunk_shape 32,256,256
+pixi run tensorswitch-v2 -i input.nd2 -o output.zarr --chunk_shape 32,256,256
 
 # Convert to Zarr2 format
-pixi run python -m tensorswitch_v2 -i input.tif -o output.zarr --output_format zarr2
+pixi run tensorswitch-v2 -i input.tif -o output.zarr --output_format zarr2
 ```
 
 ### Generate Multi-Scale Pyramid
@@ -133,6 +161,8 @@ pixi run python -m tensorswitch_v2 -i input.tif -o output.zarr \
 | `--output_format` | Output format: `zarr3`, `zarr2`, `n5` | `zarr3` |
 | `-V, --version` | Show version | - |
 | `--quiet` | Suppress progress output | False |
+| `--show_spec` | Preview conversion specs without running | False |
+| `--omero` | Include structured omero channel metadata | False |
 
 ### Chunk/Shard Configuration
 
