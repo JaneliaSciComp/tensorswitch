@@ -457,12 +457,12 @@ pixi run python -m tensorswitch_v2 \
 # Step 2: Batch generate pyramids for all zarr files
 pixi run python -m tensorswitch_v2 --auto_multiscale \
   -i /path/to/zarr_output/ \
-  --pattern "*.zarr" \
+  --pattern '*.zarr' \
   --max_concurrent 50 \
   --submit -P scicompsoft
 ```
 
-Each dataset gets its own coordinator job that handles chained pyramid generation.
+Each dataset gets its own coordinator job that spawns chained downsampling jobs.
 
 ---
 
@@ -643,7 +643,18 @@ pixi run python -m tensorswitch_v2 \
   --max_concurrent 50
 ```
 
-### Example 3: CZI Multi-View Conversion
+### Example 3: Batch Pyramid Generation
+
+```bash
+# Generate pyramids for all zarr files in a directory
+pixi run python -m tensorswitch_v2 --auto_multiscale \
+  -i /output/zarr_files/ \
+  --pattern '*.zarr' \
+  --max_concurrent 50 \
+  --submit -P scicompsoft
+```
+
+### Example 5: CZI Multi-View Conversion
 
 ```bash
 # Convert all views as 5D VCZYX
@@ -660,7 +671,7 @@ pixi run python -m tensorswitch_v2 \
   --submit -P scicompsoft
 ```
 
-### Example 4: Python API Conversion
+### Example 6: Python API Conversion
 
 ```python
 from tensorswitch_v2.api import Readers, Writers

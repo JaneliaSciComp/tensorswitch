@@ -966,7 +966,21 @@ def main(argv=None):
                 "Provide the input file or directory path.\n"
                 "Example: pixi run python -m tensorswitch_v2 -i input.tif -o output.zarr"
             )
-        if not args.output:
+
+        # Check if this is batch pyramid mode (auto_multiscale + directory of zarrs)
+        # In this mode, -o is not required because pyramids are written into each zarr
+        is_batch_pyramid_mode = False
+        if args.auto_multiscale and args.input:
+            input_path = args.input.rstrip('/')
+            # Batch mode: directory containing multiple .zarr subdirectories
+            # NOT batch mode: path ends with .zarr/.n5, or has s0/.zarray inside (single dataset)
+            if os.path.isdir(input_path) and not input_path.endswith('.zarr') and not input_path.endswith('.n5'):
+                has_s0 = os.path.exists(os.path.join(input_path, 's0'))
+                has_zarray = os.path.exists(os.path.join(input_path, '.zarray'))
+                zarr_subdirs = [d for d in os.listdir(input_path) if d.endswith('.zarr') and os.path.isdir(os.path.join(input_path, d))]
+                is_batch_pyramid_mode = len(zarr_subdirs) > 0 and not has_s0 and not has_zarray
+
+        if not args.output and not is_batch_pyramid_mode:
             raise ValueError(
                 "Missing required argument: --output/-o\n"
                 "Provide the output path.\n"
@@ -975,7 +989,8 @@ def main(argv=None):
 
         # Validate paths exist and are accessible
         validate_input_path(args.input, allow_directory=True)
-        validate_output_path(args.output)
+        if args.output:
+            validate_output_path(args.output)
 
     # Handle status check mode
     if args.status:
@@ -1054,16 +1069,15 @@ def main(argv=None):
         from tensorswitch.utils import update_ome_metadata_if_needed
         import glob as glob_module
 
-        # Detect batch mode: input is directory + pattern specified + not a single zarr/n5
+        # Detect batch mode: directory containing multiple .zarr subdirectories
+        # NOT batch mode: path ends with .zarr/.n5, or has s0/.zarray inside (single dataset)
         input_path = args.input.rstrip('/')
-        is_batch_mode = (
-            os.path.isdir(input_path) and
-            not input_path.endswith('.zarr') and
-            not input_path.endswith('.n5') and
-            not os.path.exists(os.path.join(input_path, 'zarr.json')) and
-            not os.path.exists(os.path.join(input_path, '.zarray')) and
-            not os.path.exists(os.path.join(input_path, 's0'))
-        )
+        is_batch_mode = False
+        if os.path.isdir(input_path) and not input_path.endswith('.zarr') and not input_path.endswith('.n5'):
+            has_s0 = os.path.exists(os.path.join(input_path, 's0'))
+            has_zarray = os.path.exists(os.path.join(input_path, '.zarray'))
+            zarr_subdirs = [d for d in os.listdir(input_path) if d.endswith('.zarr') and os.path.isdir(os.path.join(input_path, d))]
+            is_batch_mode = len(zarr_subdirs) > 0 and not has_s0 and not has_zarray
 
         # Batch downsampling mode: process multiple datasets
         if is_batch_mode and args.submit:
@@ -1108,11 +1122,18 @@ def main(argv=None):
 
             # Submit coordinator job for each dataset
             all_coordinator_jobs = []
+            skipped_count = 0
             for i, s0_path in enumerate(datasets):
                 root_path = os.path.dirname(s0_path)
                 dataset_name = os.path.basename(root_path)
 
-                print(f"[{i+1}/{len(datasets)}] Submitting pyramid for: {dataset_name}")
+                # Skip if s1 already exists (pyramid already generated)
+                s1_path = os.path.join(root_path, 's1')
+                if skip_existing and os.path.exists(s1_path):
+                    skipped_count += 1
+                    continue
+
+                print(f"[{i+1-skipped_count}/{len(datasets)-skipped_count}] Submitting pyramid for: {dataset_name}")
 
                 try:
                     result = create_pyramid_parallel(
@@ -1143,6 +1164,8 @@ def main(argv=None):
             print(f"\n{'='*60}")
             print(f"BATCH SUBMISSION COMPLETE")
             print(f"Submitted {len(all_coordinator_jobs)} coordinator jobs")
+            if skipped_count > 0:
+                print(f"Skipped {skipped_count} datasets (s1 already exists)")
             print(f"{'='*60}")
             return
 
