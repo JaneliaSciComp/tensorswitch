@@ -429,8 +429,9 @@ def zarr3_store_spec(path, shape, dtype, use_shard=True, level_path="s0", use_om
     
     # Determine dimension names based on axes_order from source (if provided) or shape
     if axes_order is not None and len(axes_order) == len(shape):
-        # Use axes from source metadata (e.g., N5)
-        dimension_names = axes_order
+        # Use axes from source metadata (e.g., N5, CZI)
+        # Rename 'v' to 't' for viewer compatibility (Neuroglancer needs 't' not 'v')
+        dimension_names = ['t' if ax == 'v' else ax for ax in axes_order]
         print(f"Using dimension names from source metadata: {dimension_names}")
     else:
         # Fallback: infer from shape
@@ -1701,7 +1702,9 @@ def create_zarr3_ome_metadata(ome_xml, array_shape, image_name, pixel_sizes=None
     if axes_order and len(axes_order) == ndim:
         # Use provided axes order (from CZI, N5, or other source metadata)
         for axis_name in axes_order:
-            axis_entry = {"name": axis_name, "type": get_axis_type(axis_name)}
+            # Rename 'v' to 't' for viewer compatibility (Neuroglancer needs 't' not 'v')
+            output_name = 't' if axis_name == 'v' else axis_name
+            axis_entry = {"name": output_name, "type": get_axis_type(axis_name)}
             unit = get_axis_unit(axis_name)
             if unit:
                 axis_entry["unit"] = unit
@@ -2308,14 +2311,17 @@ def create_zarr2_ome_metadata(ome_xml, array_shape, image_name, pixel_sizes=None
     if axes_order and len(axes_order) == len(array_shape):
         # Use provided axes order
         for axis_name in axes_order:
+            # Rename 'v' to 't' for viewer compatibility (Neuroglancer needs 't' not 'v')
+            output_name = 't' if axis_name == 'v' else axis_name
             if axis_name in ['x', 'y', 'z']:
-                axes.append({"name": axis_name, "type": "space", "unit": "micrometer"})
+                axes.append({"name": output_name, "type": "space", "unit": "micrometer"})
             elif axis_name == 'c':
-                axes.append({"name": axis_name, "type": "channel"})
-            elif axis_name == 't':
-                axes.append({"name": axis_name, "type": "time", "unit": "millisecond"})
+                axes.append({"name": output_name, "type": "channel"})
+            elif axis_name in ['t', 'v']:
+                # 'v' (view) treated as time so viewers show it as a slider
+                axes.append({"name": output_name, "type": "time", "unit": "millisecond"})
             else:
-                axes.append({"name": axis_name, "type": "space"})
+                axes.append({"name": output_name, "type": "space"})
         print(f"Using provided axes order: {axes_order}")
 
     if not axes and ome_xml:
@@ -4527,8 +4533,8 @@ def load_czi_stack(czi_file, view_index=None):
 
     # Build the array structure based on dimensions present
     if include_v_dim:
-        # 5D: VCZYX
-        axes_order = ['v', 'c', 'z', 'y', 'x']
+        # 5D: TCZYX (views mapped to time for viewer compatibility)
+        axes_order = ['t', 'c', 'z', 'y', 'x']
         v_chunks = []
         for v in v_range:
             c_chunks = []
