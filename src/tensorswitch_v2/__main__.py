@@ -186,6 +186,12 @@ Supported output formats:
              "(e.g., '1,2,2;1,2,2;1,2,2;1,2,2' for 4 levels with Z-skip). "
              "Bypasses auto-calculation from voxel sizes. Used with --auto_multiscale.",
     )
+    parser.add_argument(
+        "--downsample_method", type=str, default="mode",
+        choices=["mean", "mode", "median", "min", "max", "stride"],
+        help="Downsampling method: mode (default), mean (for intensity images), "
+             "median (noise reduction), stride (fastest, simple subsampling), min, max.",
+    )
 
     # Output control
     parser.add_argument(
@@ -810,6 +816,8 @@ def submit_downsample_job(args, cumulative_factors):
         reinvoke += ["--start_idx", str(args.start_idx)]
     if args.stop_idx is not None:
         reinvoke += ["--stop_idx", str(args.stop_idx)]
+    if args.downsample_method and args.downsample_method != "mode":
+        reinvoke += ["--downsample_method", args.downsample_method]
     if args.quiet:
         reinvoke.append("--quiet")
 
@@ -1204,6 +1212,7 @@ def main(argv=None):
                         wall_time=args.wall_time,
                         cores=args.cores,
                         use_shard=use_shard,
+                        downsample_method=args.downsample_method,
                         dry_run=False,
                         verbose=False,  # Reduce output in batch mode
                         custom_per_level_factors=custom_per_level_factors,
@@ -1256,6 +1265,7 @@ def main(argv=None):
                 wall_time=args.wall_time,  # None = auto-calculate per level
                 cores=args.cores,  # None = auto-calculate based on memory
                 use_shard=use_shard,
+                downsample_method=args.downsample_method,
                 dry_run=False,
                 verbose=verbose,
                 custom_per_level_factors=custom_per_level_factors,
@@ -1338,6 +1348,7 @@ def main(argv=None):
                 use_shard=use_shard,
                 custom_shard_shape=list(shard_shape) if shard_shape else None,
                 custom_chunk_shape=list(chunk_shape) if chunk_shape else None,
+                downsample_method=args.downsample_method,
                 verbose=verbose,
             )
         return

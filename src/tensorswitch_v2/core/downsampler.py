@@ -125,6 +125,7 @@ class Downsampler:
         use_shard: bool = True,
         custom_shard_shape: Optional[List[int]] = None,
         custom_chunk_shape: Optional[List[int]] = None,
+        downsample_method: str = "mode",
     ):
         """
         Initialize Downsampler.
@@ -136,6 +137,9 @@ class Downsampler:
             use_shard: Whether to use sharding for output (default: True)
             custom_shard_shape: Override shard shape (uses defaults if None)
             custom_chunk_shape: Override chunk shape (uses defaults if None)
+            downsample_method: TensorStore downsample method (default: "mean").
+                Options: "mean" (intensity images), "mode" (segmentation/labels),
+                "median" (noise reduction), "stride" (fastest), "min", "max".
         """
         self.s0_path = s0_path
         self.output_path = output_path
@@ -143,6 +147,7 @@ class Downsampler:
         self.use_shard = use_shard
         self.custom_shard_shape = custom_shard_shape
         self.custom_chunk_shape = custom_chunk_shape
+        self.downsample_method = downsample_method
 
         # Will be populated when downsample() is called
         self._s0_store = None
@@ -202,6 +207,7 @@ class Downsampler:
             print(f"Source: {self.s0_path}")
             print(f"Output: {self._get_output_level_path()}")
             print(f"Cumulative factors: {cumulative_factors}")
+            print(f"Downsample method: {self.downsample_method}")
             print(f"Dimension names: {dimension_names}")
 
         # Open s0 store
@@ -224,7 +230,8 @@ class Downsampler:
             s0_spec,
             s0_shape,
             dimension_names,
-            custom_factors=cumulative_factors
+            custom_factors=cumulative_factors,
+            method=self.downsample_method
         )
         downsampled_spec['context'] = get_tensorstore_context()
         self._downsampled_store = ts.open(downsampled_spec).result()
@@ -388,6 +395,7 @@ def downsample_level(
     use_shard: bool = True,
     custom_shard_shape: Optional[List[int]] = None,
     custom_chunk_shape: Optional[List[int]] = None,
+    downsample_method: str = "mode",
     verbose: bool = True,
 ) -> Dict[str, Any]:
     """
@@ -405,6 +413,8 @@ def downsample_level(
         use_shard: Whether to use sharding
         custom_shard_shape: Override shard shape
         custom_chunk_shape: Override chunk shape
+        downsample_method: TensorStore downsample method (default: "mode").
+            Options: "mean", "mode", "median", "stride", "min", "max".
         verbose: Print progress messages
 
     Returns:
@@ -426,6 +436,7 @@ def downsample_level(
         use_shard=use_shard,
         custom_shard_shape=custom_shard_shape,
         custom_chunk_shape=custom_chunk_shape,
+        downsample_method=downsample_method,
     )
 
     return downsampler.downsample(

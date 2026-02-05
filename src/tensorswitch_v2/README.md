@@ -183,6 +183,7 @@ pixi run python -m tensorswitch_v2 -i input.tif -o output.zarr \
 | `--target_level` | Target level for single-level mode |
 | `--single_level_factor` | Factor for single-level mode (e.g., `1,4,4` for s2) |
 | `--per_level_factors` | Custom per-level factors for pyramid (e.g., `1,2,2;1,2,2;1,2,2`) |
+| `--downsample_method` | Downsampling method: `mode` (default), `mean`, `median`, `stride`, `min`, `max` |
 
 ### LSF Cluster
 

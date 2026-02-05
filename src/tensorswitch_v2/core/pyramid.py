@@ -624,6 +624,7 @@ class PyramidPlanner:
         wall_time: str = "2:00",
         cores: int = 2,
         use_shard: bool = True,
+        downsample_method: str = "mode",
     ) -> str:
         """
         Generate bash script for parallel submission of all levels.
@@ -637,6 +638,7 @@ class PyramidPlanner:
             memory: Memory per job in GB
             wall_time: Wall time per job
             cores: Cores per job
+            downsample_method: TensorStore downsample method (default: "mode")
             use_shard: Whether to use sharding
 
         Returns:
@@ -680,6 +682,7 @@ S{level}_OUTPUT=$(cd {tensorswitch_dir} && {python_path} -m tensorswitch_v2 \\
     --use_shard {1 if use_shard else 0} \\
     --shard_shape "{shard_shape}" \\
     --chunk_shape "{chunk_shape}" \\
+    --downsample_method {downsample_method} \\
     --submit \\
     -P {project} \\
     --memory {memory} \\
@@ -850,6 +853,7 @@ echo "=========================================="
         wall_time: Optional[str] = None,
         cores: Optional[int] = None,
         use_shard: bool = True,
+        downsample_method: str = "mode",
         dry_run: bool = False,
         verbose: bool = True,
     ) -> str:
@@ -870,6 +874,7 @@ echo "=========================================="
             wall_time: Wall time per job (None = auto-calculate per level)
             cores: Cores per job (None = auto-calculate based on memory)
             use_shard: Whether to use sharding
+            downsample_method: TensorStore downsample method (default: "mode")
             dry_run: If True, print commands but don't execute
             verbose: Print progress messages
 
@@ -894,6 +899,7 @@ echo "=========================================="
             wall_time=wall_time,
             cores=cores,
             use_shard=use_shard,
+            downsample_method=downsample_method,
         )
 
         # Write script to shared filesystem
@@ -1000,6 +1006,7 @@ echo "=========================================="
         wall_time: Optional[str] = None,
         cores: Optional[int] = None,
         use_shard: bool = True,
+        downsample_method: str = "mode",
     ) -> str:
         """
         Generate bash script for chained pyramid generation.
@@ -1014,6 +1021,7 @@ echo "=========================================="
             wall_time: Wall time per job (None = auto-calculate)
             cores: Cores per job (None = auto-calculate)
             use_shard: Whether to use sharding
+            downsample_method: TensorStore downsample method (default: "mode")
 
         Returns:
             Bash script as string
@@ -1071,6 +1079,7 @@ submit_and_wait() {{
         --use_shard {1 if use_shard else 0} \\
         --shard_shape "$shard_shape" \\
         --chunk_shape "$chunk_shape" \\
+        --downsample_method {downsample_method} \\
         --submit \\
         -P {project} \\
         --memory $mem \\
@@ -1241,6 +1250,7 @@ def create_pyramid_parallel(
     wall_time: Optional[str] = None,
     cores: Optional[int] = None,
     use_shard: bool = True,
+    downsample_method: str = "mode",
     dry_run: bool = False,
     verbose: bool = True,
     custom_per_level_factors: Optional[List[List[int]]] = None,
@@ -1261,6 +1271,7 @@ def create_pyramid_parallel(
         wall_time: Wall time per job (None = auto-calculate per level)
         cores: Cores per job (None = auto-calculate based on memory)
         use_shard: Whether to use sharding
+        downsample_method: TensorStore downsample method (default: "mode")
         dry_run: If True, print commands but don't execute
         verbose: Print progress messages
         custom_per_level_factors: Custom per-level factors (bypasses auto-calculation).
@@ -1309,6 +1320,7 @@ def create_pyramid_parallel(
         wall_time=wall_time,
         cores=cores,
         use_shard=use_shard,
+        downsample_method=downsample_method,
         dry_run=dry_run,
         verbose=verbose
     )

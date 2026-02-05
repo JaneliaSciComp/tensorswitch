@@ -463,7 +463,7 @@ def zarr3_store_spec(path, shape, dtype, use_shard=True, level_path="s0", use_om
         }
     }
 
-def downsample_spec(base_spec, array_shape=None, dimension_names=None, custom_factors=None):
+def downsample_spec(base_spec, array_shape=None, dimension_names=None, custom_factors=None, method="mode"):
     """
     Create downsample spec with appropriate factors based on dimension names.
     For 2D multi-channel images (CYX), only downsample Y and X, not C.
@@ -474,6 +474,13 @@ def downsample_spec(base_spec, array_shape=None, dimension_names=None, custom_fa
         dimension_names: List of dimension names (e.g., ['c', 'z', 'y', 'x'])
         custom_factors: Optional custom downsampling factors (e.g., [1, 1, 2, 2] for anisotropic data)
                        If provided, overrides default factor calculation
+        method: Downsampling method. Options:
+                - "mean": Average of values (default, best for intensity images)
+                - "mode": Most frequent value (best for segmentation/labels)
+                - "median": Median value (good for noise reduction)
+                - "stride": Simple striding (fastest, may cause aliasing)
+                - "min": Minimum value
+                - "max": Maximum value
     """
     # If custom factors provided, use them directly
     if custom_factors is not None:
@@ -495,7 +502,7 @@ def downsample_spec(base_spec, array_shape=None, dimension_names=None, custom_fa
         'driver': 'downsample',
         'base': get_zarr_store_spec(base_spec),
         'downsample_factors': downsample_factors,
-        'downsample_method': 'mode'
+        'downsample_method': method
     }
 
 def detect_anisotropic_voxels(voxel_sizes, array_shape, threshold=2.0):
