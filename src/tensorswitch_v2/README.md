@@ -181,7 +181,8 @@ pixi run python -m tensorswitch_v2 -i input.tif -o output.zarr \
 | `--auto_multiscale` | Generate full pyramid from s0 |
 | `--downsample` | Single-level downsampling mode |
 | `--target_level` | Target level for single-level mode |
-| `--cumulative_factors` | Cumulative factors from s0 (e.g., `1,4,4`) |
+| `--single_level_factor` | Factor for single-level mode (e.g., `1,4,4` for s2) |
+| `--per_level_factors` | Custom per-level factors for pyramid (e.g., `1,2,2;1,2,2;1,2,2`) |
 
 ### LSF Cluster
 
@@ -428,18 +429,68 @@ Chained Downsampling:
 ### Generate Pyramid
 
 ```bash
-# Full pyramid (recommended)
+# Full pyramid (recommended) - auto-calculates factors from voxel sizes
 pixi run python -m tensorswitch_v2 --auto_multiscale \
   -i /path/to/dataset.zarr/s0 \
   -o /path/to/dataset.zarr \
   --submit -P scicompsoft
 
-# Single level
+# Single level only (e.g., just create s2)
 pixi run python -m tensorswitch_v2 --downsample \
   -i /path/to/dataset.zarr/s0 \
   -o /path/to/dataset.zarr \
   --target_level 2 \
-  --cumulative_factors 1,4,4
+  --single_level_factor 1,4,4
+```
+
+### Downsampling Factor Arguments
+
+There are two factor arguments for different use cases:
+
+| Argument | Mode | Purpose | Format |
+|----------|------|---------|--------|
+| `--single_level_factor` | `--downsample` | Create **one** level | `z,y,x` (cumulative from s0) |
+| `--per_level_factors` | `--auto_multiscale` | Create **full pyramid** | `z,y,x;z,y,x;...` (per-level) |
+
+**Key difference:**
+- `--single_level_factor 1,4,4` → Total 4x reduction on Y,X from s0 (creates one level)
+- `--per_level_factors "1,2,2;1,2,2"` → 2x per level (creates multiple levels, cumulative calculated automatically)
+
+### Custom Factors for Anisotropic Data
+
+When voxel sizes are not in zarr metadata (e.g., raw TIFF, BigStitcher data), use `--per_level_factors`:
+
+```bash
+# Full pyramid with custom factors: skip Z, downsample Y,X by 2x per level
+pixi run python -m tensorswitch_v2 --auto_multiscale \
+  -i /path/to/dataset.zarr/s0 \
+  -o /path/to/dataset.zarr \
+  --per_level_factors "1,2,2;1,2,2;1,2,2;1,2,2" \
+  --submit -P scicompsoft
+```
+
+**How `--per_level_factors` works:**
+
+Each semicolon-separated entry is the factor **from previous level to current level**:
+
+```
+--per_level_factors "1,2,2;1,2,2;1,2,2;1,2,2"
+                     ─────  ─────  ─────  ─────
+                     s0→s1  s1→s2  s2→s3  s3→s4
+```
+
+| Level | Per-Level Factor | Cumulative (auto-calculated) | Shape Change |
+|-------|------------------|------------------------------|--------------|
+| s1 | `[1,2,2]` | `[1,2,2]` | Z same, Y,X ÷2 |
+| s2 | `[1,2,2]` | `[1,4,4]` | Z same, Y,X ÷4 |
+| s3 | `[1,2,2]` | `[1,8,8]` | Z same, Y,X ÷8 |
+| s4 | `[1,2,2]` | `[1,16,16]` | Z same, Y,X ÷16 |
+
+**Example: 4D CZYX data (never downsample channels)**
+
+```bash
+--per_level_factors "1,1,2,2;1,1,2,2;1,1,2,2;1,2,2,2"
+#                    C Z Y X
 ```
 
 ### Batch Pyramid Generation
@@ -460,9 +511,18 @@ pixi run python -m tensorswitch_v2 --auto_multiscale \
   --pattern '*.zarr' \
   --max_concurrent 50 \
   --submit -P scicompsoft
+
+# Step 2 (alternative): Batch pyramids with custom anisotropic factors
+# Use this when all tiles have the same voxel anisotropy
+pixi run python -m tensorswitch_v2 --auto_multiscale \
+  -i /path/to/zarr_output/ \
+  --pattern '*.zarr' \
+  --per_level_factors "1,2,2;1,2,2;1,2,2;1,2,2" \
+  --max_concurrent 50 \
+  --submit -P scicompsoft
 ```
 
-Each dataset gets its own coordinator job that spawns chained downsampling jobs.
+Each dataset gets its own coordinator job that spawns chained downsampling jobs. When using `--per_level_factors`, the same factors are applied to all datasets in the batch.
 
 ---
 

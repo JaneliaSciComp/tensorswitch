@@ -278,6 +278,7 @@ class PyramidPlanner:
         self,
         min_array_nbytes: Optional[int] = None,
         min_array_shape: Optional[List[int]] = None,
+        custom_per_level_factors: Optional[List[List[int]]] = None,
     ) -> Dict[str, Any]:
         """
         Calculate complete pyramid plan with cumulative factors for parallel execution.
@@ -288,6 +289,8 @@ class PyramidPlanner:
         Args:
             min_array_nbytes: Stop when array size < this (default: chunk_nbytes)
             min_array_shape: Stop when all dims < this (default: chunk_shape)
+            custom_per_level_factors: Custom per-level factors (bypasses auto-calculation).
+                                      E.g., [[1,2,2], [1,2,2], [1,2,2]] for 3 levels.
 
         Returns:
             dict with keys:
@@ -319,6 +322,10 @@ class PyramidPlanner:
                         ...
                     ]
         """
+        if custom_per_level_factors:
+            # Use custom factors instead of auto-calculation
+            return self._calculate_plan_with_custom_factors(custom_per_level_factors)
+
         # Use v1's calculate_pyramid_plan as base
         v1_plan = v1_calculate_pyramid_plan(
             self.s0_path,
@@ -361,6 +368,125 @@ class PyramidPlanner:
             'levels': enhanced_levels,
             # Keep original v1 plan for compatibility
             'v1_pyramid_plan': v1_plan['pyramid_plan'],
+        }
+
+    def _calculate_plan_with_custom_factors(
+        self,
+        per_level_factors: List[List[int]],
+    ) -> Dict[str, Any]:
+        """
+        Calculate pyramid plan using custom per-level factors.
+
+        This bypasses the automatic anisotropic factor calculation and uses
+        user-provided factors for each level. Useful when voxel size info
+        is not in the zarr metadata (e.g., stored in BigStitcher XML).
+
+        Args:
+            per_level_factors: List of per-level factors, e.g., [[1,2,2], [1,2,2], [1,2,2]]
+
+        Returns:
+            Pyramid plan dict (same format as calculate_pyramid_plan)
+        """
+        # Load s0 metadata to get shape, dtype, axes, etc.
+        s0_metadata = self._load_s0_metadata()
+        zarr_format = s0_metadata.get('_format', 'zarr3')
+
+        # Get s0 shape
+        if zarr_format == 'zarr3':
+            s0_shape = s0_metadata.get('shape', [])
+        else:  # zarr2
+            s0_shape = s0_metadata.get('shape', [])
+
+        # Get axes names
+        axes_names = s0_metadata.get('dimension_names')
+        if not axes_names:
+            # Infer from shape
+            ndim = len(s0_shape)
+            if ndim == 5:
+                axes_names = ['t', 'c', 'z', 'y', 'x']
+            elif ndim == 4:
+                axes_names = ['c', 'z', 'y', 'x']
+            elif ndim == 3:
+                axes_names = ['z', 'y', 'x']
+            else:
+                axes_names = [f'dim_{i}' for i in range(ndim)]
+
+        # Get dtype size
+        dtype_str = s0_metadata.get('data_type', 'uint16')
+        dtype_size = np.dtype(dtype_str.replace('<', '').replace('>', '').replace('|', '')).itemsize
+
+        # Get chunk/shard shapes
+        if zarr_format == 'zarr3':
+            chunk_config = s0_metadata.get('chunk_grid', {}).get('configuration', {})
+            chunk_shape = chunk_config.get('chunk_shape', [256] * len(s0_shape))
+            # For sharding, check codecs
+            shard_shape = chunk_shape  # Default to chunk if no sharding
+            codecs = s0_metadata.get('codecs', [])
+            for codec in codecs:
+                if codec.get('name') == 'sharding_indexed':
+                    inner_config = codec.get('configuration', {}).get('chunk_shape')
+                    if inner_config:
+                        shard_shape = chunk_shape
+                        chunk_shape = inner_config
+                    break
+        else:  # zarr2
+            chunk_shape = s0_metadata.get('chunk_grid', {}).get('configuration', {}).get('chunk_shape', [256] * len(s0_shape))
+            shard_shape = chunk_shape  # No sharding in zarr2
+
+        # Validate factor dimensions match s0 shape
+        for i, factors in enumerate(per_level_factors):
+            if len(factors) != len(s0_shape):
+                raise ValueError(
+                    f"Factor dimensions mismatch at level {i+1}: "
+                    f"got {len(factors)} factors but s0 has {len(s0_shape)} dimensions.\n"
+                    f"s0 shape: {s0_shape}, axes: {axes_names}\n"
+                    f"Factors: {factors}"
+                )
+
+        # Build enhanced levels with cumulative factors and predicted shapes
+        enhanced_levels = []
+        current_shape = list(s0_shape)
+        cumulative = [1] * len(s0_shape)
+
+        for level_idx, factors in enumerate(per_level_factors):
+            level = level_idx + 1  # s1, s2, s3, ...
+
+            # Update cumulative factors
+            cumulative = [c * f for c, f in zip(cumulative, factors)]
+
+            # Calculate predicted shape
+            predicted_shape = [max(1, s // f) for s, f in zip(s0_shape, cumulative)]
+
+            # Calculate predicted voxel sizes (assume 1.0 if unknown - custom factors mean user knows best)
+            # We don't have voxel info, so use cumulative factors as relative voxel size
+            predicted_voxel_sizes = [float(c) for c in cumulative]
+
+            enhanced_level = {
+                'level': level,
+                'per_level_factor': factors,
+                'cumulative_factor': list(cumulative),
+                'predicted_shape': predicted_shape,
+                'predicted_voxel_sizes': predicted_voxel_sizes,
+                'shard_shape': list(shard_shape),
+                'chunk_shape': list(chunk_shape),
+            }
+            enhanced_levels.append(enhanced_level)
+
+            # Update current shape for next iteration (chained mode)
+            current_shape = predicted_shape
+
+        return {
+            'format': zarr_format,
+            'shape': list(s0_shape),
+            'voxel_sizes': [1.0] * len(s0_shape),  # Unknown with custom factors
+            'axes_names': axes_names,
+            'chunk_shape': list(chunk_shape),
+            'shard_shape': list(shard_shape),
+            'inner_chunk_shape': list(chunk_shape),
+            'dtype_size': dtype_size,
+            'num_levels': len(per_level_factors),
+            'levels': enhanced_levels,
+            'custom_factors': True,  # Flag to indicate custom factors were used
         }
 
     def precreate_all_levels(
@@ -1117,6 +1243,7 @@ def create_pyramid_parallel(
     use_shard: bool = True,
     dry_run: bool = False,
     verbose: bool = True,
+    custom_per_level_factors: Optional[List[List[int]]] = None,
 ) -> Dict[str, Any]:
     """
     Convenience function to create full pyramid with chained job submission.
@@ -1136,6 +1263,8 @@ def create_pyramid_parallel(
         use_shard: Whether to use sharding
         dry_run: If True, print commands but don't execute
         verbose: Print progress messages
+        custom_per_level_factors: Custom per-level factors (bypasses auto-calculation).
+                                  E.g., [[1,2,2], [1,2,2], [1,2,2]] for 3 levels with Z-skip.
 
     Returns:
         dict with 'pyramid_plan' and 'coordinator_job_id' keys
@@ -1146,13 +1275,21 @@ def create_pyramid_parallel(
         ...     project="scicompsoft"
         ... )
         >>> print(f"Coordinator job: {result['coordinator_job_id']}")
+
+        >>> # With custom factors (skip Z downsampling)
+        >>> result = create_pyramid_parallel(
+        ...     s0_path="/data/dataset.zarr/s0",
+        ...     project="scicompsoft",
+        ...     custom_per_level_factors=[[1,2,2], [1,2,2], [1,2,2], [1,2,2]]
+        ... )
     """
     planner = PyramidPlanner(s0_path)
 
     # Calculate pyramid plan
     pyramid_plan = planner.calculate_pyramid_plan(
         min_array_nbytes=min_array_nbytes,
-        min_array_shape=min_array_shape
+        min_array_shape=min_array_shape,
+        custom_per_level_factors=custom_per_level_factors,
     )
 
     if verbose:

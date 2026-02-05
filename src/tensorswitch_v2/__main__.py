@@ -168,12 +168,23 @@ Supported output formats:
         help="Target level to create in downsample mode (1=s1, 2=s2, etc.)",
     )
     parser.add_argument(
+        "--single_level_factor", type=str, default=None,
+        help="Downsampling factor for single-level mode (--downsample). "
+             "Comma-separated cumulative factor from s0 (e.g., '1,4,4' for s2 with 4x Y,X).",
+    )
+    parser.add_argument(
         "--cumulative_factors", type=str, default=None,
-        help="Cumulative downsampling factors from s0, comma-separated (e.g., '1,4,4' for s2)",
+        help=argparse.SUPPRESS,  # Hidden: backward compatibility alias for --single_level_factor
     )
     parser.add_argument(
         "--use_shard", type=int, default=1,
         help="Use sharding for output (1=yes, 0=no, default: 1)",
+    )
+    parser.add_argument(
+        "--per_level_factors", type=str, default=None,
+        help="Custom per-level downsampling factors, semicolon-separated "
+             "(e.g., '1,2,2;1,2,2;1,2,2;1,2,2' for 4 levels with Z-skip). "
+             "Bypasses auto-calculation from voxel sizes. Used with --auto_multiscale.",
     )
 
     # Output control
@@ -360,6 +371,47 @@ def parse_shape(s: str, param_name: str = "shape") -> Tuple[int, ...]:
                 f"Invalid {param_name}: '{s}'\n"
                 f"Expected comma-separated integers (e.g., '32,256,256').\n"
                 f"Got non-integer value in: {s}"
+            )
+        raise
+
+
+def parse_per_level_factors(factors_str: str):
+    """Parse per-level factors string into list of factor lists.
+
+    Args:
+        factors_str: Semicolon-separated factors, e.g., '1,2,2;1,2,2;1,2,2;1,2,2'
+                     Each level's factors are comma-separated.
+
+    Returns:
+        List of lists, e.g., [[1,2,2], [1,2,2], [1,2,2], [1,2,2]]
+
+    Raises:
+        ValueError: If format is invalid
+
+    Example:
+        >>> parse_per_level_factors('1,2,2;1,2,2;1,2,2')
+        [[1, 2, 2], [1, 2, 2], [1, 2, 2]]
+    """
+    try:
+        levels = factors_str.split(';')
+        result = []
+        for i, level_str in enumerate(levels):
+            factors = [int(x.strip()) for x in level_str.split(',')]
+            # Validate all factors are positive
+            for j, f in enumerate(factors):
+                if f <= 0:
+                    raise ValueError(
+                        f"Invalid factor at level {i+1}, position {j}: {f}\n"
+                        f"All factors must be positive integers."
+                    )
+            result.append(factors)
+        return result
+    except ValueError as e:
+        if "invalid literal" in str(e):
+            raise ValueError(
+                f"Invalid --per_level_factors: '{factors_str}'\n"
+                f"Expected semicolon-separated levels with comma-separated factors.\n"
+                f"Example: '1,2,2;1,2,2;1,2,2;1,2,2' for 4 levels with Z-skip"
             )
         raise
 
@@ -747,7 +799,7 @@ def submit_downsample_job(args, cumulative_factors):
         "--input", args.input,
         "--output", args.output,
         "--target_level", str(args.target_level),
-        "--cumulative_factors", ",".join(map(str, cumulative_factors)),
+        "--single_level_factor", ",".join(map(str, cumulative_factors)),
         "--use_shard", str(args.use_shard),
     ]
     if args.chunk_shape:
@@ -781,7 +833,7 @@ def submit_downsample_job(args, cumulative_factors):
     print("=" * 72)
     print(f"  Job name:    {job_name}")
     print(f"  Target:      s{args.target_level}")
-    print(f"  Factors:     {cumulative_factors}")
+    print(f"  Factor:      {cumulative_factors} (cumulative from s0)")
     print(f"  Cores:       {cores}")
     print(f"  Memory:      {memory_gb} GB")
     print(f"  Wall time:   {wall_time}")
@@ -1069,6 +1121,12 @@ def main(argv=None):
         from tensorswitch.utils import update_ome_metadata_if_needed
         import glob as glob_module
 
+        # Parse custom per-level factors if provided
+        custom_per_level_factors = None
+        if args.per_level_factors:
+            custom_per_level_factors = parse_per_level_factors(args.per_level_factors)
+            print(f"Using custom per-level factors: {custom_per_level_factors}")
+
         # Detect batch mode: directory containing multiple .zarr subdirectories
         # NOT batch mode: path ends with .zarr/.n5, or has s0/.zarray inside (single dataset)
         input_path = args.input.rstrip('/')
@@ -1118,6 +1176,9 @@ def main(argv=None):
             print(f"{'='*60}")
             print(f"Found {len(datasets)} datasets to process")
             print(f"Max concurrent coordinator jobs: {args.max_concurrent}")
+            if custom_per_level_factors:
+                print(f"Custom per-level factors: {custom_per_level_factors}")
+                print(f"Number of levels: {len(custom_per_level_factors)}")
             print()
 
             # Submit coordinator job for each dataset
@@ -1145,6 +1206,7 @@ def main(argv=None):
                         use_shard=use_shard,
                         dry_run=False,
                         verbose=False,  # Reduce output in batch mode
+                        custom_per_level_factors=custom_per_level_factors,
                     )
                     coordinator_jid = result.get('coordinator_job_id')
                     num_levels = result.get('pyramid_plan', {}).get('num_levels', 0)
@@ -1196,6 +1258,7 @@ def main(argv=None):
                 use_shard=use_shard,
                 dry_run=False,
                 verbose=verbose,
+                custom_per_level_factors=custom_per_level_factors,
             )
             num_levels = result.get('pyramid_plan', {}).get('num_levels', 0)
             job_ids = result.get('job_ids', [])
@@ -1210,7 +1273,7 @@ def main(argv=None):
             from .core.downsampler import downsample_level
 
             planner = PyramidPlanner(s0_path)
-            plan = planner.calculate_pyramid_plan()
+            plan = planner.calculate_pyramid_plan(custom_per_level_factors=custom_per_level_factors)
             planner.print_pyramid_plan(plan)
 
             print("\nRunning local pyramid generation...")
@@ -1253,10 +1316,12 @@ def main(argv=None):
         if args.target_level is None:
             raise ValueError("--target_level is required with --downsample")
 
-        if args.cumulative_factors is None:
-            raise ValueError("--cumulative_factors is required with --downsample")
+        # Support both --single_level_factor (new) and --cumulative_factors (legacy alias)
+        factor_str = args.single_level_factor or args.cumulative_factors
+        if factor_str is None:
+            raise ValueError("--single_level_factor is required with --downsample")
 
-        cumulative_factors = [int(x) for x in args.cumulative_factors.split(",")]
+        cumulative_factors = [int(x) for x in factor_str.split(",")]
 
         if args.submit:
             # Submit as LSF job
