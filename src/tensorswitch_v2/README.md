@@ -457,6 +457,28 @@ There are two factor arguments for different use cases:
 - `--single_level_factor 1,4,4` → Total 4x reduction on Y,X from s0 (creates one level)
 - `--per_level_factors "1,2,2;1,2,2"` → 2x per level (creates multiple levels, cumulative calculated automatically)
 
+### Downsampling Method
+
+The `--downsample_method` option controls how TensorStore computes downsampled values:
+
+| Method | Description | Best For |
+|--------|-------------|----------|
+| `mode` | Most frequent value (default) | Segmentation masks, labels |
+| `mean` | Average of values | Intensity images |
+| `median` | Median value | Noise reduction |
+| `stride` | Simple striding (fastest) | Quick previews |
+| `min` | Minimum value | Specific use cases |
+| `max` | Maximum value | Specific use cases |
+
+```bash
+# Use mean for intensity data
+pixi run python -m tensorswitch_v2 --auto_multiscale \
+  -i /path/to/dataset.zarr/s0 \
+  -o /path/to/dataset.zarr \
+  --downsample_method mean \
+  --submit -P scicompsoft
+```
+
 ### Custom Factors for Anisotropic Data
 
 When voxel sizes are not in zarr metadata (e.g., raw TIFF, BigStitcher data), use `--per_level_factors`:
