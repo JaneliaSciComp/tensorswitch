@@ -1,892 +1,868 @@
-# TensorSwitch
+# TensorSwitch v2
 
-This package provides a unified entry point for managing N5/Zarr dataset conversions and downsampling with both command-line and web GUI interfaces. It centralizes your workflow into a single pipeline to reduce manual work and errors.
+**Version**: 2.0.0-beta
+**Status**: Production Ready
+**Branch**: `unified`
+
+A high-performance microscopy data conversion tool with TensorStore as the unified intermediate format. Supports 200+ input formats, automatic multi-scale pyramid generation, and distributed processing on LSF clusters.
+
+---
+
+## Table of Contents
+
+1. [Features](#features)
+2. [Architecture](#architecture)
+3. [Installation](#installation)
+4. [Quick Start](#quick-start)
+5. [CLI Reference](#cli-reference)
+6. [Python API](#python-api)
+7. [Supported Formats](#supported-formats)
+8. [Multi-Scale Pyramids](#multi-scale-pyramids)
+9. [Batch Processing](#batch-processing)
+10. [LSF Cluster Submission](#lsf-cluster-submission)
+11. [Auto-Calculation](#auto-calculation)
+12. [Examples](#examples)
+
+---
 
 ## Features
 
-### Core Features
-- **Web GUI Interface**: Production-ready web interface for scientists (no programming required)
-- **AI Assistant**: Integrated OpenAI-powered assistant with context-aware responses and conversion guidance
-- **Cost Estimation**: Real-time cluster resource cost estimates (AI + cluster billing) before job submission
-- **Command-Line Interface**: Full-featured CLI for automated workflows
-- **Advanced Dask JobQueue**: Hybrid Dask-LSF execution with automatic scaling and error recovery
-- **Smart Workflow System**: Auto-detect input formats and intelligently plan conversions
-- **Lab Path Integration**: Built-in HHMI lab storage paths (131 labs, 126 projects)
-- **Remote Data Support**: Direct conversion from HTTP, Google Cloud Storage (GCS), and S3-served datasets
-- **Comprehensive Test Suite**: 31 verified tests covering CLI, GUI, and OME-Zarr workflows
+- **Universal Format Support**: Read 200+ microscopy formats via three-tier reader strategy
+- **TensorStore Backend**: High-performance intermediate format for efficient chunk processing
+- **Auto-Detection**: Automatic format detection and optimal reader selection
+- **Multi-Scale Pyramids**: Automatic pyramid generation with chained downsampling
+- **Batch Processing**: Convert thousands of files with LSF job arrays
+- **LSF Cluster Support**: Auto-calculated resources (memory, wall time, cores)
+- **5D TCZYX Output**: Automatic expansion to OME-NGFF compliant 5D format
+- **Compression**: zstd compression with configurable levels
 
-### Format Support (13 Conversion Tasks)
-- **TIFF → Zarr2/Zarr3/N5**: Full s0 level conversion with enhanced OME-Zarr metadata and ImageJ voxel extraction
-- **ND2 → Zarr2/Zarr3**: Native ND2 support with OME metadata preservation
-- **IMS → Zarr2/Zarr3**: Imaris file format support with HDF5 metadata extraction
-- **CZI → Zarr3**: ZEISS CZI format support with XSLT-based OME-XML metadata transformation
-- **N5 → Zarr2/Zarr3**: High-performance N5 conversion with dual metadata and voxel size preservation
-- **Precomputed → N5**: Neuroglancer Precomputed format support
-- **Zarr2/Zarr3 Downsampling**: Multi-resolution pyramid generation with anisotropic factors
-- **N5 → N5**: N5-to-N5 conversion with compression optimization
+---
 
-### Metadata & Compliance
-- **Enhanced OME-ZARR Metadata**: Automatic preservation of rich metadata from TIFF, ND2, and IMS files
-- **Unified Metadata System**: Single `update_zarr_metadata_from_source()` function for all formats
-- **Dual Zarr Format Support**: Create files compatible with both Zarr v2 and v3 tools
-- **OME-NGFF v0.4/v0.5 Compliant**: Full specification compliance for WebKnossos and Neuroglancer
-
-### Performance & Optimization (Recent Updates)
-
-#### Dual Job Submission Modes (All Tasks)
-- **Multi-Job Mode (LSF)**: Distribute work across multiple cluster jobs
-  - Use `--submit` flag for cluster submission
-  - Optimal for large datasets (>50 GB)
-  - Available for all conversion and downsampling tasks
-- **Single-Job Mode**: Run on single job with Dask parallelization
-  - Use `--use_single_job` flag
-  - Better for small-medium datasets (<50 GB)
-  - Available for all conversion and downsampling tasks
-  - Single log file for easier debugging
-
-#### Phase 1 Complete: Multi-Resolution Pyramid Downsampling (December 2025)
-- **Downsampling Verified**: Multi-job and single-job modes produce identical output
-  - Tested on 1.5TB dataset with 9-level pyramid (s0-s9)
-  - All metadata byte-for-byte identical between modes
-  - Voxel sizes accurate to nanometer precision
-  - Performance: Multi-job 3x faster (7 min vs 20 min) for this test case
-- **Downsampling Bug Fixes Applied**:
-  - Fixed 4D anisotropic factor handling for CZYX data
-  - Fixed ceiling division to match TensorStore behavior
-  - Fixed metadata update crash with incomplete downsampling factors
-- **Auto-Multiscale Pyramid Generation**: Automatic multi-resolution pyramid with smart stopping conditions
-  - Uses Yurii Zubov's anisotropic downsampling algorithm (Janelia CellMap Team)
-  - Supports both Zarr2 and Zarr3 formats
-  - Cluster and local execution modes with CLI coordinator script generation
-  - Smart stopping: array size thresholds, dimension minimums, WebKnossos <4% drift compliance
-- **Anisotropic Downsampling**: Intelligent factor calculation preserving Z-resolution
-  - Dimension-aware detection (3D/4D/5D arrays)
-  - Automatic recommendations (e.g., "1,2,2" for 2.5× anisotropy)
-  - Yurii Zubov's algorithm: maintains voxel aspect ratio within 0.5-2.0× range
-- **Automatic Worker Calculation**: Optimal cluster distribution using dimensional analysis
-  - Smart shard grid calculation with ceiling division
-  - Optimal 1-50 workers based on dataset size
-  - Implemented in Phase 0.5 (December 2025)
-- **WebKnossos Defaults**: Optimal [32,32,32] chunks and [1024,1024,1024] shards
-- **Fortran Order Support**: Transpose codec `[2,1,0]` for optimal WebKnossos access (ND2/IMS/N5)
-  - **Axes Extraction from Source** (Jan 2025): Auto-detects axes from N5/source metadata (preserves [x,y,z] coordinate space)
-  - **Zarr3 Codec Compliance** (Jan 2025): Transpose codec at array level (before sharding), not in inner codecs
-  - **Axes Preservation**: Maintains consistent axes throughout downsampling pyramid
-- **Shard Pre-creation**: Race-condition-free inline directory pre-creation with correct dimensions
-- **3D Shard Distribution**: Coordinate-based job distribution (no overlap, all shards covered)
-- **Optimized N5 Compression**: Native zstd with blosc fallback
-
-### Zarr2 & Zarr3 Feature Parity (January 2025)
-- **Zarr2 Feature Parity**: All Zarr2 scripts now have anisotropic detection and WebKnossos defaults
-- **Code Quality**: ~320 lines eliminated through refactoring and unification
-- **Bug Fixes**:
-  - Fixed critical ND2→Zarr2 tuple unpacking bug
-  - Fixed N5→Zarr3 axes extraction (preserves source coordinate space for annotation compatibility)
-  - Fixed transpose codec placement (Zarr3 spec compliance, TensorStore compatibility)
-
-## Folder Structure
+## Architecture
 
 ```
-tensorswitch/
-├── pixi.lock
-├── pyproject.toml
-├── README.md
-├── src
-│   └── tensorswitch
-│       ├── __init__.py
-│       ├── __main__.py                   # Main dispatcher script
-│       ├── tasks                         # 13 conversion tasks
-│       │   ├── __init__.py
-│       │   ├── downsample_shard_zarr3.py # Downsample Zarr V3 using shards (with auto-multiscale)
-│       │   ├── downsample_zarr2.py       # Downsample Zarr V2 datasets (with auto-multiscale)
-│       │   ├── n5_to_n5.py               # N5 to N5 conversion with rechunking
-│       │   ├── n5_to_zarr2.py            # N5 to Zarr V2 conversion
-│       │   ├── n5_to_zarr3_s0.py         # N5 to Zarr V3 s0 with dual metadata and Fortran order
-│       │   ├── precomputed_to_n5.py      # Neuroglancer Precomputed to N5 conversion
-│       │   ├── tiff_to_zarr2_s0.py       # TIFF to Zarr V2 s0 with OME-Zarr metadata
-│       │   ├── tiff_to_zarr3_s0.py       # TIFF to Zarr V3 s0 with OME-Zarr metadata
-│       │   ├── nd2_to_zarr2_s0.py        # ND2 to Zarr V2 s0 with OME-Zarr metadata
-│       │   ├── nd2_to_zarr3_s0.py        # ND2 to Zarr V3 s0 with OME-Zarr metadata and Fortran order
-│       │   ├── ims_to_zarr2_s0.py        # IMS to Zarr V2 s0 with OME-Zarr metadata
-│       │   ├── ims_to_zarr3_s0.py        # IMS to Zarr V3 s0 with OME-Zarr metadata and Fortran order
-│       │   └── czi_to_zarr3_s0.py        # CZI to Zarr V3 s0 with XSLT-based OME-XML metadata
-│       ├── xslt/                         # Vendored XSLT files for CZI→OME-XML transformation
-│       │   ├── czi-to-ome.xsl            # Main XSLT stylesheet (from Allen Institute czi-to-ome-xslt)
-│       │   └── LICENSE.czi-to-ome-xslt   # BSD-3 license
-│       ├── utils.py                      # Common utilities, OME-Zarr metadata, auto-multiscale
-│       ├── dask_utils.py                 # Dask JobQueue integration for cluster execution
-│       └── gui/                          # Web GUI interface
-│           ├── app.py                    # Main GUI application
-│           ├── launch_gui.py             # GUI server launcher
-│           ├── cost_estimator.py         # Cost and time estimation for cluster jobs
-│           ├── README_GUI.md             # GUI documentation
-│           ├── ai/                       # AI assistant system
-│           │   ├── __init__.py
-│           │   ├── ai_config.py          # AI configuration and environment setup
-│           │   ├── ai_interface.py       # AI chat interface for GUI
-│           │   └── tensorswitch_assistant.py # AI knowledge base and OpenAI integration
-│           ├── format_detection/         # Smart workflow and format auto-detection
-│           │   ├── __init__.py
-│           │   ├── format_detector.py    # Auto-detect file formats and metadata
-│           │   └── task_planner.py       # Intelligent conversion planning
-│           └── lab_paths_system/         # HHMI lab paths integration
-│               ├── __init__.py
-│               ├── lab_paths.py          # Lab path management
-│               ├── path_selector.py      # Path selection UI
-│               ├── hierarchical_lab_paths.json
-│               ├── lab_paths_data.json
-│               └── Lab_and_project_file_share_path.xlsx
-├── contrib
-│   ├── add_dimension_names.py            # Add dimension names to zarr.json files for all levels
-│   ├── bleaching_correction_task.py      # Z-direction bleaching correction for microscopy datasets
-│   ├── re_submit_jobs.ipynb              # Jupyter notebook to re-submit failed chunk jobs
-│   ├── start_neuroglancer_server.py      # Start a CORS-enabled web server
-│   ├── submit_bleaching_correction_general.py # Generic bleaching correction submission script
-│   ├── update_metadata.py                # Update OME-Zarr multiscale metadata and add ome_xml
-│   ├── update_metadata_zarr2.py          # Update OME-Zarr multiscale metadata for zarr2 datasets
-│   └── z_to_chunk_index.py               # Print chunk index ranges for resubmit failed or left over jobs
-└── tests                                   # Comprehensive test suite
-    ├── conftest.py                         # Pytest fixtures and utilities
-    ├── test_data_config.py                 # Real and synthetic data configuration
-    ├── test_http_support.py                # HTTP path handling tests (7 tests)
-    ├── cli/                                # CLI tests (18 tests)
-    │   ├── test_cli_conversions_real.py    # Real data tests with middle chunks (6 tests)
-    │   ├── test_cli_conversions_synthetic.py # All 10 conversion tasks (8 tests)
-    │   └── test_cli_ome_zarr.py            # OME-Zarr metadata validation (4 tests)
-    └── gui/                                # GUI tests (13 tests)
-        ├── test_gui_conversions_synthetic.py # GUI conversion workflows (9 tests)
-        └── test_gui_ome_zarr.py            # GUI OME-Zarr metadata (4 tests)
-
+┌─────────────────────────────────────────────────────────────────┐
+│                         User Interface                          │
+│                    CLI (python -m tensorswitch_v2)              │
+└─────────────────────────────────────────────────────────────────┘
+                                 │
+                                 ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                      Core Processing Layer                       │
+│  DistributedConverter │ PyramidPlanner │ BatchConverter         │
+└─────────────────────────────────────────────────────────────────┘
+                                 │
+              ┌──────────────────┼──────────────────┐
+              ▼                  ▼                  ▼
+┌─────────────────────┐  ┌─────────────┐  ┌─────────────────────┐
+│      Readers        │  │ TensorStore │  │      Writers        │
+│  (12 formats)       │◀─│   Array     │─▶│  (3 formats)        │
+│  Tier 1/2/3         │  │ (Unified)   │  │  Zarr3/Zarr2/N5     │
+└─────────────────────┘  └─────────────┘  └─────────────────────┘
 ```
 
-## Environment Setup
+### Three-Tier Reader Strategy
 
-### Prerequisites
+| Tier | Performance | Formats | Description |
+|------|-------------|---------|-------------|
+| **Tier 1** | Maximum | N5, Zarr2, Zarr3, Precomputed | Native TensorStore drivers |
+| **Tier 2** | Optimized | TIFF, ND2, IMS, HDF5, CZI | Custom optimized readers |
+| **Tier 3** | Compatible | LIF + 200 more | BIOIO adapter |
 
-**Python Version**: Python 3.12
-**System Requirements**: Linux (tested on RHEL/CentOS)
-**Package Manager**: Pixi (recommended) or pip
+---
 
-### Option 1: Pixi Environment (Recommended)
+## Installation
 
-Pixi is a cross-platform package manager that creates reproducible environments. TensorSwitch uses Pixi for dependency management.
+TensorSwitch v2 is part of the TensorSwitch package.
 
-#### Installing Pixi
-
-If you don't have Pixi installed:
+### Option 1: Pixi Environment (Recommended for Janelia)
 
 ```bash
-# Install Pixi (one-time setup)
-curl -fsSL https://pixi.sh/install.sh | bash
-
-# Or using conda
-conda install -c conda-forge pixi
-```
-
-After installation, restart your shell or run:
-```bash
-source ~/.bashrc  # or ~/.zshrc depending on your shell
-```
-
-Verify Pixi is installed:
-```bash
-pixi --version
-```
-
-#### Setting Up TensorSwitch with Pixi
-
-1. **Clone the repository** (develop branch):
-   ```bash
-   git clone -b develop https://github.com/JaneliaSciComp/tensorswitch.git
-   cd tensorswitch
-   ```
-
-2. **Install dependencies** (Pixi will read `pixi.lock` and `pyproject.toml`):
-   ```bash
-   pixi install
-   ```
-
-   This creates a complete environment with:
-   - Python 3.12
-   - TensorStore
-   - All required dependencies (NumPy, Dask, Panel, etc.)
-   - GUI dependencies (Bokeh, Panel)
-
-3. **Verify installation**:
-   ```bash
-   # Check Python version in Pixi environment
-   pixi run python --version
-   # Should output: Python 3.12.x
-
-   # Test TensorSwitch CLI
-   pixi run python -m tensorswitch --help
-   ```
-
-#### Using the Pixi Environment
-
-**Run CLI commands**:
-```bash
-pixi run python -m tensorswitch --task tiff_to_zarr3_s0 --base_path /path/to/input.tif --output_path /path/to/output.zarr
-```
-
-**Launch the GUI**:
-```bash
-pixi run python src/tensorswitch/gui/launch_gui.py
-```
-
-**Run Python scripts**:
-```bash
-pixi run python your_script.py
-```
-
-**Activate the shell** (for interactive use):
-```bash
-pixi shell
-# Now you're inside the Pixi environment
-python -m tensorswitch --help
-```
-
-#### Environment Location
-
-Pixi creates the environment at:
-```
-.pixi/envs/default/
-```
-
-The Python interpreter is located at:
-```
-.pixi/envs/default/bin/python3.12
-```
-
-**Important**: On the Janelia cluster, use the full path to the Pixi Python when submitting jobs to ensure the correct environment is used.
-
-### Option 2: Pip Installation
-
-If you prefer pip over Pixi:
-
-```bash
-# Create a virtual environment (recommended)
-python3.12 -m venv tensorswitch_env
-source tensorswitch_env/bin/activate
-
-# Install TensorSwitch (develop branch)
-pip install git+https://github.com/JaneliaSciComp/tensorswitch@develop
-```
-
-### Option 3: Development Installation
-
-For development or contributing:
-
-```bash
-# Clone the repository (develop branch)
-git clone -b develop https://github.com/JaneliaSciComp/tensorswitch.git
-cd tensorswitch
-
-# Install with Pixi in development mode
+cd /path/to/tensorswitch
 pixi install
-
-# Or with pip in editable mode
-pip install -e .
 ```
+
+### Option 2: Pip Install
+
+```bash
+# From local checkout (editable mode for development)
+pip install -e /path/to/tensorswitch
+
+# From GitHub
+pip install git+https://github.com/JaneliaSciComp/tensorswitch.git@unified
+```
+
+### Verify Installation
+
+```bash
+# Using pixi
+pixi run tensorswitch-v2 --version
+# Output: tensorswitch_v2 2.0.0-beta
+
+# Or using module syntax
+pixi run python -m tensorswitch_v2 --version
+
+# After pip install (no pixi needed)
+tensorswitch-v2 --version
+```
+
+### Python API
+
+```python
+from tensorswitch_v2 import __version__, TensorSwitchDataset, Readers, Writers
+print(__version__)  # 2.0.0-beta
+```
+
+---
 
 ## Quick Start
 
-### Option 1: Web GUI (Recommended for Scientists)
+> **Note**: Examples below show `pixi run` prefix for Janelia cluster. If you installed via pip, omit `pixi run`.
 
-Launch the web interface for easy, no-programming data conversions:
-
-```bash
-# Start the GUI server
-pixi run python src/tensorswitch/gui/launch_gui.py
-
-# Access in browser at:
-# http://[your-hostname]:5000
-```
-
-**Features:**
-- **AI Assistant**: Integrated OpenAI-powered chat for conversion guidance and parameter optimization
-- **Smart Mode**: Auto-detect file formats and suggest optimal conversion settings
-- **Simple 3-step workflow**: Select input → Configure → Convert
-- **Advanced Dask Submission**: Hybrid Dask-LSF execution with automatic scaling and error recovery
-- **Built-in path suggestions**: 131 HHMI labs with direct storage access
-- **Real-time progress monitoring**: Job status tracking and log viewing
-- **Dual format support**: Create Zarr files compatible with both v2 and v3 tools
-- **Local or cluster job submission**: Flexible execution options
-- **All conversion tasks supported**: TIFF, ND2, IMS, CZI to Zarr2/Zarr3
-
-See [GUI Documentation](src/tensorswitch/gui/README_GUI.md) for detailed usage.
-
-### Option 2: Command Line Interface
-
-## How to Use
-
-### 1. Run the Main Pipeline
-
-Use the `python -m tensorswitch` as the entry point. Example:
+### Single File Conversion
 
 ```bash
-python -m tensorswitch --task n5_to_zarr2     --base_path /path/to/n5     --output_path /path/to/zarr2     --level 0
+# Convert TIFF to Zarr3 (auto-detect format)
+pixi run tensorswitch-v2 -i input.tif -o output.zarr
+
+# Convert ND2 to Zarr3 with custom chunk shape
+pixi run tensorswitch-v2 -i input.nd2 -o output.zarr --chunk_shape 32,256,256
+
+# Convert to Zarr2 format
+pixi run tensorswitch-v2 -i input.tif -o output.zarr --output_format zarr2
 ```
 
-### 2. Submit Cluster Jobs (Optional)
-
-You can also use the `--submit` flag to dispatch jobs to an LSF cluster:
+### Generate Multi-Scale Pyramid
 
 ```bash
-python -m tensorswitch --task downsample_shard_zarr3 \
-  --base_path /path/to/zarr/s0 \
-  --output_path /path/to/zarr \
-  --level 1 \
-  --downsample 1 \
-  --use_shard 1 \
-  --submit \
-  --project your_project_name
+# After s0 conversion, generate full pyramid
+pixi run python -m tensorswitch_v2 --auto_multiscale \
+  -i output.zarr/s0 -o output.zarr
 ```
 
-### 3. Supported Tasks
-
-| Task Name                 | Description |
-|---------------------------|-----------------------------------------|
-| `n5_to_zarr2`            | Convert N5 to Zarr V2                   |
-| `n5_to_n5`               | Convert N5 to N5 (new chunking)         |
-| `downsample_shard_zarr3` | Downsample existing Zarr V3 dataset with sharding |
-| `downsample_zarr2`       | Downsample existing Zarr V2 dataset     |
-| `tiff_to_zarr2_s0`       | Convert TIFF stack to Zarr V2 (s0) with OME-Zarr metadata |
-| `tiff_to_zarr3_s0`       | Convert TIFF stack to Zarr V3 (s0) with OME-Zarr metadata |
-| `nd2_to_zarr2_s0`        | Convert ND2 file to Zarr V2 (s0) with OME-Zarr metadata |
-| `nd2_to_zarr3_s0`        | Convert ND2 file to Zarr V3 (s0) with OME-Zarr metadata |
-| `ims_to_zarr2_s0`        | Convert IMS file to Zarr V2 (s0) with OME-Zarr metadata |
-| `ims_to_zarr3_s0`        | Convert IMS file to Zarr V3 (s0) with OME-Zarr metadata |
-| `czi_to_zarr3_s0`        | Convert CZI file to Zarr V3 (s0) with XSLT-based OME-XML metadata |
-| `precomputed_to_n5`      | Convert Neuroglancer Precomputed to N5 format |
-
-All s0 conversion tasks create multiscale-compatible Zarr structures with proper OME-Zarr metadata and correct dimension ordering.
-
-### Enhanced OME-ZARR Metadata
-
-All conversion tasks now support both Zarr V2 and Zarr V3 formats with automatic metadata preservation:
-
-**Zarr V2 Tasks:** `tiff_to_zarr2_s0`, `nd2_to_zarr2_s0`, `ims_to_zarr2_s0`, `downsample_zarr2`
-**Zarr V3 Tasks:** `tiff_to_zarr3_s0`, `nd2_to_zarr3_s0`, `ims_to_zarr3_s0`, `czi_to_zarr3_s0`, `downsample_shard_zarr3`
-
-- **Automatic OME XML Extraction**: Source metadata is automatically preserved
-- **Correct Dimension Ordering**: Fixes dimension mapping issues (e.g., XYCTZ → [c,y,x])
-- **Complete Zarr2 Support**: Creates both .zattrs and .zgroup files
-- **No Manual Steps Required**: Metadata is handled automatically during conversion
-
-**Recent Fixes:**
-- Fixed dimension ordering for ND2 files with multi-channel data
-- Added missing .zgroup files for zarr2 format compliance
-- Universal metadata handling across all formats
-
-### 4. Dual Zarr v2/v3 Format Compatibility
-
-Create Zarr files that work with both v2 and v3 tools for maximum compatibility.
-
-#### Available Options
-
-Use `--dual_zarr_approach` with any Zarr v3 conversion task:
-
-| Option | Description | When to Use |
-|--------|-------------|-------------|
-| `none` | **Default**. Pure Zarr v3 | Standard workflows |
-| `v2_chunks` | Dual format with v2 chunk structure | Maximum compatibility |
-| `v3_chunks` | Dual format with v3 chunk structure | Specific research needs |
-
-#### Key Features
-
-- **Auto-disable sharding**: Dual format prevents sharding (shown in logs)
-- **Cross-tool compatibility**: Same data readable by both Zarr v2 and v3 libraries
-- **Multiple entry points**: Root and multiscale access for flexible tool support
-
-#### Examples
+### Submit to LSF Cluster
 
 ```bash
-# Default: Pure Zarr v3
-python -m tensorswitch --task nd2_to_zarr3_s0 --base_path file.nd2 --output_path output.zarr
-
-# Dual format for maximum compatibility
-python -m tensorswitch --task nd2_to_zarr3_s0 --base_path file.nd2 --output_path output.zarr --dual_zarr_approach v2_chunks
-
-# Dual format with v3 chunk structure
-python -m tensorswitch --task nd2_to_zarr3_s0 --base_path file.nd2 --output_path output.zarr --dual_zarr_approach v3_chunks
+# Submit conversion job to cluster
+pixi run python -m tensorswitch_v2 -i input.tif -o output.zarr \
+  --submit -P scicompsoft
 ```
 
-### 5. AI Assistant Features
+---
 
-The integrated AI assistant provides intelligent guidance for data conversion tasks.
+## CLI Reference
 
-#### Enabling AI Assistant
+### Basic Arguments
 
-Set your OpenAI API key before launching the GUI:
+| Argument | Description | Default |
+|----------|-------------|---------|
+| `-i, --input` | Input file or directory | Required |
+| `-o, --output` | Output path | Required |
+| `--output_format` | Output format: `zarr3`, `zarr2`, `n5` | `zarr3` |
+| `-V, --version` | Show version | - |
+| `--quiet` | Suppress progress output | False |
+| `--show_spec` | Preview conversion specs without running | False |
+| `--omero` | Include structured omero channel metadata | False |
+
+### Chunk/Shard Configuration
+
+| Argument | Description | Default |
+|----------|-------------|---------|
+| `--chunk_shape` | Inner chunk shape (e.g., `32,256,256`) | Auto |
+| `--shard_shape` | Shard shape for Zarr3 (e.g., `64,512,512`) | Auto |
+| `--no_sharding` | Disable sharding (Zarr3 only) | False |
+| `--compression` | Compression codec | `zstd` |
+| `--compression_level` | Compression level (1-22) | `5` |
+
+### Downsampling
+
+| Argument | Description |
+|----------|-------------|
+| `--auto_multiscale` | Generate full pyramid from s0 |
+| `--downsample` | Single-level downsampling mode |
+| `--target_level` | Target level for single-level mode |
+| `--single_level_factor` | Factor for single-level mode (e.g., `1,4,4` for s2) |
+| `--per_level_factors` | Custom per-level factors for pyramid (e.g., `1,2,2;1,2,2;1,2,2`) |
+| `--downsample_method` | Downsampling method: `auto` (default), `mean`, `mode`, `median`, `stride`, `min`, `max` |
+
+### LSF Cluster
+
+| Argument | Description | Default |
+|----------|-------------|---------|
+| `--submit` | Submit as LSF job | False |
+| `-P, --project` | LSF project name | Required with `--submit` |
+| `--memory` | Memory in GB | Auto-calculated |
+| `--wall_time` | Wall time (H:MM) | Auto-calculated |
+| `--cores` | Number of cores | Auto-calculated |
+| `--job_group` | LSF job group | `/scicompsoft/chend/tensorstore` |
+
+### Batch Processing
+
+| Argument | Description | Default |
+|----------|-------------|---------|
+| `--pattern` | File pattern for batch mode | `*.tif` |
+| `--recursive` | Search subdirectories | False |
+| `--max_concurrent` | Max concurrent LSF jobs | `100` |
+| `--skip_existing` | Skip completed files | True |
+| `--status` | Check batch status | - |
+| `--dry_run` | Preview without executing | False |
+
+### Format-Specific
+
+| Argument | Description |
+|----------|-------------|
+| `--view_index` | CZI view index (None = all views as 5D) |
+| `--use_bioio` | Force BIOIO adapter (Tier 3) |
+| `--dataset_path` | Path within container (e.g., `s0` for N5) |
+
+---
+
+## Python API
+
+### TensorSwitchDataset
+
+```python
+from tensorswitch_v2.api import TensorSwitchDataset, Readers, Writers
+
+# Auto-detect format and create dataset
+dataset = TensorSwitchDataset("/path/to/data.tif")
+
+# Access properties
+print(dataset.shape)      # (100, 2048, 2048)
+print(dataset.dtype)      # uint16
+print(dataset.ndim)       # 3
+
+# Get TensorStore array
+ts_array = dataset.get_tensorstore_array(mode='open')
+
+# Get OME-NGFF metadata
+metadata = dataset.get_ome_ngff_metadata()
+voxel_sizes = dataset.get_voxel_sizes()  # [z, y, x] in micrometers
+```
+
+### Readers Factory
+
+```python
+from tensorswitch_v2.api import Readers
+
+# Auto-detect (recommended)
+reader = Readers.auto_detect("/path/to/data.tif")
+
+# Explicit reader selection
+reader = Readers.tiff("/path/to/data.tif")      # Tier 2
+reader = Readers.nd2("/path/to/data.nd2")       # Tier 2
+reader = Readers.czi("/path/to/data.czi")       # Tier 2
+reader = Readers.ims("/path/to/data.ims")       # Tier 2
+reader = Readers.n5("/path/to/data.n5")         # Tier 1
+reader = Readers.zarr3("/path/to/data.zarr")    # Tier 1
+reader = Readers.bioio("/path/to/data.lif")     # Tier 3
+
+# Get TensorStore spec
+spec = reader.get_tensorstore_spec()
+metadata = reader.get_metadata()
+```
+
+### Writers Factory
+
+```python
+from tensorswitch_v2.api import Writers
+
+# Create writers
+writer = Writers.zarr3("/path/to/output.zarr",
+                       use_sharding=True,
+                       compression="zstd",
+                       compression_level=5)
+
+writer = Writers.zarr2("/path/to/output.zarr",
+                       compression="blosc")
+
+writer = Writers.n5("/path/to/output.n5")
+```
+
+### DistributedConverter
+
+```python
+from tensorswitch_v2.api import Readers, Writers
+from tensorswitch_v2.core import DistributedConverter
+
+# Create reader and writer
+reader = Readers.auto_detect("/path/to/input.tif")
+writer = Writers.zarr3("/path/to/output.zarr")
+
+# Create converter
+converter = DistributedConverter(reader, writer)
+
+# Full conversion (chunk/shard shapes are optional - auto-calculated if omitted)
+converter.convert(
+    chunk_shape=(32, 256, 256),   # Optional: example value
+    shard_shape=(64, 512, 512),   # Optional: example value
+    write_metadata=True,
+    verbose=True
+)
+
+# Or let it auto-calculate optimal shapes (recommended)
+converter.convert(write_metadata=True, verbose=True)
+
+# Partial conversion (for LSF multi-job mode)
+converter.convert(
+    start_idx=0,
+    stop_idx=100,
+    write_metadata=False  # Last job writes metadata
+)
+```
+
+### PyramidPlanner
+
+```python
+from tensorswitch_v2.core import PyramidPlanner, create_pyramid_parallel
+
+# Plan pyramid levels
+planner = PyramidPlanner("/path/to/dataset.zarr/s0")
+plan = planner.calculate_pyramid_plan()
+
+# Print plan
+planner.print_pyramid_plan(plan)
+
+# Submit chained pyramid jobs to LSF
+planner.submit_chained_pyramid(
+    pyramid_plan=plan,
+    project="scicompsoft",
+    output_format="zarr3"
+)
+
+# Or use convenience function
+create_pyramid_parallel(
+    s0_path="/path/to/dataset.zarr/s0",
+    root_path="/path/to/dataset.zarr",
+    project="scicompsoft"
+)
+```
+
+### BatchConverter
+
+```python
+from tensorswitch_v2.core import BatchConverter
+
+# Create batch converter
+batch = BatchConverter(
+    input_dir="/path/to/tiffs/",
+    output_dir="/path/to/output/",
+    pattern="*.tif",
+    output_format="zarr3",
+    recursive=False
+)
+
+# Discover files
+files = batch.discover()
+print(f"Found {len(files)} files")
+
+# Submit to LSF
+batch.submit_lsf(
+    project="scicompsoft",
+    memory_gb=30,
+    wall_time="1:00",
+    max_concurrent=100
+)
+
+# Check status
+result = batch.check_status()
+print(f"Completed: {result.completed}/{result.total}")
+```
+
+---
+
+## Supported Formats
+
+### Input Formats
+
+| Format | Extension | Tier | Reader |
+|--------|-----------|------|--------|
+| TIFF | `.tif`, `.tiff` | 2 | TiffReader |
+| ND2 (Nikon) | `.nd2` | 2 | ND2Reader |
+| IMS (Imaris) | `.ims` | 2 | IMSReader |
+| CZI (Zeiss) | `.czi` | 2 | CZIReader |
+| HDF5 | `.h5`, `.hdf5` | 2 | HDF5Reader |
+| N5 | `.n5` | 1 | N5Reader |
+| Zarr v3 | `.zarr` | 1 | Zarr3Reader |
+| Zarr v2 | `.zarr` | 1 | Zarr2Reader |
+| Precomputed | directory | 1 | PrecomputedReader |
+| LIF (Leica) | `.lif` | 3 | BIOIOReader |
+| OME-TIFF | `.ome.tif` | 3 | BIOIOReader |
+| 200+ more | various | 3 | BIOIOReader |
+
+### Output Formats
+
+| Format | Description | Features |
+|--------|-------------|----------|
+| **Zarr v3** | Primary format | Sharding, OME-NGFF v0.5, zstd compression |
+| **Zarr v2** | Legacy format | OME-NGFF v0.4, blosc compression |
+| **N5** | Java tools | BigDataViewer compatible |
+
+---
+
+## Multi-Scale Pyramids
+
+TensorSwitch v2 uses **chained downsampling** for efficient pyramid generation:
+
+```
+Chained Downsampling:
+┌────┐
+│ s0 │ (original)
+└──┬─┘
+   │ 2x
+   ▼
+┌────┐
+│ s1 │ ──bwait
+└──┬─┘
+   │ 2x
+   ▼
+┌────┐
+│ s2 │ ──bwait
+└──┬─┘
+   ...
+```
+
+**Benefits**:
+- Constant ~8x read amplification per level
+- Deep levels (s4, s5) complete in minutes
+- Automatic anisotropic factor calculation
+- OME-NGFF compliant metadata with translation transforms (Neuroglancer compatible)
+
+### Generate Pyramid
+
+**Flexible input paths** - both formats work:
+```bash
+# Option 1: Root zarr path (auto-detects s0 from metadata or common patterns)
+pixi run python -m tensorswitch_v2 --auto_multiscale \
+  -i /path/to/dataset.zarr \
+  --submit -P scicompsoft
+
+# Option 2: Explicit s0 path (also works)
+pixi run python -m tensorswitch_v2 --auto_multiscale \
+  -i /path/to/dataset.zarr/s0 \
+  --submit -P scicompsoft
+```
+
+**Auto-detection logic**:
+1. If path ends with level pattern (`s0`, `0`, `s1`, etc.) → use as-is
+2. Check OME-NGFF metadata (`multiscales[0].datasets[0].path`)
+3. Fallback to common subdirectories: `s0`, `0`
 
 ```bash
-export OPENAI_API_KEY="your-api-key-here"
-pixi run python src/tensorswitch/gui/launch_gui.py
+# Single level only (e.g., just create s2)
+pixi run python -m tensorswitch_v2 --downsample \
+  -i /path/to/dataset.zarr/s0 \
+  -o /path/to/dataset.zarr \
+  --target_level 2 \
+  --single_level_factor 1,4,4
 ```
 
-#### AI Capabilities
+### Downsampling Factor Arguments
 
-- **Format Detection Guidance**: Get recommendations based on your file types
-- **Parameter Optimization**: Optimal cores, memory, and time settings for your data size
-- **Lab Path Assistance**: Find your lab's storage locations quickly
-- **Smart vs Manual Mode**: Understand when to use each approach
-- **Conversion Best Practices**: Format-specific optimization tips
-- **Real-time Support**: Ask questions about any TensorSwitch feature
+There are two factor arguments for different use cases:
 
-#### Example AI Interactions
+| Argument | Mode | Purpose | Format |
+|----------|------|---------|--------|
+| `--single_level_factor` | `--downsample` | Create **one** level | `z,y,x` (cumulative from s0) |
+| `--per_level_factors` | `--auto_multiscale` | Create **full pyramid** | `z,y,x;z,y,x;...` (per-level) |
 
-```
-User: "I have a 5GB ND2 file, what settings should I use?"
-AI: "For a 5GB ND2 file, I recommend:
-     - Use Smart Mode for auto-detection
-     - 2 cores, 16GB memory, 2 hours wall time
-     - Enable OME structure for metadata preservation
-     - Consider Zarr3 format for better performance"
+**Key difference:**
+- `--single_level_factor 1,4,4` → Total 4x reduction on Y,X from s0 (creates one level)
+- `--per_level_factors "1,2,2;1,2,2"` → 2x per level (creates multiple levels, cumulative calculated automatically)
 
-User: "How do I find my lab's storage path?"
-AI: "Use the Lab Path Helper in the GUI. Your lab's paths are:
-     - NRS: /nrs/yourlab/
-     - Groups: /groups/yourlab/
-     - Click on the path suggestions for quick access"
-```
+### Downsampling Method
 
-### 6. Cluster Job Submission
+The `--downsample_method` option controls how TensorStore computes downsampled values:
 
-Submit conversions to LSF cluster with automatic job splitting.
+| Method | Description | Best For |
+|--------|-------------|----------|
+| `auto` | Auto-detect from filename (default) | Most use cases |
+| `mean` | Average of values | Intensity images (fluorescence, brightfield) |
+| `mode` | Most frequent value | Segmentation masks, labels |
+| `median` | Median value | Noise reduction |
+| `stride` | Simple striding (fastest) | Quick previews |
+| `min` | Minimum value | Specific use cases |
+| `max` | Maximum value | Specific use cases |
 
-#### Traditional LSF Submission
+**Auto-detection heuristics:**
+- If filename/path contains `label`, `mask`, `seg`, `annotation`, `roi`, `binary`, `instance` → uses `mode`
+- Otherwise → uses `mean` (best for most microscopy data)
 
 ```bash
-# Submit ND2 to Zarr conversion to cluster
-python -m tensorswitch --task nd2_to_zarr3_s0 \
-  --base_path /path/to/file.nd2 \
-  --output_path /path/to/output.zarr \
-  --num_volumes 4 \
-  --cores 2 \
-  --wall_time 2:00 \
-  --project your_project \
-  --submit
+# Auto-detect method (default - usually picks 'mean' for microscopy)
+pixi run python -m tensorswitch_v2 --auto_multiscale \
+  -i /path/to/dataset.zarr/s0 \
+  -o /path/to/dataset.zarr \
+  --submit -P scicompsoft
 
-# Submit with dual format
-python -m tensorswitch --task nd2_to_zarr3_s0 \
-  --base_path /path/to/file.nd2 \
-  --output_path /path/to/output.zarr \
-  --dual_zarr_approach v2_chunks \
-  --num_volumes 8 \
-  --project your_project \
-  --submit
+# Explicitly use mode for segmentation data
+pixi run python -m tensorswitch_v2 --auto_multiscale \
+  -i /path/to/labels.zarr/s0 \
+  -o /path/to/labels.zarr \
+  --downsample_method mode \
+  --submit -P scicompsoft
 ```
 
-#### Dask JobQueue Submission
+### Custom Factors for Anisotropic Data
+
+When voxel sizes are not in zarr metadata (e.g., raw TIFF, BigStitcher data), use `--per_level_factors`:
 
 ```bash
-# Use Dask for advanced cluster scheduling
-python -m tensorswitch --task nd2_to_zarr3_s0 \
-  --base_path /path/to/file.nd2 \
-  --output_path /path/to/output.zarr \
-  --use_dask_jobqueue \
-  --project your_project \
-  --submit
+# Full pyramid with custom factors: skip Z, downsample Y,X by 2x per level
+pixi run python -m tensorswitch_v2 --auto_multiscale \
+  -i /path/to/dataset.zarr/s0 \
+  -o /path/to/dataset.zarr \
+  --per_level_factors "1,2,2;1,2,2;1,2,2;1,2,2" \
+  --submit -P scicompsoft
 ```
 
-#### Cluster Parameters
+**How `--per_level_factors` works:**
 
-| Parameter | Description | Default |
-|-----------|-------------|---------|
-| `--num_volumes` | Number of parallel jobs | 8 |
-| `--cores` | Cores per job | 4 |
-| `--wall_time` | Time limit (HH:MM) | 1:00 |
-| `--project` | Billing project (required) | None |
-| `--use_dask_jobqueue` | Use Dask scheduling | False |
+Each semicolon-separated entry is the factor **from previous level to current level**:
 
-#### Advanced Parameters
-
-| Parameter | Description | Example |
-|-----------|-------------|---------|
-| `--custom_chunk_shape` | Custom chunk size for output (comma-separated) | 128,128,128 |
-| `--custom_shard_shape` | Custom shard size for Zarr v3 (comma-separated) | 256,256,256 |
-| `--memory_limit` | Memory limit in GB per job | 50 |
-| `--dual_zarr_approach` | Create dual v2/v3 compatible format | v2_chunks, v3_chunks, none |
-
-### 6. Example Commands
-
-#### Convert N5 to Zarr V2 locally
-```bash
-python -m tensorswitch --task n5_to_zarr2     --base_path /path/to/n5     --output_path /path/to/zarr2     --level 0
+```
+--per_level_factors "1,2,2;1,2,2;1,2,2;1,2,2"
+                     ─────  ─────  ─────  ─────
+                     s0→s1  s1→s2  s2→s3  s3→s4
 ```
 
-#### Downsample Zarr v2 locally
+| Level | Per-Level Factor | Cumulative (auto-calculated) | Shape Change |
+|-------|------------------|------------------------------|--------------|
+| s1 | `[1,2,2]` | `[1,2,2]` | Z same, Y,X ÷2 |
+| s2 | `[1,2,2]` | `[1,4,4]` | Z same, Y,X ÷4 |
+| s3 | `[1,2,2]` | `[1,8,8]` | Z same, Y,X ÷8 |
+| s4 | `[1,2,2]` | `[1,16,16]` | Z same, Y,X ÷16 |
+
+**Example: 4D CZYX data (never downsample channels)**
+
 ```bash
-python -m tensorswitch --task downsample_zarr2 --base_path /path/to/zarr2/s0 --output_path /path/to/zarr2 --level 1
+--per_level_factors "1,1,2,2;1,1,2,2;1,1,2,2;1,2,2,2"
+#                    C Z Y X
 ```
 
-#### Downsample Zarr v3 locally
+### Batch Pyramid Generation
+
+Generate pyramids for multiple datasets at once (e.g., after batch conversion):
+
 ```bash
-python -m tensorswitch --task downsample_shard_zarr3 --base_path /path/to/zarr/s0 --output_path /path/to/zarr --level 1 --use_shard 1
+# Step 1: Batch convert TIFFs to Zarr3
+pixi run python -m tensorswitch_v2 \
+  -i /path/to/tiff_directory/ \
+  -o /path/to/zarr_output/ \
+  --pattern "*.tif" \
+  --submit -P scicompsoft --max_concurrent 100
+
+# Step 2: Batch generate pyramids for all zarr files
+pixi run python -m tensorswitch_v2 --auto_multiscale \
+  -i /path/to/zarr_output/ \
+  --pattern '*.zarr' \
+  --max_concurrent 50 \
+  --submit -P scicompsoft
+
+# Step 2 (alternative): Batch pyramids with custom anisotropic factors
+# Use this when all tiles have the same voxel anisotropy
+pixi run python -m tensorswitch_v2 --auto_multiscale \
+  -i /path/to/zarr_output/ \
+  --pattern '*.zarr' \
+  --per_level_factors "1,2,2;1,2,2;1,2,2;1,2,2" \
+  --max_concurrent 50 \
+  --submit -P scicompsoft
 ```
 
-#### Submit N5 to Zarr jobs to cluster
+Each dataset gets its own coordinator job that spawns chained downsampling jobs. When using `--per_level_factors`, the same factors are applied to all datasets in the batch.
+
+---
+
+## Batch Processing
+
+Convert multiple files using LSF job arrays:
+
 ```bash
-python -m tensorswitch --task n5_to_zarr2 --base_path /path/to/n5 --output_path /path/to/zarr2 --submit --project your_project_name
+# Discover and convert all TIFFs in directory
+pixi run python -m tensorswitch_v2 \
+  -i /path/to/tiff_directory/ \
+  -o /path/to/output_directory/ \
+  --pattern "*.tif" \
+  --submit -P scicompsoft \
+  --max_concurrent 100
+
+# Check status
+pixi run python -m tensorswitch_v2 --status \
+  -i /path/to/tiff_directory/ \
+  -o /path/to/output_directory/
+
+# Dry run (preview only)
+pixi run python -m tensorswitch_v2 \
+  -i /path/to/tiff_directory/ \
+  -o /path/to/output_directory/ \
+  --pattern "*.tif" \
+  --dry_run
 ```
 
-#### Convert N5 to N5 with custom chunk size (rechunking)
+### Rechunking (Same Format, Different Chunks)
+
+For rechunking existing data (e.g., N5 → N5 with different chunk shape), the **output path determines the behavior**:
+
 ```bash
-# Transfer and rechunk N5 from remote HTTP server to local storage
-python -m tensorswitch --task n5_to_n5 \
-  --base_path "http://remote-server/dataset.n5/setup0/timepoint0/s0" \
-  --output_path "/local/storage/dataset.n5/setup0/timepoint0/s0" \
-  --custom_chunk_shape 128,128,128 \
-  --level 0 \
-  --memory_limit 50 \
-  --num_volumes 1 \
-  --cores 8 \
-  --submit \
-  --project your_project_name
+# FORMAT CONVERSION: N5 → Zarr3 (different format)
+# Output to .zarr → converts to Zarr3 s0, then use --auto_multiscale for pyramid
+pixi run python -m tensorswitch_v2 \
+  -i /source/dataset.n5/setup0/timepoint0/s0 \
+  -o /output/dataset.zarr/s0 \
+  --output_format zarr3 \
+  --submit -P scicompsoft
+
+# RECHUNK: N5 → N5 (same format, new chunks)
+# Output to same level path (s0, s1, etc.) → rechunks with new chunk shape
+pixi run python -m tensorswitch_v2 \
+  -i /source/dataset.n5/setup0/timepoint0/s0 \
+  -o /output/dataset.n5/setup0/timepoint0/s0 \
+  --output_format n5 \
+  --chunk_shape 128,128,128 \
+  --submit -P liconn
 ```
 
-#### Convert TIFF to Zarr v2 s0 with automatic OME metadata
-```bash
-python -m tensorswitch --task tiff_to_zarr2_s0 --base_path /path/to/tiff_folder --output_path /path/to/zarr2 --use_ome_structure 1
-```
+**Key distinction**: When output format matches input format AND output path ends with a level (s0, s1, etc.), this is a rechunk operation.
 
-#### Convert TIFF to Zarr v3 s0 with automatic OME metadata
-```bash
-python -m tensorswitch --task tiff_to_zarr3_s0 --base_path /path/to/tiff_folder --output_path /path/to/zarr3 --use_shard 0 --use_ome_structure 1
-```
-
-#### Auto-Multiscale: Automatic pyramid generation (local mode)
-```bash
-# Convert TIFF to Zarr3 s0 with auto-multiscale enabled
-python -m tensorswitch --task tiff_to_zarr3_s0 \
-  --base_path /path/to/input.tif \
-  --output_path /path/to/output.zarr \
-  --use_shard 1 \
-  --auto_multiscale
-
-# This will:
-# 1. Create s0 level
-# 2. Automatically generate s1, s2, s3, ... until thumbnail-sized
-# 3. Use Yurii Zubov's anisotropic algorithm (preserves Z-resolution)
-```
-
-#### Auto-Multiscale: Cluster mode (for existing s0)
-```bash
-# First, create s0 on cluster
-python -m tensorswitch --task tiff_to_zarr3_s0 \
-  --base_path /path/to/input.tif \
-  --output_path /path/to/output.zarr \
-  --submit --project your_project
-
-# After s0 completes, generate pyramid on cluster
-python -m tensorswitch --task downsample_shard_zarr3 \
-  --base_path /path/to/output.zarr/s0 \
-  --output_path /path/to/output.zarr \
-  --auto_multiscale \
-  --submit --project your_project
-
-# Generates CLI coordinator script that submits s1, s2, s3, ... jobs automatically
-```
-
-#### Fortran order (optimal for WebKnossos)
-```bash
-# Convert ND2 with Fortran order transpose codec
-python -m tensorswitch --task nd2_to_zarr3_s0 \
-  --base_path /path/to/file.nd2 \
-  --output_path /path/to/output.zarr \
-  --use_fortran_order 1 \
-  --submit --project your_project
-```
-
-#### Convert ND2 to Zarr v2 s0 with automatic OME metadata (local)
-```bash
-python -m tensorswitch --task nd2_to_zarr2_s0 --base_path /path/to/file.nd2 --output_path /path/to/output.zarr --use_ome_structure 1
-```
-
-#### Convert ND2 to Zarr v3 s0 with automatic OME metadata (local)
-```bash
-python -m tensorswitch --task nd2_to_zarr3_s0 --base_path /path/to/file.nd2 --output_path /path/to/output.zarr --use_shard 0 --use_ome_structure 1
-```
-
-#### Submit ND2 to Zarr v3 conversion to cluster with OME metadata
-```bash
-python -m tensorswitch --task nd2_to_zarr3_s0 \
-  --base_path /path/to/file.nd2 \
-  --output_path /path/to/output.zarr \
-  --use_ome_structure 1 \
-  --num_volumes 8 \
-  --cores 4 \
-  --wall_time 2:00 \
-  --project your_project_name \
-  --submit
-```
-
-#### Convert IMS to Zarr v3 s0 with automatic OME-Zarr metadata (local)
-```bash
-python -m tensorswitch --task ims_to_zarr3_s0 --base_path /path/to/file.ims --output_path /path/to/output.zarr --use_shard 0 --use_ome_structure 1
-```
-
-#### Submit IMS to Zarr v3 conversion to cluster with OME metadata
-```bash
-python -m tensorswitch --task ims_to_zarr3_s0 \
-  --base_path /path/to/file.ims \
-  --output_path /path/to/output.zarr \
-  --use_ome_structure 1 \
-  --num_volumes 8 \
-  --cores 4 \
-  --wall_time 2:00 \
-  --project your_project_name \
-  --submit
-```
-
-#### Convert CZI to Zarr v3 with sharding (recommended for ML training)
-```bash
-# With sharding: 256³ inner chunks, 1024³ shards (optimal for random 256³ crops)
-python -m tensorswitch --task czi_to_zarr3_s0 \
-  --base_path /path/to/file.czi \
-  --output_path /path/to/output.zarr \
-  --use_shard 1 \
-  --custom_chunk_shape 256,256,256 \
-  --custom_shard_shape 1024,1024,1024 \
-  --use_ome_structure 1 \
-  --wall_time 4:00 \
-  --project your_project_name \
-  --submit --use_single_job
-```
-
-#### Convert CZI to Zarr v3 without sharding
-```bash
-# Without sharding: 256³ chunks directly
-python -m tensorswitch --task czi_to_zarr3_s0 \
-  --base_path /path/to/file.czi \
-  --output_path /path/to/output.zarr \
-  --use_shard 0 \
-  --custom_chunk_shape 256,256,256 \
-  --use_ome_structure 1 \
-  --wall_time 16:00 \
-  --project your_project_name \
-  --submit --use_single_job
-```
-
-**CZI Conversion Features:**
-- **XSLT-based OME-XML**: Rich metadata transformation using vendored Allen Institute XSLT stylesheets
-- **Multi-view support**: Handles CZI files with multiple views (V dimension)
-- **Voxel size extraction**: Automatic extraction of X, Y, Z pixel sizes from CZI metadata
-- **Sharding support**: Optional sharding for efficient random access (recommended for ML training)
-- **Automatic dimension handling**: Supports 3D, 4D, and 5D arrays (V, C, Z, Y, X)
-
-#### Convert Neuroglancer Precomputed to N5 (local or from GCS)
-```bash
-# Local conversion - single scale
-python -m tensorswitch --task precomputed_to_n5 \
-  --base_path /path/to/precomputed_data \
-  --output_path /path/to/output.n5/ch0tp0/s0 \
-  --level 0
-
-# From Google Cloud Storage - submit to cluster
-python -m tensorswitch --task precomputed_to_n5 \
-  --base_path "gs://bucket-name/path/to/data" \
-  --output_path /local/output.n5/ch0tp0/s0 \
-  --level 0 \
-  --num_volumes 8 \
-  --cores 4 \
-  --project your_project_name \
-  --submit
-```
-
-**Automatic N5 Attributes Generation:**
-- ✅ **Scale-level attributes.json** automatically created with:
-  - `downsamplingFactors` (calculated from Precomputed resolutions)
-  - `pixelResolution` (extracted from Precomputed info)
-  - `blockSize`, `compression`, `dataType`, `dimensions`
-- ✅ **Root attributes.json** automatically created with:
-  - Complete Bigstitcher-Spark metadata structure
-  - `MultiResolutionInfos` for all scales
-  - `pixelResolution` array matching MultiResolutionInfos
-  - `AnisotropyFactor` calculated from source resolution
-- ✅ **No manual attribute fixing needed!** All metadata generated during conversion
-
-#### Create Complete Multiscale OME-Zarr Dataset
-
-1. **Convert to s0**: Use any s0 conversion task (tiff, nd2, or ims) with `--use_ome_structure 1`
-2. **Generate levels s1-s4**: Use downsampling for each level  
-3. **Update multiscale metadata**: Optionally update multiscale structure
+For datasets with multiple levels (like Keller lab N5), use a shell script to rechunk all levels in parallel:
 
 ```bash
-# Step 1: Convert source to s0 (example with IMS) - OME metadata automatically preserved
-python -m tensorswitch --task ims_to_zarr3_s0 \
-  --base_path /path/to/file.ims \
-  --output_path /path/to/output.zarr \
-  --use_ome_structure 1 \
-  --submit --project your_project
+# Rechunk all levels in parallel (shell script approach)
+for level in {0..4}; do
+  case $level in
+    0) cores=8 ;;
+    1) cores=4 ;;
+    *) cores=2 ;;
+  esac
 
-# Step 2: Generate downsampled levels s1-s4
-for level in {1..4}; do
-  python -m tensorswitch --task downsample_shard_zarr3 \
-    --base_path /path/to/output.zarr/multiscale/s$((level-1)) \
-    --output_path /path/to/output.zarr \
-    --level $level \
-    --submit --project your_project
+  pixi run python -m tensorswitch_v2 \
+    -i "/source/dataset.n5/setup0/timepoint0/s${level}" \
+    -o "/output/dataset.n5/setup0/timepoint0/s${level}" \
+    --output_format n5 \
+    --chunk_shape 128,128,128 \
+    --cores ${cores} \
+    --submit -P liconn
 done
-
-# Step 3: Update multiscale metadata (optional - source metadata already preserved)
-python contrib/update_metadata.py /path/to/output.zarr
-```
-
-#### Resubmit Failed Chunks
-Use `re_submit_jobs.ipynb` to debug chunk failures and resubmit specific chunk ranges using `z_to_chunk_index.py`.
-
-### 7. Remote Data Support
-
-Process N5/Zarr data directly from remote sources without downloading.
-
-**Supported sources:**
-- HTTP/HTTPS URLs (e.g., Keller lab servers)
-- Google Cloud Storage (`gs://` URLs)
-- AWS S3 (`s3://` URLs)
-
-**Setup for Google Cloud Storage:**
-```bash
-gcloud auth application-default login
-```
-
-**Example - Convert from Google Cloud:**
-```bash
-python -m tensorswitch --task n5_to_zarr2 \
-  --base_path "gs://bucket-name/path/to/data.n5/s0" \
-  --output_path /local/output.zarr \
-  --level 0
-```
-
-**Inspect remote data:**
-```bash
-pixi run python inspect_gcs_neuroglancer.py gs://bucket-name/path/to/data
-```
-
-Benefits: No download required, saves storage space, faster start.
-
----
-
-## Contrib Scripts
-
-### update_metadata.py
-Update OME-Zarr multiscale metadata and optionally add ome_xml information:
-
-```bash
-# Update metadata for levels s0-s4
-python contrib/update_metadata.py /path/to/output.zarr
-
-# Auto-detect max level and add ome_xml from corresponding ND2 files
-python contrib/update_metadata.py /path/to/output.zarr --check-ome-xml
-
-# Dry run to see what would be done
-python contrib/update_metadata.py /path/to/output.zarr --check-ome-xml --dry-run
-```
-
-### bleaching_correction_task.py
-Z-direction bleaching correction for microscopy datasets:
-
-```bash
-# Apply bleaching correction to Zarr dataset
-python contrib/bleaching_correction_task.py --input_path /path/to/input.zarr --output_path /path/to/corrected.zarr
-```
-
-
-### add_dimension_names.py
-Add dimension names to zarr.json files for all levels in a dataset:
-
-```bash
-# Add dimension names to all levels in a zarr dataset
-python contrib/add_dimension_names.py /path/to/dataset.zarr
-```
-
-### submit_bleaching_correction_general.py
-Generic bleaching correction submission script for s0 level:
-
-```bash
-# Submit bleaching correction with default settings
-python contrib/submit_bleaching_correction_general.py /path/to/input.zarr /path/to/corrected.zarr
-
-# Submit with custom volumes and project
-python contrib/submit_bleaching_correction_general.py /path/to/input.zarr /path/to/corrected.zarr 4 your_project
-```
-
-### update_metadata_zarr2.py
-Update zarr v2 metadata to fix common issues:
-
-```bash
-# Fix ome_xml placement in zarr v2 metadata
-python contrib/update_metadata_zarr2.py /path/to/dataset.zarr --check-ome-xml
-
-# Update multiscale metadata structure
-python contrib/update_metadata_zarr2.py /path/to/dataset.zarr --update-multiscale
-```
-
-### Other Contrib Scripts
-- **start_neuroglancer_server.py**: Start a CORS-enabled web server for neuroglancer viewing
-- **z_to_chunk_index.py**: Calculate chunk index ranges for resubmitting specific z-slices
-- **re_submit_jobs.ipynb**: Interactive notebook for debugging and resubmitting failed chunks
-
----
-
-## Testing
-
-The `tests/` directory contains validation scripts for different conversion workflows:
-
-- **test_ims_to_zarr3_middle_chunks.py**: Validates IMS to Zarr3 conversion with OME-Zarr metadata structure
-- **test_nd2_to_zarr3_middle_chunks.py**: Validates ND2 to Zarr3 conversion with OME-Zarr metadata structure
-- **test_n5_to_*.py**: Various N5 conversion and downsampling tests
-- **test_zarr3_to_downsample_*.py**: Zarr3 downsampling tests with and without sharding
-
-Run tests individually:
-```bash
-python tests/test_ims_to_zarr3_middle_chunks.py
 ```
 
 ---
 
-## OME-Zarr Structure
+## LSF Cluster Submission
 
-All s0 conversion tasks create a consistent multiscale structure:
+> **Note**: The `-P` flag specifies your LSF project for job accounting. Replace `scicompsoft` with your own lab's project code (e.g., `-P ahrens`, `-P liconn`, `-P tavakoli`). Contact Scientific Computing if you don't know your project code.
+
+### Auto-Calculated Resources
+
+TensorSwitch v2 automatically calculates optimal resources based on input data:
+
+| Resource | Formula | Constraints |
+|----------|---------|-------------|
+| **Memory** | Based on shard size × concurrent buffers | 5-500 GB, 15 GB/core minimum |
+| **Wall Time** | Based on shard count × per-shard time | Capped at 96 hours (4 days) |
+| **Cores** | Based on memory (I/O bound) | Capped at 8 cores |
+
+### Manual Override
+
+```bash
+# Override auto-calculated values
+pixi run python -m tensorswitch_v2 -i input.tif -o output.zarr \
+  --submit -P scicompsoft \
+  --memory 60 \
+  --wall_time 4:00 \
+  --cores 4
+```
+
+### Check Job Status
+
+```bash
+# Check running job
+bjobs <job_id>
+
+# View job details
+bjobs -l <job_id>
+
+# Extend wall time (if needed)
+bmod -W 96:00 <job_id>
+```
+
+---
+
+## Auto-Calculation
+
+### Format Auto-Detection
+
+```python
+# Extension-based detection
+.tif, .tiff  → TiffReader (Tier 2)
+.nd2         → ND2Reader (Tier 2)
+.ims         → IMSReader (Tier 2)
+.czi         → CZIReader (Tier 2)
+.n5          → N5Reader (Tier 1)
+.zarr        → Zarr3Reader or Zarr2Reader (Tier 1)
+
+# Directory detection
+zarr.json    → Zarr v3
+.zgroup      → Zarr v2
+attributes.json → N5
+info         → Precomputed
+```
+
+### Chunk Shape Auto-Calculation
+
+- Non-spatial axes (t, c): chunk = 1 (per-channel access)
+- Spatial axes (z, y, x): chunk = 256 (inner), shard = 1024
+
+### 5D TCZYX Expansion
+
+All outputs are automatically expanded to 5D TCZYX format:
+- Input: `[Z, Y, X]` → Output: `[1, 1, Z, Y, X]` (T=1, C=1)
+- Input: `[C, Z, Y, X]` → Output: `[1, C, Z, Y, X]` (T=1)
+- Compliant with OME-NGFF v0.4/v0.5 specifications
+
+---
+
+## Examples
+
+### Example 1: Large TIFF to Zarr3 with Pyramid
+
+```bash
+# Step 1: Convert TIFF to Zarr3 s0
+pixi run python -m tensorswitch_v2 \
+  -i /data/large_dataset.tif \
+  -o /output/large_dataset.zarr \
+  --submit -P scicompsoft
+
+# Step 2: Generate pyramid (after s0 completes)
+pixi run python -m tensorswitch_v2 --auto_multiscale \
+  -i /output/large_dataset.zarr/s0 \
+  -o /output/large_dataset.zarr \
+  --submit -P scicompsoft
+```
+
+### Example 2: Batch Convert ND2 Files
+
+```bash
+pixi run python -m tensorswitch_v2 \
+  -i /data/nd2_files/ \
+  -o /output/zarr_files/ \
+  --pattern "*.nd2" \
+  --submit -P scicompsoft \
+  --max_concurrent 50
+```
+
+### Example 3: Batch Pyramid Generation
+
+```bash
+# Generate pyramids for all zarr files in a directory
+pixi run python -m tensorswitch_v2 --auto_multiscale \
+  -i /output/zarr_files/ \
+  --pattern '*.zarr' \
+  --max_concurrent 50 \
+  --submit -P scicompsoft
+```
+
+### Example 5: CZI Multi-View Conversion
+
+```bash
+# Convert all views as 5D TCZYX (views mapped to time axis for viewer compatibility)
+pixi run python -m tensorswitch_v2 \
+  -i /data/multiview.czi \
+  -o /output/multiview.zarr \
+  --submit -P scicompsoft
+
+# Extract single view
+pixi run python -m tensorswitch_v2 \
+  -i /data/multiview.czi \
+  -o /output/view0.zarr \
+  --view_index 0 \
+  --submit -P scicompsoft
+```
+
+### Example 6: Python API Conversion
+
+```python
+from tensorswitch_v2.api import Readers, Writers
+from tensorswitch_v2.core import DistributedConverter
+
+# Read TIFF, write Zarr3
+reader = Readers.tiff("/data/input.tif")
+writer = Writers.zarr3("/output/result.zarr")
+
+converter = DistributedConverter(reader, writer)
+converter.convert(
+    chunk_shape=(1, 128, 128, 128),
+    shard_shape=(1, 512, 512, 512),
+    write_metadata=True,
+    verbose=True
+)
+```
+
+---
+
+## Module Structure
 
 ```
-output.zarr/
-└── multiscale/
-    ├── zarr.json              # OME-Zarr metadata with relative paths ("s0", "s1", etc.)
-    ├── s0/                    # Full resolution data
-    ├── s1/                    # 2x downsampled
-    ├── s2/                    # 4x downsampled  
-    ├── s3/                    # 8x downsampled
-    └── s4/                    # 16x downsampled
+tensorswitch_v2/
+├── __init__.py              # Package root
+├── __main__.py              # CLI entry point
+├── api/
+│   ├── __init__.py          # Public API exports
+│   ├── dataset.py           # TensorSwitchDataset
+│   ├── readers.py           # Readers factory
+│   └── writers.py           # Writers factory
+├── core/
+│   ├── __init__.py          # Core exports
+│   ├── converter.py         # DistributedConverter
+│   ├── downsampler.py       # Downsampler, cumulative factors
+│   ├── pyramid.py           # PyramidPlanner, chained submission
+│   └── batch.py             # BatchConverter, LSF job arrays
+├── readers/
+│   ├── __init__.py          # Reader exports
+│   ├── base.py              # BaseReader abstract class
+│   ├── n5.py                # N5Reader (Tier 1)
+│   ├── zarr.py              # Zarr3Reader, Zarr2Reader (Tier 1)
+│   ├── precomputed.py       # PrecomputedReader (Tier 1)
+│   ├── tiff.py              # TiffReader (Tier 2)
+│   ├── nd2.py               # ND2Reader (Tier 2)
+│   ├── ims.py               # IMSReader (Tier 2)
+│   ├── hdf5.py              # HDF5Reader (Tier 2)
+│   ├── czi.py               # CZIReader (Tier 2)
+│   └── bioio_adapter.py     # BIOIOReader (Tier 3)
+└── writers/
+    ├── __init__.py          # Writer exports
+    ├── base.py              # BaseWriter abstract class
+    ├── zarr3.py             # Zarr3Writer (OME-NGFF v0.5)
+    ├── zarr2.py             # Zarr2Writer (OME-NGFF v0.4)
+    └── n5.py                # N5Writer
 ```
 
-This structure is compatible with neuroglancer and other OME-Zarr viewers.
+---
+
+## Performance
+
+Tested on Janelia LSF cluster:
+
+| Dataset | Size | Output | Time | Compression |
+|---------|------|--------|------|-------------|
+| Lila Batch (1890 TIFFs) | 6.6 TB | 758 GB Zarr3 | 15 min | 8.7x |
+| CZI Pyramid (6 levels) | 446 GB | 571 GB total | 73 min | - |
+| Ahrens TIFF | 1.9 TB | ~800 GB Zarr3 | ~70 hrs | ~2.4x |
 
 ---
 
-## Requirements
+## License
 
-- Python 3.10+
-- TensorStore
-- NumPy
-- psutil
-- requests (for N5 over HTTP)
-- Dask + tifffile (for TIFF conversion)
-- nd2 + ome-zarr (for ND2 conversion with OME metadata)
-- h5py (for IMS conversion)
-- pylibCZIrw (for CZI reading - ZEISS official library)
-- aicspylibczi (for CZI metadata extraction)
-- lxml (for XSLT-based OME-XML transformation)
-- json (for metadata handling)
-- glob (for file pattern matching)
+Internal Janelia Research Campus tool.
 
 ---
 
-## Support
+## Authors
 
-If you need more enhancements (like adding logging or progress tracking), feel free to extend the `tasks` modules.
-
-For resubmissions, consider using the interactive notebook `re_submit_jobs.ipynb` and CLI helpers in `z_to_chunk_index.py`.
+- Diyi Chen (SciComp)
 
 ---
+
+## Links
+
+- **TensorStore Docs**: https://google.github.io/tensorstore/
+- **BIOIO Docs**: https://github.com/bioio-devs/bioio
