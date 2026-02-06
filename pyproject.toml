@@ -44,7 +44,7 @@ requires = ["hatchling"]
 allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/tensorswitch", "src/tensorswitch_v2"]
+packages = ["src/tensorswitch_v2"]
 
 [tool.pixi.project]
 channels = ["conda-forge"]
@@ -91,4 +91,4 @@ jupyter = ["ipykernel"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
-testpaths = ["tests"]
+testpaths = ["tests/tensorswitch_v2"]
