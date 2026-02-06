@@ -37,6 +37,142 @@ os.umask(0o0002)  # Team permissions: rwxrwxr-x
 __version__ = "2.0.0-beta"
 
 
+def resolve_downsample_method(method: str, input_path: str) -> str:
+    """
+    Resolve 'auto' downsample method to actual method based on input path.
+
+    Args:
+        method: Downsample method ('auto', 'mean', 'mode', etc.)
+        input_path: Path to input data for heuristic detection
+
+    Returns:
+        str: Resolved method ('mean' or 'mode' if input was 'auto')
+    """
+    if method != 'auto':
+        return method
+
+    # Use filename heuristics to detect label/segmentation data
+    label_keywords = ['label', 'mask', 'seg', 'annotation', 'roi', 'binary', 'instance']
+
+    # Check multiple levels of the path (handles /data/labels/dataset.zarr/s0)
+    # Normalize and split path into components
+    path_parts = input_path.lower().replace('\\', '/').split('/')
+    # Check last 4 components (covers most directory structures)
+    check_parts = ' '.join(path_parts[-4:]) if len(path_parts) >= 4 else ' '.join(path_parts)
+
+    for keyword in label_keywords:
+        if keyword in check_parts:
+            return 'mode'
+
+    # Default to 'mean' for intensity images
+    return 'mean'
+
+
+def find_base_level(input_path: str, verbose: bool = False) -> tuple:
+    """
+    Find the base resolution level (s0) from a zarr path.
+
+    Accepts flexible input:
+    - /data/dataset.zarr/s0  → returns (s0_path, root_path)
+    - /data/dataset.zarr     → auto-detects s0 from metadata or common patterns
+    - /data/dataset.zarr/0   → returns as-is if valid
+
+    Detection order:
+    1. If path ends with known level pattern (s0, s1, 0, 1, etc.) → use as-is
+    2. Check OME-NGFF metadata for multiscales[0].datasets[0].path
+    3. Fallback to common subdirectories: s0, 0
+
+    Args:
+        input_path: Path to zarr dataset (root or specific level)
+        verbose: Print detection info
+
+    Returns:
+        tuple: (s0_path, root_path)
+
+    Raises:
+        ValueError: If base level cannot be found
+    """
+    import json
+    import re
+
+    input_path = input_path.rstrip('/\\')
+
+    # Pattern for resolution level directories
+    level_pattern = re.compile(r'^(s?\d+)$')
+
+    # Check if path already ends with a level indicator
+    basename = os.path.basename(input_path)
+    if level_pattern.match(basename):
+        # Already pointing to a level (s0, s1, 0, 1, etc.)
+        s0_path = input_path
+        root_path = os.path.dirname(input_path)
+        if verbose:
+            print(f"Input is level path: {basename}")
+        return s0_path, root_path
+
+    # Input is root path - need to find base level
+    root_path = input_path
+
+    # Strategy 1: Check OME-NGFF metadata
+    # Try Zarr v3 metadata first
+    zarr_json_path = os.path.join(root_path, 'zarr.json')
+    zattrs_path = os.path.join(root_path, '.zattrs')
+
+    base_level_path = None
+
+    if os.path.exists(zarr_json_path):
+        try:
+            with open(zarr_json_path, 'r') as f:
+                metadata = json.load(f)
+            # Zarr v3: check attributes.ome.multiscales
+            attrs = metadata.get('attributes', {})
+            ome_attrs = attrs.get('ome', attrs)  # ome key or root level
+            multiscales = ome_attrs.get('multiscales', [])
+            if multiscales and multiscales[0].get('datasets'):
+                base_level_path = multiscales[0]['datasets'][0].get('path')
+                if verbose:
+                    print(f"Found base level from zarr.json metadata: {base_level_path}")
+        except (json.JSONDecodeError, KeyError, IndexError):
+            pass
+
+    if not base_level_path and os.path.exists(zattrs_path):
+        try:
+            with open(zattrs_path, 'r') as f:
+                metadata = json.load(f)
+            # Zarr v2: check multiscales directly in .zattrs
+            multiscales = metadata.get('multiscales', [])
+            if multiscales and multiscales[0].get('datasets'):
+                base_level_path = multiscales[0]['datasets'][0].get('path')
+                if verbose:
+                    print(f"Found base level from .zattrs metadata: {base_level_path}")
+        except (json.JSONDecodeError, KeyError, IndexError):
+            pass
+
+    # Strategy 2: Fallback to common subdirectory patterns
+    if not base_level_path:
+        for candidate in ['s0', '0']:
+            candidate_path = os.path.join(root_path, candidate)
+            if os.path.exists(candidate_path):
+                base_level_path = candidate
+                if verbose:
+                    print(f"Found base level by directory scan: {base_level_path}")
+                break
+
+    if not base_level_path:
+        raise ValueError(
+            f"Could not find base resolution level in {root_path}. "
+            f"Expected: OME-NGFF metadata with multiscales, or subdirectory 's0' or '0'. "
+            f"Please specify the full path to the base level (e.g., {root_path}/s0)"
+        )
+
+    s0_path = os.path.join(root_path, base_level_path)
+
+    if not os.path.exists(s0_path):
+        raise ValueError(f"Base level path does not exist: {s0_path}")
+
+    return s0_path, root_path
+
+
 def parse_args(argv=None):
     """Parse command-line arguments."""
     epilog = """
@@ -187,10 +323,11 @@ Supported output formats:
              "Bypasses auto-calculation from voxel sizes. Used with --auto_multiscale.",
     )
     parser.add_argument(
-        "--downsample_method", type=str, default="mode",
-        choices=["mean", "mode", "median", "min", "max", "stride"],
-        help="Downsampling method: mode (default), mean (for intensity images), "
-             "median (noise reduction), stride (fastest, simple subsampling), min, max.",
+        "--downsample_method", type=str, default="auto",
+        choices=["auto", "mean", "mode", "median", "min", "max", "stride"],
+        help="Downsampling method: auto (default, detects from filename), "
+             "mean (intensity images), mode (labels/segmentation), "
+             "median (noise reduction), stride (fastest), min, max.",
     )
 
     # Output control
@@ -816,8 +953,10 @@ def submit_downsample_job(args, cumulative_factors):
         reinvoke += ["--start_idx", str(args.start_idx)]
     if args.stop_idx is not None:
         reinvoke += ["--stop_idx", str(args.stop_idx)]
-    if args.downsample_method and args.downsample_method != "mode":
-        reinvoke += ["--downsample_method", args.downsample_method]
+    # Resolve 'auto' to actual method before passing to worker
+    resolved_method = resolve_downsample_method(args.downsample_method, args.input)
+    if resolved_method != "mean":  # mean is the new default for intensity data
+        reinvoke += ["--downsample_method", resolved_method]
     if args.quiet:
         reinvoke.append("--quiet")
 
@@ -1161,19 +1300,15 @@ def main(argv=None):
                 print(f"No datasets found matching pattern: {search_pattern}")
                 return
 
-            # For each match, find s0 path
+            # For each match, find s0 path using auto-detection
             datasets = []
             for match in matches:
-                if match.endswith('/s0') or match.endswith('\\s0'):
-                    s0_path = match
-                elif os.path.exists(os.path.join(match, 's0')):
-                    s0_path = os.path.join(match, 's0')
-                elif os.path.exists(os.path.join(match, 'zarr.json')) or os.path.exists(os.path.join(match, '.zarray')):
-                    s0_path = match  # This is the s0 level directly
-                else:
-                    print(f"Warning: Skipping {match} - no s0 found")
+                try:
+                    s0_path, _ = find_base_level(match, verbose=False)
+                    datasets.append(s0_path)
+                except ValueError as e:
+                    print(f"Warning: Skipping {match} - {e}")
                     continue
-                datasets.append(s0_path)
 
             if not datasets:
                 print("No valid datasets with s0 found.")
@@ -1241,16 +1376,8 @@ def main(argv=None):
             return
 
         # Single dataset mode (original behavior)
-        # Determine s0 path and root path
-        # Input can be either the s0 path directly or the root zarr path
-        s0_path = args.input
-        if not s0_path.endswith('/s0') and not s0_path.endswith('\\s0'):
-            # Check if input is root path with s0 subdirectory
-            potential_s0 = os.path.join(s0_path, 's0')
-            if os.path.exists(potential_s0):
-                s0_path = potential_s0
-
-        root_path = os.path.dirname(s0_path) if s0_path.endswith('/s0') or s0_path.endswith('\\s0') else args.output
+        # Auto-detect s0 path from input (supports root path or explicit s0 path)
+        s0_path, root_path = find_base_level(args.input, verbose=verbose)
 
         if args.submit:
             if not args.project:
@@ -1337,7 +1464,8 @@ def main(argv=None):
             # Submit as LSF job
             submit_downsample_job(args, cumulative_factors)
         else:
-            # Run locally
+            # Run locally - resolve 'auto' method first
+            resolved_method = resolve_downsample_method(args.downsample_method, args.input)
             downsample_level(
                 s0_path=args.input,
                 output_path=args.output,
@@ -1348,7 +1476,7 @@ def main(argv=None):
                 use_shard=use_shard,
                 custom_shard_shape=list(shard_shape) if shard_shape else None,
                 custom_chunk_shape=list(chunk_shape) if chunk_shape else None,
-                downsample_method=args.downsample_method,
+                downsample_method=resolved_method,
                 verbose=verbose,
             )
         return

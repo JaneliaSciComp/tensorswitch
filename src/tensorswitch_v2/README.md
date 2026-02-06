@@ -2,7 +2,7 @@
 
 **Version**: 2.0.0-beta
 **Status**: Production Ready
-**Branch**: `unified-architecture`
+**Branch**: `unified`
 
 A high-performance microscopy data conversion tool with TensorStore as the unified intermediate format. Supports 200+ input formats, automatic multi-scale pyramid generation, and distributed processing on LSF clusters.
 
@@ -89,7 +89,7 @@ pixi install
 pip install -e /path/to/tensorswitch
 
 # From GitHub
-pip install git+https://github.com/JaneliaSciComp/tensorswitch.git@unified-architecture
+pip install git+https://github.com/JaneliaSciComp/tensorswitch.git@unified
 ```
 
 ### Verify Installation
@@ -183,7 +183,7 @@ pixi run python -m tensorswitch_v2 -i input.tif -o output.zarr \
 | `--target_level` | Target level for single-level mode |
 | `--single_level_factor` | Factor for single-level mode (e.g., `1,4,4` for s2) |
 | `--per_level_factors` | Custom per-level factors for pyramid (e.g., `1,2,2;1,2,2;1,2,2`) |
-| `--downsample_method` | Downsampling method: `mode` (default), `mean`, `median`, `stride`, `min`, `max` |
+| `--downsample_method` | Downsampling method: `auto` (default), `mean`, `mode`, `median`, `stride`, `min`, `max` |
 
 ### LSF Cluster
 
@@ -429,13 +429,25 @@ Chained Downsampling:
 
 ### Generate Pyramid
 
+**Flexible input paths** - both formats work:
 ```bash
-# Full pyramid (recommended) - auto-calculates factors from voxel sizes
+# Option 1: Root zarr path (auto-detects s0 from metadata or common patterns)
 pixi run python -m tensorswitch_v2 --auto_multiscale \
-  -i /path/to/dataset.zarr/s0 \
-  -o /path/to/dataset.zarr \
+  -i /path/to/dataset.zarr \
   --submit -P scicompsoft
 
+# Option 2: Explicit s0 path (also works)
+pixi run python -m tensorswitch_v2 --auto_multiscale \
+  -i /path/to/dataset.zarr/s0 \
+  --submit -P scicompsoft
+```
+
+**Auto-detection logic**:
+1. If path ends with level pattern (`s0`, `0`, `s1`, etc.) → use as-is
+2. Check OME-NGFF metadata (`multiscales[0].datasets[0].path`)
+3. Fallback to common subdirectories: `s0`, `0`
+
+```bash
 # Single level only (e.g., just create s2)
 pixi run python -m tensorswitch_v2 --downsample \
   -i /path/to/dataset.zarr/s0 \
@@ -463,19 +475,30 @@ The `--downsample_method` option controls how TensorStore computes downsampled v
 
 | Method | Description | Best For |
 |--------|-------------|----------|
-| `mode` | Most frequent value (default) | Segmentation masks, labels |
-| `mean` | Average of values | Intensity images |
+| `auto` | Auto-detect from filename (default) | Most use cases |
+| `mean` | Average of values | Intensity images (fluorescence, brightfield) |
+| `mode` | Most frequent value | Segmentation masks, labels |
 | `median` | Median value | Noise reduction |
 | `stride` | Simple striding (fastest) | Quick previews |
 | `min` | Minimum value | Specific use cases |
 | `max` | Maximum value | Specific use cases |
 
+**Auto-detection heuristics:**
+- If filename/path contains `label`, `mask`, `seg`, `annotation`, `roi`, `binary`, `instance` → uses `mode`
+- Otherwise → uses `mean` (best for most microscopy data)
+
 ```bash
-# Use mean for intensity data
+# Auto-detect method (default - usually picks 'mean' for microscopy)
 pixi run python -m tensorswitch_v2 --auto_multiscale \
   -i /path/to/dataset.zarr/s0 \
   -o /path/to/dataset.zarr \
-  --downsample_method mean \
+  --submit -P scicompsoft
+
+# Explicitly use mode for segmentation data
+pixi run python -m tensorswitch_v2 --auto_multiscale \
+  -i /path/to/labels.zarr/s0 \
+  -o /path/to/labels.zarr \
+  --downsample_method mode \
   --submit -P scicompsoft
 ```
 

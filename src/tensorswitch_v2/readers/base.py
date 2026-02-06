@@ -221,6 +221,9 @@ class BaseReader(ABC):
         # Extract OME-XML if available
         ome_xml = raw_metadata.get('ome_xml') or raw_metadata.get('raw_xml')
 
+        # Auto-detect suggested downsample method based on filename and dtype
+        suggested_downsample_method = self._detect_downsample_method(dtype)
+
         # Default source info - subclasses should override for format-specific extraction
         return {
             # Dimension info
@@ -248,6 +251,9 @@ class BaseReader(ABC):
             'ome_xml': ome_xml,
             'source_format': self.__class__.__name__.replace('Reader', '').lower(),
             'raw_metadata': raw_metadata,
+
+            # Downsampling hint
+            'suggested_downsample_method': suggested_downsample_method,
         }
 
     def get_ome_metadata(self) -> Dict:
@@ -390,6 +396,45 @@ class BaseReader(ABC):
         }
 
         return ome_metadata
+
+    def _detect_downsample_method(self, dtype: str) -> str:
+        """
+        Auto-detect the best downsampling method based on filename and data type.
+
+        Uses heuristics to determine if data is likely segmentation/labels (use 'mode')
+        or intensity data (use 'mean').
+
+        Args:
+            dtype: Data type string (e.g., 'uint16', 'float32')
+
+        Returns:
+            str: Suggested downsample method ('mean' or 'mode')
+
+        Heuristics:
+            1. Filename/path contains label-related keywords → 'mode'
+            2. Otherwise → 'mean' (default for intensity images)
+
+        Note:
+            - 'mean' is appropriate for most microscopy data (fluorescence, brightfield)
+            - 'mode' preserves discrete values, best for segmentation masks and labels
+        """
+        import os
+
+        # Keywords that suggest segmentation/label data
+        label_keywords = ['label', 'mask', 'seg', 'annotation', 'roi', 'binary', 'instance']
+
+        # Check multiple levels of the path (handles /data/labels/dataset.zarr/s0)
+        # Normalize and split path into components
+        path_parts = self.path.lower().replace('\\', '/').split('/')
+        # Check last 4 components (covers most directory structures)
+        check_parts = ' '.join(path_parts[-4:]) if len(path_parts) >= 4 else ' '.join(path_parts)
+
+        for keyword in label_keywords:
+            if keyword in check_parts:
+                return 'mode'
+
+        # Default to 'mean' for intensity images (most common case)
+        return 'mean'
 
     def __repr__(self) -> str:
         """String representation of reader."""

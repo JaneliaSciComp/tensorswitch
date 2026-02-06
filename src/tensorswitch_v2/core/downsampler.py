@@ -125,7 +125,7 @@ class Downsampler:
         use_shard: bool = True,
         custom_shard_shape: Optional[List[int]] = None,
         custom_chunk_shape: Optional[List[int]] = None,
-        downsample_method: str = "mode",
+        downsample_method: str = "mean",
     ):
         """
         Initialize Downsampler.
@@ -395,7 +395,7 @@ def downsample_level(
     use_shard: bool = True,
     custom_shard_shape: Optional[List[int]] = None,
     custom_chunk_shape: Optional[List[int]] = None,
-    downsample_method: str = "mode",
+    downsample_method: str = "mean",
     verbose: bool = True,
 ) -> Dict[str, Any]:
     """
