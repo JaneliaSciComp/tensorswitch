@@ -6,7 +6,8 @@ Uses pylibCZIrw directly (not bioio-czi) to avoid scene name parsing bugs.
 """
 
 from typing import Dict, Optional, List
-from tensorswitch.utils import load_czi_stack, extract_czi_metadata
+# Import utility functions from v2 utils (independent from v1)
+from ..utils import load_czi_stack, extract_czi_metadata
 from .base import BaseReader
 
 

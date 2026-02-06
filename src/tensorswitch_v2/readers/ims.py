@@ -7,7 +7,8 @@ Auto-detects dimension names from IMS HDF5 structure.
 
 from typing import Dict, List, Optional
 import h5py
-from tensorswitch.utils import load_ims_stack, extract_ims_metadata
+# Import utility functions from v2 utils (independent from v1)
+from ..utils import load_ims_stack, extract_ims_metadata
 from .base import BaseReader
 
 

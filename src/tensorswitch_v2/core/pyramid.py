@@ -23,8 +23,8 @@ import numpy as np
 # Set team permissions: rwxrwxr-x (files get rw-rw-r--)
 os.umask(0o0002)
 
-# Import utility functions from existing tensorswitch
-from tensorswitch.utils import (
+# Import utility functions from v2 utils (independent from v1)
+from tensorswitch_v2.utils import (
     calculate_pyramid_plan as v1_calculate_pyramid_plan,
     calculate_anisotropic_downsample_factors,
     precreate_zarr3_output,
@@ -753,7 +753,7 @@ fi
 
 echo ""
 echo "All jobs complete. Updating root metadata..."
-{python_path} -c "from tensorswitch.utils import update_ome_metadata_if_needed; update_ome_metadata_if_needed('{self.root_path}', use_ome_structure=True)"
+{python_path} -c "from tensorswitch_v2.utils import update_ome_metadata_if_needed; update_ome_metadata_if_needed('{self.root_path}', use_ome_structure=True)"
 
 echo ""
 echo "================================================================"
@@ -828,7 +828,7 @@ echo "All level jobs completed. Updating root metadata..."
 
 # Update OME-NGFF metadata
 cd {tensorswitch_dir}
-{python_path} -c "from tensorswitch.utils import update_ome_metadata_if_needed; update_ome_metadata_if_needed('{self.root_path}', use_ome_structure=True)"
+{python_path} -c "from tensorswitch_v2.utils import update_ome_metadata_if_needed; update_ome_metadata_if_needed('{self.root_path}', use_ome_structure=True)"
 
 echo ""
 echo "=========================================="
@@ -1204,7 +1204,7 @@ echo "============================================================"
 echo "UPDATING ROOT METADATA"
 echo "============================================================"
 echo "All levels complete, updating root zarr.json..."
-{python_path} -c "import sys; sys.path.insert(0, '{tensorswitch_dir}'); from tensorswitch.utils import update_ome_metadata_if_needed; update_ome_metadata_if_needed('{self.root_path}', use_ome_structure=True)"
+{python_path} -c "from tensorswitch_v2.utils import update_ome_metadata_if_needed; update_ome_metadata_if_needed('{self.root_path}', use_ome_structure=True)"
 echo "Metadata update complete."
 
 echo ""

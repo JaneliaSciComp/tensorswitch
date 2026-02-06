@@ -426,6 +426,7 @@ Chained Downsampling:
 - Constant ~8x read amplification per level
 - Deep levels (s4, s5) complete in minutes
 - Automatic anisotropic factor calculation
+- OME-NGFF compliant metadata with translation transforms (Neuroglancer compatible)
 
 ### Generate Pyramid
 

@@ -16,8 +16,8 @@ os.umask(0o0002)
 from ..readers.base import BaseReader
 from ..writers.base import BaseWriter
 
-# Import utility functions from existing tensorswitch
-from tensorswitch.utils import (
+# Import utility functions from v2 utils (independent from v1)
+from ..utils import (
     get_chunk_domains,
     get_total_chunks_from_store,
     get_tensorstore_context,

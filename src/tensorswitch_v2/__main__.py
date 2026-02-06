@@ -634,7 +634,7 @@ def _get_input_metadata(args):
         return tuple(arr.shape), str(arr.dtype)
     else:
         import tensorstore as ts
-        from tensorswitch.utils import get_tensorstore_context
+        from .utils import get_tensorstore_context
         spec['context'] = get_tensorstore_context()
         store = ts.open(spec, read=True).result()
         return tuple(store.shape), store.dtype.name
@@ -1084,7 +1084,7 @@ def show_conversion_spec(reader, writer, args, chunk_shape, shard_shape):
     print("\n--- CONVERSION SUMMARY ---")
 
     # Calculate total chunks
-    from tensorswitch.utils import get_total_chunks_from_store
+    from .utils import get_total_chunks_from_store
     try:
         # Estimate chunks based on shape and chunk size
         shape = input_shape
@@ -1265,7 +1265,7 @@ def main(argv=None):
     # This is the main entry point for automatic downsampling - just point at s0 and it does the rest
     if args.auto_multiscale:
         from .core.pyramid import PyramidPlanner, create_pyramid_parallel
-        from tensorswitch.utils import update_ome_metadata_if_needed
+        from .utils import update_ome_metadata_if_needed
         import glob as glob_module
 
         # Parse custom per-level factors if provided

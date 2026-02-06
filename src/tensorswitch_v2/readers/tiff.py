@@ -7,7 +7,8 @@ Auto-detects dimension names from TIFF metadata (axes string).
 
 from typing import Dict, List, Optional
 import tifffile
-from tensorswitch.utils import load_tiff_stack, extract_tiff_ome_metadata
+# Import utility functions from v2 utils (independent from v1)
+from ..utils import load_tiff_stack, extract_tiff_ome_metadata
 from .base import BaseReader
 
 

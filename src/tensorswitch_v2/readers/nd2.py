@@ -7,7 +7,8 @@ Auto-detects dimension names, chunk shape, and memory order from source.
 
 from typing import Dict, List, Optional
 import nd2
-from tensorswitch.utils import load_nd2_stack, extract_nd2_ome_metadata
+# Import utility functions from v2 utils (independent from v1)
+from ..utils import load_nd2_stack, extract_nd2_ome_metadata
 from .base import BaseReader
 
 

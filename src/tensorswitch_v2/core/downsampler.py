@@ -21,8 +21,8 @@ import tensorstore as ts
 # Set team permissions: rwxrwxr-x (files get rw-rw-r--)
 os.umask(0o0002)
 
-# Import utility functions from existing tensorswitch
-from tensorswitch.utils import (
+# Import utility functions from v2 utils (independent from v1)
+from tensorswitch_v2.utils import (
     get_chunk_domains,
     get_total_chunks_from_store,
     get_tensorstore_context,

@@ -15,8 +15,8 @@ os.umask(0o0002)
 
 from .base import BaseWriter
 
-# Import utility functions from existing tensorswitch
-from tensorswitch.utils import (
+# Import utility functions from v2 utils (independent from v1)
+from ..utils import (
     zarr3_store_spec,
     get_tensorstore_context,
     write_zarr3_group_metadata,
