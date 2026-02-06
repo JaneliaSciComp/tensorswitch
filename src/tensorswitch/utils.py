@@ -209,24 +209,80 @@ def n5_store_spec(n5_level_path):
         'kvstore': get_kvstore_spec(n5_level_path)
     }
 
-def zarr2_store_spec(zarr_level_path, shape, chunks, use_fortran_order=False):
+def zarr2_store_spec(zarr_level_path, shape, chunks=None, use_fortran_order=False, axes_order=None, dtype="|u1", compressor=None):
     """
-    Create Zarr2 store specification.
+    Create Zarr2 store specification with smart chunking based on axes.
+
+    Non-spatial axes (c, t, v) get chunk size 1 for per-channel/per-timepoint access.
+    Spatial axes (z, y, x) get default 1024 chunk size for efficient tiled access.
 
     Args:
         zarr_level_path: Path to zarr level
         shape: Array shape
-        chunks: Chunk shape
+        chunks: Chunk shape (if None, auto-calculated based on axes_order)
         use_fortran_order: If True, use F-order (column-major); if False, use C-order (row-major)
+        axes_order: List of axis names (e.g., ['c', 'y', 'x']) for smart chunking
+        dtype: Data type string (e.g., '<u2' for uint16)
+        compressor: Compressor dict (default: zstd level 5)
     """
+    # Non-spatial axes that should have chunk size 1 for efficient per-slice access
+    NON_SPATIAL_AXES = ['c', 't', 'v']
+    # Default spatial chunk size (1024 for good tile-based access)
+    DEFAULT_SPATIAL_CHUNK = 1024
+
+    def build_smart_chunks(shape, axes_order):
+        """Build chunk shape respecting axis types - same logic as zarr3."""
+        if axes_order is None or len(axes_order) != len(shape):
+            # Fallback: infer axes from shape
+            axes_order = infer_axes_from_shape(shape)
+
+        result = []
+        for i, axis in enumerate(axes_order):
+            if axis.lower() in NON_SPATIAL_AXES:
+                result.append(1)  # Non-spatial: 1 for per-channel access
+            else:
+                # Spatial: use 1024 or array size if smaller
+                result.append(min(DEFAULT_SPATIAL_CHUNK, shape[i]))
+        return result
+
+    def infer_axes_from_shape(shape):
+        """Infer axis names from shape - same logic as zarr3."""
+        if len(shape) == 2:
+            return ["y", "x"]
+        elif len(shape) == 3:
+            # For 3D, assume channels if first dimension is small, otherwise Z
+            if shape[0] <= 10:
+                return ["c", "y", "x"]
+            else:
+                return ["z", "y", "x"]
+        elif len(shape) == 4:
+            # CZYX or TZYX - check first dim
+            if shape[0] <= 10:
+                return ["c", "z", "y", "x"]
+            else:
+                return ["t", "z", "y", "x"]
+        elif len(shape) == 5:
+            return ["t", "c", "z", "y", "x"]
+        else:
+            return [f"dim_{i}" for i in range(len(shape))]
+
+    # Auto-calculate chunks if not provided
+    if chunks is None:
+        chunks = build_smart_chunks(shape, axes_order)
+        print(f"Zarr2 smart chunking: axes={axes_order or infer_axes_from_shape(shape)}, chunks={chunks}")
+
+    # Default compressor
+    if compressor is None:
+        compressor = {'id': 'zstd', 'level': 5}
+
     return {
         'driver': 'zarr',
         'kvstore': {'driver': 'file', 'path': zarr_level_path},
         'metadata': {
             'shape': shape,
             'chunks': chunks,
-            'dtype': "|u1",
-            'compressor': {'id': 'zstd', 'level': 5},
+            'dtype': dtype,
+            'compressor': compressor,
             'order': 'F' if use_fortran_order else 'C',  # Preserve source order
             'dimension_separator': "/"
         }
@@ -234,10 +290,37 @@ def zarr2_store_spec(zarr_level_path, shape, chunks, use_fortran_order=False):
 
 
 def zarr3_store_spec(path, shape, dtype, use_shard=True, level_path="s0", use_ome_structure=True, custom_shard_shape=None, custom_chunk_shape=None, use_v2_encoding=False, use_fortran_order=False, axes_order=None):
+    """
+    Create Zarr3 store specification with smart chunking based on axes.
+
+    Non-spatial axes (c, t, v) get chunk size 1 for per-channel/per-timepoint access.
+    Spatial axes (z, y, x) get default 256 inner chunk, 1024 shard.
+    """
+    # Non-spatial axes that should have chunk size 1 for efficient per-slice access
+    NON_SPATIAL_AXES = ['c', 't', 'v']
+
+    def build_default_shape(shape, axes_order, spatial_size):
+        """Build default chunk/shard shape respecting axis types."""
+        if axes_order is None:
+            # Fallback to old behavior if no axes info
+            return [spatial_size] * len(shape)
+
+        result = []
+        for i, axis in enumerate(axes_order):
+            if axis.lower() in NON_SPATIAL_AXES:
+                result.append(1)  # Non-spatial: 1 for per-channel access
+            else:
+                result.append(spatial_size)  # Spatial: use default size
+        return result
+
     if use_shard:
-        # Use custom chunk shape if provided, otherwise default
-        inner_chunk_shape = custom_chunk_shape if custom_chunk_shape is not None else [32, 32, 32]
-        
+        # Use custom chunk shape if provided, otherwise build based on axes
+        if custom_chunk_shape is not None:
+            inner_chunk_shape = custom_chunk_shape
+        else:
+            # Default inner chunk: 1 for non-spatial, 256 for spatial
+            inner_chunk_shape = build_default_shape(shape, axes_order, 256)
+
         # Adjust inner chunk shape for different array dimensions
         if len(shape) == 3 and len(inner_chunk_shape) == 3:
             adjusted_inner_chunk = inner_chunk_shape
@@ -300,7 +383,8 @@ def zarr3_store_spec(path, shape, dtype, use_shard=True, level_path="s0", use_om
             else:
                 chunk_shape = custom_shard_shape
         else:
-            chunk_shape = [1024, 1024, 1024]
+            # Default shard shape: 1 for non-spatial, 1024 for spatial
+            chunk_shape = build_default_shape(shape, axes_order, 1024)
     else:
         # Non-sharded codecs (with optional transpose for F-order)
         codecs = []
@@ -379,7 +463,7 @@ def zarr3_store_spec(path, shape, dtype, use_shard=True, level_path="s0", use_om
         }
     }
 
-def downsample_spec(base_spec, array_shape=None, dimension_names=None, custom_factors=None):
+def downsample_spec(base_spec, array_shape=None, dimension_names=None, custom_factors=None, method="mode"):
     """
     Create downsample spec with appropriate factors based on dimension names.
     For 2D multi-channel images (CYX), only downsample Y and X, not C.
@@ -390,6 +474,13 @@ def downsample_spec(base_spec, array_shape=None, dimension_names=None, custom_fa
         dimension_names: List of dimension names (e.g., ['c', 'z', 'y', 'x'])
         custom_factors: Optional custom downsampling factors (e.g., [1, 1, 2, 2] for anisotropic data)
                        If provided, overrides default factor calculation
+        method: Downsampling method. Options:
+                - "mean": Average of values (default, best for intensity images)
+                - "mode": Most frequent value (best for segmentation/labels)
+                - "median": Median value (good for noise reduction)
+                - "stride": Simple striding (fastest, may cause aliasing)
+                - "min": Minimum value
+                - "max": Maximum value
     """
     # If custom factors provided, use them directly
     if custom_factors is not None:
@@ -411,7 +502,7 @@ def downsample_spec(base_spec, array_shape=None, dimension_names=None, custom_fa
         'driver': 'downsample',
         'base': get_zarr_store_spec(base_spec),
         'downsample_factors': downsample_factors,
-        'downsample_method': 'mode'
+        'downsample_method': method
     }
 
 def detect_anisotropic_voxels(voxel_sizes, array_shape, threshold=2.0):
@@ -1352,7 +1443,21 @@ def extract_tiff_ome_metadata(tiff_file):
             # Try to get OME-XML from TIFF tags (OME-TIFF)
             if tif.ome_metadata:
                 ome_xml = tif.ome_metadata
-                # For OME-TIFF, voxel sizes will be extracted from OME-XML by converter
+                # Extract voxel sizes from OME-XML (same approach as ND2)
+                try:
+                    from ome_types import from_xml
+                    ome = from_xml(ome_xml)
+                    if ome.images and ome.images[0].pixels:
+                        pixels = ome.images[0].pixels
+                        # OME uses micrometers as the default unit
+                        voxel_sizes = {
+                            'x': float(pixels.physical_size_x) if pixels.physical_size_x else 1.0,
+                            'y': float(pixels.physical_size_y) if pixels.physical_size_y else 1.0,
+                            'z': float(pixels.physical_size_z) if pixels.physical_size_z else 1.0
+                        }
+                        return ome_xml, voxel_sizes
+                except Exception as e:
+                    print(f"Warning: Could not extract voxel sizes from OME-TIFF metadata: {e}")
                 return ome_xml, None
 
             # Fall back to ImageJ TIFF metadata
@@ -1505,7 +1610,65 @@ def convert_ome_to_zarr3_metadata(ome_metadata, array_shape, image_name=None):
         return create_zarr3_ome_metadata(ome_metadata, array_shape, image_name or "image")
 
 
-def create_zarr3_ome_metadata(ome_xml, array_shape, image_name, pixel_sizes=None, axes_order=None):
+def extract_omero_channels(ome_xml: str) -> list:
+    """Extract channel info from OME-XML for omero metadata block.
+
+    Per OME-NGFF spec, the omero block provides structured channel metadata
+    for visualization tools (napari, OMERO, BigDataViewer).
+
+    Args:
+        ome_xml: Raw OME-XML string containing Channel elements
+
+    Returns:
+        List of channel dicts with label, color, and window info,
+        or None if no channels found or parsing fails.
+    """
+    import re
+
+    if not ome_xml or not isinstance(ome_xml, str):
+        return None
+
+    channels = []
+
+    # First, find all Channel elements (with or without namespace)
+    # This handles both <Channel ...> and <OME:Channel ...>
+    channel_pattern = r'<(?:OME:)?Channel\s+([^>]+)>'
+
+    for channel_match in re.finditer(channel_pattern, ome_xml):
+        attrs = channel_match.group(1)
+
+        # Extract Name attribute
+        name_match = re.search(r'Name\s*=\s*"([^"]*)"', attrs)
+        if not name_match:
+            continue
+        name = name_match.group(1)
+
+        # Extract Color attribute
+        color_match = re.search(r'Color\s*=\s*"(-?\d+)"', attrs)
+        if not color_match:
+            continue
+        color_int = int(color_match.group(1))
+
+        # Convert integer color (ARGB) to hex RGB
+        # OME uses ARGB integer: 65280 = 0x0000FF00 = green
+        # Handle negative values (signed 32-bit)
+        if color_int < 0:
+            color_int = color_int & 0xFFFFFFFF
+        r = (color_int >> 16) & 0xFF
+        g = (color_int >> 8) & 0xFF
+        b = color_int & 0xFF
+        color_hex = f"{r:02X}{g:02X}{b:02X}"
+
+        channels.append({
+            "label": name,
+            "color": color_hex,
+            "window": {"start": 0, "end": 65535, "min": 0, "max": 65535}
+        })
+
+    return channels if channels else None
+
+
+def create_zarr3_ome_metadata(ome_xml, array_shape, image_name, pixel_sizes=None, axes_order=None, include_omero=False):
     """Create OME-ZARR metadata structure for zarr3 format.
 
     Args:
@@ -1515,6 +1678,7 @@ def create_zarr3_ome_metadata(ome_xml, array_shape, image_name, pixel_sizes=None
         pixel_sizes: Dict with 'x', 'y', 'z' voxel sizes in micrometers
         axes_order: List of axis names (e.g., ["v", "c", "z", "y", "x"] for CZI multi-view)
                     If provided, this overrides the automatic detection
+        include_omero: If True, extract and add omero channel metadata from ome_xml
     """
 
     # Helper to determine axis type from name
@@ -1557,6 +1721,7 @@ def create_zarr3_ome_metadata(ome_xml, array_shape, image_name, pixel_sizes=None
             scale_factors = [pixel_sizes.get(axis, 1.0) for axis in axes_order]
     elif ndim == 3:
         # Check if this is 2D multi-channel (CYX) or true 3D volume (ZYX)
+        # Heuristic: if first dimension is small (<=10), treat as channels
         if array_shape[0] <= 10:
             axes = [
                 {"name": "c", "type": "channel"},
@@ -1593,6 +1758,7 @@ def create_zarr3_ome_metadata(ome_xml, array_shape, image_name, pixel_sizes=None
         if pixel_sizes:
             scale_factors = [1.0, 1.0, pixel_sizes.get('z', 1.0), pixel_sizes.get('y', 1.0), pixel_sizes.get('x', 1.0)]
     else:
+        # Fallback for other dimensions
         axes = [{"name": f"axis_{i}", "type": "space"} for i in range(ndim)]
 
     # Create coordinate transformations for s0 level
@@ -1624,6 +1790,15 @@ def create_zarr3_ome_metadata(ome_xml, array_shape, image_name, pixel_sizes=None
         }
     }
     
+    # Add omero channel metadata if requested
+    if include_omero and ome_xml:
+        omero_channels = extract_omero_channels(ome_xml)
+        if omero_channels:
+            metadata["attributes"]["ome"]["omero"] = {
+                "channels": omero_channels,
+                "rdefs": {"model": "color"}
+            }
+
     # Add OME XML if available - ensure it's a string at same level as ome (not inside ome)
     if ome_xml:
         if isinstance(ome_xml, str):
@@ -1724,17 +1899,40 @@ def update_ome_multiscale_metadata(zarr_path, max_level=4):
                 voxel_nm = [s * 1000 for s in current_scale]
                 print(f"  s{level}: ratio_factors={[round(f, 2) for f in factors]} → voxel_size={voxel_nm} nm")
 
+        # Calculate translation offset for this level
+        # Translation formula: translation[i] = scale_s0[i] * (cumulative_factor[i] - 1) / 2
+        # This accounts for pixel center offset when downsampling
+        if level == 0:
+            translation = [0.0] * len(current_scale)
+        else:
+            # Calculate cumulative factor from s0 scale to current scale
+            cumulative_factors = [current_scale[i] / s0_scale_factors[i] for i in range(len(current_scale))]
+            translation = [s0_scale_factors[i] * (cumulative_factors[i] - 1) / 2 for i in range(len(s0_scale_factors))]
+
         datasets.append({
             "path": f"s{level}",  # Relative path at root level
-            "coordinateTransformations": [{
-                "type": "scale",
-                "scale": current_scale
-            }]
+            "coordinateTransformations": [
+                {
+                    "type": "scale",
+                    "scale": current_scale
+                },
+                {
+                    "type": "translation",
+                    "translation": translation
+                }
+            ]
         })
 
         # Update previous_scale for next iteration (used by factor method)
         if use_factors:
             previous_scale = current_scale
+
+    # Add root-level coordinateTransformations (identity scale)
+    # This is required by some viewers like Neuroglancer for proper coordinate handling
+    if "coordinateTransformations" not in multiscales:
+        multiscales["coordinateTransformations"] = [
+            {"type": "scale", "scale": [1.0] * len(s0_scale_factors)}
+        ]
 
     # Update multiscales datasets
     multiscales["datasets"] = datasets
@@ -1743,7 +1941,7 @@ def update_ome_multiscale_metadata(zarr_path, max_level=4):
     with open(zarr_json_path, 'w') as f:
         json.dump(metadata, f, indent=2)
 
-    print(f"✓ Updated OME metadata for {zarr_path} with levels s0-s{max_level}")
+    print(f"✓ Updated OME metadata for {zarr_path} with levels s0-s{max_level} (with translation transforms)")
 
 def update_ome_multiscale_metadata_zarr2(zarr_path, max_level=4):
     """Update OME-ZARR metadata for zarr2 format (.zattrs files) to include all multiscale levels."""
@@ -1764,20 +1962,39 @@ def update_ome_multiscale_metadata_zarr2(zarr_path, max_level=4):
         
     multiscales = metadata["multiscales"][0]
     s0_scale_factors = multiscales["datasets"][0]["coordinateTransformations"][0]["scale"]
-    
+
     # Build datasets for all levels with multiscale paths
     datasets = []
     for level in range(max_level + 1):
         scale_factor = 2 ** level  # 1, 2, 4, 8, 16 for levels 0-4
         current_scale = [sf * scale_factor for sf in s0_scale_factors]
-        
+
+        # Calculate translation offset for this level
+        # Translation formula: translation[i] = scale_s0[i] * (cumulative_factor[i] - 1) / 2
+        if level == 0:
+            translation = [0.0] * len(current_scale)
+        else:
+            translation = [s0_scale_factors[i] * (scale_factor - 1) / 2 for i in range(len(s0_scale_factors))]
+
         datasets.append({
             "path": f"s{level}",  # Relative path at root level
-            "coordinateTransformations": [{
-                "type": "scale",
-                "scale": current_scale
-            }]
+            "coordinateTransformations": [
+                {
+                    "type": "scale",
+                    "scale": current_scale
+                },
+                {
+                    "type": "translation",
+                    "translation": translation
+                }
+            ]
         })
+
+    # Add root-level coordinateTransformations (identity scale)
+    if "coordinateTransformations" not in multiscales:
+        multiscales["coordinateTransformations"] = [
+            {"type": "scale", "scale": [1.0] * len(s0_scale_factors)}
+        ]
 
     # Update multiscales datasets
     multiscales["datasets"] = datasets
@@ -1794,7 +2011,7 @@ def update_ome_multiscale_metadata_zarr2(zarr_path, max_level=4):
             json.dump(zgroup_metadata, f, indent=4)
         print(f"Created missing .zgroup file at {zgroup_path}")
 
-    print(f"Updated zarr2 OME metadata for {zarr_path} with levels s0-s{max_level}")
+    print(f"Updated zarr2 OME metadata for {zarr_path} with levels s0-s{max_level} (with translation transforms)")
 
 def load_ims_stack(ims_file):
     """Load IMS data as a dask array using h5py, trimmed to actual data bounds."""
@@ -3163,12 +3380,18 @@ def calculate_anisotropic_downsample_factors(voxel_sizes, axes_names, min_ratio=
     Returns:
         List of downsampling factors (e.g., [1, 2, 2] for c, y, x)
     """
-    if not use_anisotropic:
-        # Simple mode: preserve channels/time, downsample spatial by 2
-        return [1 if axis in ['c', 't'] else 2 for axis in axes_names]
+    # Non-spatial axes that should never be downsampled:
+    # - 'c': channel (different fluorophores/wavelengths)
+    # - 't': time (temporal dimension)
+    # - 'v': view (different acquisition angles, e.g., multi-view lightsheet)
+    NON_SPATIAL_AXES = ['c', 't', 'v']
 
-    # Get spatial dimensions (skip channel and time)
-    spatial_data = [(axis, voxel_sizes[i]) for i, axis in enumerate(axes_names) if axis not in ['c', 't']]
+    if not use_anisotropic:
+        # Simple mode: preserve non-spatial dims, downsample spatial by 2
+        return [1 if axis in NON_SPATIAL_AXES else 2 for axis in axes_names]
+
+    # Get spatial dimensions (skip non-spatial axes)
+    spatial_data = [(axis, voxel_sizes[i]) for i, axis in enumerate(axes_names) if axis not in NON_SPATIAL_AXES]
 
     if not spatial_data:
         return [1] * len(axes_names)
@@ -3208,7 +3431,7 @@ def calculate_anisotropic_downsample_factors(voxel_sizes, axes_names, min_ratio=
 
     # Map spatial factors back to all axes
     spatial_factors = {k: v for k, v in zip(axes, factors)}
-    return [1 if axis in ['c', 't'] else spatial_factors[axis] for axis in axes_names]
+    return [1 if axis in NON_SPATIAL_AXES else spatial_factors[axis] for axis in axes_names]
 
 
 def calculate_num_multiscale_levels(shape, axes_names, voxel_sizes, chunk_shape=None, dtype_size=2,
@@ -3287,9 +3510,11 @@ def calculate_num_multiscale_levels(shape, axes_names, voxel_sizes, chunk_shape=
         # WebKnossos requires cumulative magnifications to be powers of 2 within ~4% tolerance
         import math
         max_power_of_2_error = 0.0
+        # Non-spatial axes: channel (c), time (t), view (v) - should not affect mag calculation
+        NON_SPATIAL_AXES = ['c', 't', 'v']
         for i in range(len(shape)):
             # Skip non-spatial dimensions
-            if axes_names[i] in ['c', 't']:
+            if axes_names[i] in NON_SPATIAL_AXES:
                 continue
 
             cumulative_mag = shape[i] / new_shape[i]
