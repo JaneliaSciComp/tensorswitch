@@ -1899,17 +1899,40 @@ def update_ome_multiscale_metadata(zarr_path, max_level=4):
                 voxel_nm = [s * 1000 for s in current_scale]
                 print(f"  s{level}: ratio_factors={[round(f, 2) for f in factors]} → voxel_size={voxel_nm} nm")
 
+        # Calculate translation offset for this level
+        # Translation formula: translation[i] = scale_s0[i] * (cumulative_factor[i] - 1) / 2
+        # This accounts for pixel center offset when downsampling
+        if level == 0:
+            translation = [0.0] * len(current_scale)
+        else:
+            # Calculate cumulative factor from s0 scale to current scale
+            cumulative_factors = [current_scale[i] / s0_scale_factors[i] for i in range(len(current_scale))]
+            translation = [s0_scale_factors[i] * (cumulative_factors[i] - 1) / 2 for i in range(len(s0_scale_factors))]
+
         datasets.append({
             "path": f"s{level}",  # Relative path at root level
-            "coordinateTransformations": [{
-                "type": "scale",
-                "scale": current_scale
-            }]
+            "coordinateTransformations": [
+                {
+                    "type": "scale",
+                    "scale": current_scale
+                },
+                {
+                    "type": "translation",
+                    "translation": translation
+                }
+            ]
         })
 
         # Update previous_scale for next iteration (used by factor method)
         if use_factors:
             previous_scale = current_scale
+
+    # Add root-level coordinateTransformations (identity scale)
+    # This is required by some viewers like Neuroglancer for proper coordinate handling
+    if "coordinateTransformations" not in multiscales:
+        multiscales["coordinateTransformations"] = [
+            {"type": "scale", "scale": [1.0] * len(s0_scale_factors)}
+        ]
 
     # Update multiscales datasets
     multiscales["datasets"] = datasets
@@ -1918,7 +1941,7 @@ def update_ome_multiscale_metadata(zarr_path, max_level=4):
     with open(zarr_json_path, 'w') as f:
         json.dump(metadata, f, indent=2)
 
-    print(f"✓ Updated OME metadata for {zarr_path} with levels s0-s{max_level}")
+    print(f"✓ Updated OME metadata for {zarr_path} with levels s0-s{max_level} (with translation transforms)")
 
 def update_ome_multiscale_metadata_zarr2(zarr_path, max_level=4):
     """Update OME-ZARR metadata for zarr2 format (.zattrs files) to include all multiscale levels."""
@@ -1939,20 +1962,39 @@ def update_ome_multiscale_metadata_zarr2(zarr_path, max_level=4):
         
     multiscales = metadata["multiscales"][0]
     s0_scale_factors = multiscales["datasets"][0]["coordinateTransformations"][0]["scale"]
-    
+
     # Build datasets for all levels with multiscale paths
     datasets = []
     for level in range(max_level + 1):
         scale_factor = 2 ** level  # 1, 2, 4, 8, 16 for levels 0-4
         current_scale = [sf * scale_factor for sf in s0_scale_factors]
-        
+
+        # Calculate translation offset for this level
+        # Translation formula: translation[i] = scale_s0[i] * (cumulative_factor[i] - 1) / 2
+        if level == 0:
+            translation = [0.0] * len(current_scale)
+        else:
+            translation = [s0_scale_factors[i] * (scale_factor - 1) / 2 for i in range(len(s0_scale_factors))]
+
         datasets.append({
             "path": f"s{level}",  # Relative path at root level
-            "coordinateTransformations": [{
-                "type": "scale",
-                "scale": current_scale
-            }]
+            "coordinateTransformations": [
+                {
+                    "type": "scale",
+                    "scale": current_scale
+                },
+                {
+                    "type": "translation",
+                    "translation": translation
+                }
+            ]
         })
+
+    # Add root-level coordinateTransformations (identity scale)
+    if "coordinateTransformations" not in multiscales:
+        multiscales["coordinateTransformations"] = [
+            {"type": "scale", "scale": [1.0] * len(s0_scale_factors)}
+        ]
 
     # Update multiscales datasets
     multiscales["datasets"] = datasets
@@ -1969,7 +2011,7 @@ def update_ome_multiscale_metadata_zarr2(zarr_path, max_level=4):
             json.dump(zgroup_metadata, f, indent=4)
         print(f"Created missing .zgroup file at {zgroup_path}")
 
-    print(f"Updated zarr2 OME metadata for {zarr_path} with levels s0-s{max_level}")
+    print(f"Updated zarr2 OME metadata for {zarr_path} with levels s0-s{max_level} (with translation transforms)")
 
 def load_ims_stack(ims_file):
     """Load IMS data as a dask array using h5py, trimmed to actual data bounds."""
