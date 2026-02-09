@@ -217,6 +217,15 @@ pixi run python -m tensorswitch_v2 -i input.tif -o output.zarr \
 | `--use_bioio` | Force BIOIO adapter (Tier 3) |
 | `--dataset_path` | Path within container (e.g., `s0` for N5) |
 
+### Memory Order
+
+| Argument | Description |
+|----------|-------------|
+| `--force_c_order` | Force C-order (row-major) output |
+| `--force_f_order` | Force F-order (column-major) output |
+
+**Default behavior**: Source order is auto-detected and preserved. Use these flags only to override.
+
 ---
 
 ## Python API

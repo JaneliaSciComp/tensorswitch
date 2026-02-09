@@ -97,6 +97,7 @@ class DistributedConverter:
         shard_shape: Optional[Tuple[int, ...]] = None,
         write_metadata: bool = True,
         preserve_order: bool = True,
+        force_order: Optional[str] = None,
         progress_interval: int = 100,
         verbose: bool = True,
         delete_existing: Optional[bool] = None,
@@ -111,6 +112,8 @@ class DistributedConverter:
             shard_shape: Override shard shape (Zarr3 only, uses default if None)
             write_metadata: Write OME-NGFF metadata after conversion
             preserve_order: Preserve source data order (F-order vs C-order)
+            force_order: Force output order: 'c' for C-order, 'f' for F-order,
+                None (default) for auto-detect from source
             progress_interval: Report progress every N chunks
             verbose: Print progress messages
             delete_existing: Override store deletion behavior. None (default)
@@ -164,7 +167,16 @@ class DistributedConverter:
             axes_order = list(reader_axes)
             if verbose:
                 print(f"  Axes from reader: {axes_order}")
-        if preserve_order:
+
+        # Handle order: force_order overrides auto-detection
+        if force_order is not None:
+            # Explicit override
+            use_fortran_order = (force_order.lower() == 'f')
+            if verbose:
+                order_name = "F-order" if use_fortran_order else "C-order"
+                print(f"  Forcing {order_name} (--force_{force_order.lower()}_order)")
+        elif preserve_order:
+            # Auto-detect from source
             try:
                 source_for_order = self._dask_array if self._is_tier2 else self._input_store
                 order_info = detect_source_order(source_for_order)
@@ -172,8 +184,9 @@ class DistributedConverter:
                 # Only use detected axes if reader didn't provide them
                 if axes_order is None:
                     axes_order = order_info.get('suggested_axes', None)
-                if verbose and use_fortran_order:
-                    print(f"  Preserving F-order from source")
+                if verbose:
+                    order_name = "F-order" if use_fortran_order else "C-order"
+                    print(f"  Auto-detected {order_name} from source")
             except Exception:
                 pass  # Default to C-order
 

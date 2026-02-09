@@ -170,6 +170,91 @@ def test_f_order_real_data(test_data, output_path):
         return False, None
 
 
+def test_f_order_with_sharding(test_data, output_path):
+    """Test F-order (Fortran) WITH sharding - previously broken, now fixed."""
+    print("\n" + "=" * 60)
+    print("TEST 2b: F-ORDER WITH SHARDING (REAL DATA)")
+    print("=" * 60)
+
+    shape = test_data.shape
+    dtype = str(test_data.dtype)
+
+    print(f"Shape: {shape}")
+    print(f"Dtype: {dtype}")
+    print(f"Output: {output_path}")
+
+    # Create zarr3 spec with F-order AND sharding (the fix!)
+    spec = zarr3_store_spec(
+        path=output_path,
+        shape=list(shape),
+        dtype=dtype,
+        use_shard=True,  # Enable sharding - now works with F-order!
+        level_path="",
+        use_ome_structure=False,
+        custom_chunk_shape=[32, 128, 128],
+        custom_shard_shape=[64, 256, 256],
+        use_fortran_order=True,  # F-order
+        axes_order=['z', 'y', 'x']
+    )
+    spec['context'] = get_tensorstore_context()
+
+    # Write data
+    print("\nWriting F-order + sharding data...")
+    try:
+        store = ts.open(spec, create=True, delete_existing=True).result()
+        store.write(test_data).result()
+        print(f"  Wrote {shape[0]} slices")
+    except Exception as e:
+        print(f"  ERROR creating/writing store: {e}")
+        return False, None
+
+    # Verify zarr.json metadata - transpose should be INSIDE sharding's inner codecs
+    zarr_json_path = os.path.join(output_path, "zarr.json")
+    with open(zarr_json_path, 'r') as f:
+        zarr_metadata = json.load(f)
+
+    codecs = zarr_metadata.get('codecs', [])
+    sharding_codec = next((c for c in codecs if c.get('name') == 'sharding_indexed'), None)
+
+    print(f"\nZarr metadata check:")
+    print(f"  Has sharding codec: {sharding_codec is not None}")
+
+    if sharding_codec:
+        inner_codecs = sharding_codec.get('configuration', {}).get('codecs', [])
+        transpose_in_inner = next((c for c in inner_codecs if c.get('name') == 'transpose'), None)
+        print(f"  Transpose inside sharding: {transpose_in_inner is not None}")
+        if transpose_in_inner:
+            order = transpose_in_inner.get('configuration', {}).get('order', [])
+            expected_order = list(range(len(shape) - 1, -1, -1))
+            print(f"  Transpose order: {order}")
+            print(f"  Expected order: {expected_order}")
+            if order == expected_order:
+                print("  Transpose order: CORRECT")
+            else:
+                print("  WARNING: Transpose order mismatch!")
+    else:
+        print("  ERROR: Should have sharding codec!")
+        return False, None
+
+    # Read back and verify
+    read_store = ts.open({
+        'driver': 'zarr3',
+        'kvstore': {'driver': 'file', 'path': output_path},
+        'context': get_tensorstore_context()
+    }, read=True).result()
+
+    read_data = read_store.read().result()
+
+    if np.array_equal(test_data, read_data):
+        print("  Data verification: PASS")
+        return True, read_data
+    else:
+        print("  Data verification: FAIL")
+        diff = np.sum(test_data != read_data)
+        print(f"    Different elements: {diff}")
+        return False, None
+
+
 def test_data_equality(c_data, f_data):
     """Test that C-order and F-order produce identical data when read back."""
     print("\n" + "=" * 60)
@@ -237,16 +322,27 @@ def main():
     )
     results.append(("C-order (real data)", c_pass))
 
-    # Test 2: F-order with real data
+    # Test 2: F-order with real data (no sharding)
     f_pass, f_read_data = test_f_order_real_data(
         test_data,
         os.path.join(output_base, "f_order_real.zarr")
     )
     results.append(("F-order (real data)", f_pass))
 
+    # Test 2b: F-order WITH sharding (new test after fix)
+    f_shard_pass, f_shard_read_data = test_f_order_with_sharding(
+        test_data,
+        os.path.join(output_base, "f_order_sharding_real.zarr")
+    )
+    results.append(("F-order + sharding (real data)", f_shard_pass))
+
     # Test 3: Data equality - verify both orders read back identical data
     equality_pass = test_data_equality(c_read_data, f_read_data)
     results.append(("Data equality", equality_pass))
+
+    # Test 3b: Data equality - verify F-order with sharding also matches
+    equality_shard_pass = test_data_equality(c_read_data, f_shard_read_data)
+    results.append(("Data equality (C vs F+shard)", equality_shard_pass))
 
     # Summary
     print("\n" + "=" * 60)

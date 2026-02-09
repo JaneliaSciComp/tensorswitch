@@ -234,16 +234,19 @@ def zarr3_store_spec(path, shape, dtype, use_shard=True, level_path="s0", use_om
             adjusted_inner_chunk = inner_chunk_shape
 
         # Build inner codecs for sharding
-        inner_codecs = [
-            {'name': 'bytes', 'configuration': {'endian': 'little'}},
-            {'name': 'zstd', 'configuration': {'level': 5}}
-        ]
-
-        # Build array-level codecs (transpose goes here for F-order)
-        codecs = []
+        # NOTE: When using F-order with sharding, transpose must be INSIDE the inner codecs
+        # (before bytes/compression), not at the array level. This is a TensorStore/Zarr3 requirement.
+        inner_codecs = []
         if use_fortran_order:
             transpose_order = list(range(len(shape) - 1, -1, -1))
-            codecs.append({'name': 'transpose', 'configuration': {'order': transpose_order}})
+            inner_codecs.append({'name': 'transpose', 'configuration': {'order': transpose_order}})
+        inner_codecs.extend([
+            {'name': 'bytes', 'configuration': {'endian': 'little'}},
+            {'name': 'zstd', 'configuration': {'level': 5}}
+        ])
+
+        # Array-level codecs (transpose is inside sharding's inner codecs when using F-order)
+        codecs = []
 
         # Add sharding codec
         codecs.append({

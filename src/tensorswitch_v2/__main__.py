@@ -368,6 +368,17 @@ Supported output formats:
         help="Force BIOIO adapter (Tier 3) instead of auto-detected Tier 2 reader",
     )
 
+    # Memory order (mutually exclusive)
+    order_group = parser.add_mutually_exclusive_group()
+    order_group.add_argument(
+        "--force_c_order", action="store_true",
+        help="Force C-order (row-major) output, overriding auto-detected source order",
+    )
+    order_group.add_argument(
+        "--force_f_order", action="store_true",
+        help="Force F-order (column-major) output, overriding auto-detected source order",
+    )
+
     # Batch processing mode
     # NOTE: Batch mode is auto-detected when input is a directory (no file extension)
     parser.add_argument(
@@ -850,6 +861,10 @@ def submit_job(args, return_job_id=False):
         reinvoke.append("--quiet")
     if getattr(args, 'use_bioio', False):
         reinvoke.append("--use_bioio")
+    if getattr(args, 'force_c_order', False):
+        reinvoke.append("--force_c_order")
+    if getattr(args, 'force_f_order', False):
+        reinvoke.append("--force_f_order")
 
     # Build bsub command
     command = [
@@ -1498,6 +1513,13 @@ def main(argv=None):
 
     converter = DistributedConverter(reader, writer)
 
+    # Determine force_order from CLI args (None = auto-detect)
+    force_order = None
+    if args.force_c_order:
+        force_order = 'c'
+    elif args.force_f_order:
+        force_order = 'f'
+
     if args.start_idx is not None:
         # Manual chunk-range mode (for bsub workers)
         converter.convert(
@@ -1508,6 +1530,7 @@ def main(argv=None):
             write_metadata=args.write_metadata,
             delete_existing=False,
             verbose=verbose,
+            force_order=force_order,
         )
     else:
         # Full single-process conversion
@@ -1516,6 +1539,7 @@ def main(argv=None):
             shard_shape=shard_shape,
             write_metadata=True,
             verbose=verbose,
+            force_order=force_order,
         )
 
 
