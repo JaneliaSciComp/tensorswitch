@@ -167,6 +167,17 @@ pixi run python -m tensorswitch_v2 -i input.tif -o output.zarr \
 | `--show_spec` | Preview conversion specs without running | False |
 | `--omero` | Include structured omero channel metadata | False |
 
+### Presets
+
+| Argument | Description |
+|----------|-------------|
+| `--preset webknossos` | WebKnossos-optimized settings: zarr3, chunk 32x32x32, shard 1024x1024x1024, zstd |
+
+```bash
+# Example: Convert for WebKnossos viewing
+pixi run python -m tensorswitch_v2 -i input.tif -o output.zarr --preset webknossos
+```
+
 ### Chunk/Shard Configuration
 
 | Argument | Description | Default |
