@@ -128,6 +128,8 @@ class BioFormatsReader(BIOIOReader):
             ImportError: If bioio-bioformats or Java dependencies are missing
         """
         try:
+            # Ensure Bio-Formats JAR is loaded before importing
+            BioFormatsReader._ensure_bioformats_loaded()
             from bioio_bioformats import Reader
             return Reader
         except ImportError as e:
@@ -153,6 +155,20 @@ class BioFormatsReader(BIOIOReader):
                 ) from e
 
     @staticmethod
+    def _ensure_bioformats_loaded():
+        """
+        Ensure Bio-Formats JAR is loaded before using bioio-bioformats.
+
+        The bioformats_jar package needs to be called to download and add
+        the Bio-Formats JAR to the classpath before the JVM starts.
+        """
+        try:
+            import bioformats_jar
+            bioformats_jar.get_loci()  # Downloads JAR if needed and adds to classpath
+        except ImportError:
+            pass  # bioformats_jar not installed
+
+    @staticmethod
     def bioformats_version() -> str:
         """
         Get the version of the underlying Bio-Formats Java library.
@@ -165,6 +181,7 @@ class BioFormatsReader(BIOIOReader):
             '7.0.0'
         """
         try:
+            BioFormatsReader._ensure_bioformats_loaded()
             from bioio_bioformats import Reader
             return Reader.bioformats_version()
         except Exception:
@@ -185,6 +202,7 @@ class BioFormatsReader(BIOIOReader):
             ...     print("Install bioio-bioformats and Java")
         """
         try:
+            BioFormatsReader._ensure_bioformats_loaded()
             from bioio_bioformats import Reader
             # Try to access the version to verify Java works
             Reader.bioformats_version()

@@ -14,6 +14,8 @@ dependencies = [
     "openai",
     "pydantic",
     "watchdog", "pylibczirw>=5.1.1,<6", "bioio>=3.2.0,<4", "bioio-czi>=2.1.0,<3",
+    "bioio-bioformats>=1.0.0",
+    "bioformats_jar",
 ]
 description = "This package provides a unified entry point and organized task modules for managing N5/Zarr dataset conversions and downsampling. It centralizes your workflow into a single pipeline to reduce manual work and errors."
 readme = "README.md"
@@ -56,6 +58,7 @@ tensorswitch = { path = ".", editable = true }
 [tool.pixi.tasks]
 
 [tool.pixi.dependencies]
+scyjava = ">=1.12.0,<2"
 psutil = ">=7.0.0,<8"
 requests = ">=2.32.3,<3"
 pytest = ">=8.3.5,<9"
