@@ -228,6 +228,20 @@ pixi run python -m tensorswitch_v2 -i input.tif -o output.zarr \
 
 **Default behavior**: Source order is auto-detected and preserved. Use these flags only to override.
 
+### Metadata Override
+
+| Argument | Description |
+|----------|-------------|
+| `--voxel_size` | Override voxel size in micrometers, comma-separated X,Y,Z (e.g., `0.16,0.16,0.4`) |
+
+**Use case**: When source files lack embedded voxel size metadata (e.g., raw TIFF stacks, BigStitcher output).
+
+```bash
+# Example: Set voxel size for a TIFF without embedded metadata
+pixi run python -m tensorswitch_v2 -i input.tif -o output.zarr \
+  --voxel_size 0.16,0.16,0.4
+```
+
 ---
 
 ## Python API
