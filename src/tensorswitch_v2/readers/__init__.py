@@ -12,7 +12,8 @@ Architecture Layer: 1 (Foundation)
 Tier Strategy:
 - Tier 1 (Native TensorStore): N5, Zarr2/3, Precomputed - Maximum performance
 - Tier 2 (Custom Optimized): TIFF, ND2, IMS, HDF5, CZI - Reuse existing code
-- Tier 3 (BIOIO Adapter): LIF, + 20 more formats - Broad compatibility
+- Tier 3 (BIOIO Adapter): LIF, + 20 more formats - Broad compatibility (Python plugins)
+- Tier 3+ (Bio-Formats): 150+ formats - Maximum compatibility (Java-backed)
 
 Public API:
     Tier 1 (Native TensorStore):
@@ -29,7 +30,10 @@ Public API:
     - CZIReader: Zeiss CZI reader using load_czi_stack() (multi-view support)
 
     Tier 3 (BIOIO Adapter):
-    - BIOIOReader: BIOIO adapter for 20+ formats (LIF, etc.)
+    - BIOIOReader: BIOIO adapter for 20+ formats (LIF, etc.) - Python plugins
+
+    Tier 3+ (Bio-Formats):
+    - BioFormatsReader: Bio-Formats Java backend for 150+ formats
 
     Base:
     - BaseReader: Abstract base class for all readers
@@ -49,8 +53,11 @@ from .ims import IMSReader
 from .hdf5 import HDF5Reader
 from .czi import CZIReader
 
-# Tier 3: BIOIO Adapter
+# Tier 3: BIOIO Adapter (Python plugins)
 from .bioio_adapter import BIOIOReader
+
+# Tier 3+: Bio-Formats (Java-backed, 150+ formats)
+from .bioformats import BioFormatsReader
 
 __all__ = [
     # Base
@@ -61,4 +68,6 @@ __all__ = [
     'TiffReader', 'ND2Reader', 'IMSReader', 'HDF5Reader', 'CZIReader',
     # Tier 3
     'BIOIOReader',
+    # Tier 3+
+    'BioFormatsReader',
 ]

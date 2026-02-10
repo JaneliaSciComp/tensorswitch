@@ -101,6 +101,7 @@ class DistributedConverter:
         progress_interval: int = 100,
         verbose: bool = True,
         delete_existing: Optional[bool] = None,
+        voxel_size_override: Optional[Dict[str, float]] = None,
     ) -> Dict[str, Any]:
         """
         Convert data from reader to writer.
@@ -119,6 +120,8 @@ class DistributedConverter:
             delete_existing: Override store deletion behavior. None (default)
                 preserves existing logic (delete when start_idx==0). Set to
                 False for manual bsub jobs where the store is pre-created.
+            voxel_size_override: Override voxel sizes {'x': um, 'y': um, 'z': um}.
+                Use when source file lacks embedded voxel size metadata.
 
         Returns:
             dict: Conversion statistics (chunks_processed, elapsed_time, etc.)
@@ -195,6 +198,12 @@ class DistributedConverter:
             voxel_sizes = self.reader.get_voxel_sizes()
         except Exception:
             voxel_sizes = None
+
+        # Apply voxel size override if provided
+        if voxel_size_override:
+            voxel_sizes = voxel_size_override
+            if verbose:
+                print(f"  Using voxel size override: {voxel_sizes}")
 
         try:
             ome_metadata = self.reader.get_ome_metadata()
@@ -303,12 +312,20 @@ class DistributedConverter:
             if verbose:
                 print("Writing metadata...")
             try:
+                # Extract image name from source path (filename without extension)
+                source_path = getattr(self.reader, 'path', None)
+                if source_path:
+                    image_name = os.path.splitext(os.path.basename(source_path))[0]
+                else:
+                    image_name = "image"
+
                 self.writer.write_metadata(
                     ome_metadata=ome_metadata,
                     voxel_sizes=voxel_sizes,
                     array_shape=input_shape,
                     axes_order=axes_order,
-                    ome_xml=ome_xml
+                    ome_xml=ome_xml,
+                    image_name=image_name
                 )
                 # Also update root zarr.json for OME-NGFF multiscales
                 root_path = os.path.dirname(self.writer.output_path)

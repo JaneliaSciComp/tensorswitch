@@ -69,7 +69,8 @@ A high-performance microscopy data conversion tool with TensorStore as the unifi
 |------|-------------|---------|-------------|
 | **Tier 1** | Maximum | N5, Zarr2, Zarr3, Precomputed | Native TensorStore drivers |
 | **Tier 2** | Optimized | TIFF, ND2, IMS, HDF5, CZI | Custom optimized readers |
-| **Tier 3** | Compatible | LIF + 200 more | BIOIO adapter |
+| **Tier 3** | Compatible | LIF + 20 more | BIOIO Python plugins |
+| **Tier 3+** | Universal | 150+ formats | Bio-Formats Java (via bioio-bioformats) |
 
 ---
 
@@ -214,7 +215,8 @@ pixi run python -m tensorswitch_v2 -i input.tif -o output.zarr \
 | Argument | Description |
 |----------|-------------|
 | `--view_index` | CZI view index (None = all views as 5D) |
-| `--use_bioio` | Force BIOIO adapter (Tier 3) |
+| `--use_bioio` | Force BIOIO adapter (Tier 3, Python plugins) |
+| `--use_bioformats` | Force Bio-Formats reader (Tier 3+, Java-backed, 150+ formats) |
 | `--dataset_path` | Path within container (e.g., `s0` for N5) |
 
 ### Memory Order
@@ -267,6 +269,7 @@ reader = Readers.ims("/path/to/data.ims")       # Tier 2
 reader = Readers.n5("/path/to/data.n5")         # Tier 1
 reader = Readers.zarr3("/path/to/data.zarr")    # Tier 1
 reader = Readers.bioio("/path/to/data.lif")     # Tier 3
+reader = Readers.bioformats("/path/to/data.vsi")  # Tier 3+ (Java)
 
 # Get TensorStore spec
 spec = reader.get_tensorstore_spec()
@@ -399,7 +402,9 @@ print(f"Completed: {result.completed}/{result.total}")
 | Precomputed | directory | 1 | PrecomputedReader |
 | LIF (Leica) | `.lif` | 3 | BIOIOReader |
 | OME-TIFF | `.ome.tif` | 3 | BIOIOReader |
-| 200+ more | various | 3 | BIOIOReader |
+| 20+ more | various | 3 | BIOIOReader |
+| Olympus VSI, Leica SCN, etc. | various | 3+ | BioFormatsReader (Java) |
+| 150+ formats | various | 3+ | BioFormatsReader (Java) |
 
 ### Output Formats
 
@@ -838,7 +843,8 @@ tensorswitch_v2/
 │   ├── ims.py               # IMSReader (Tier 2)
 │   ├── hdf5.py              # HDF5Reader (Tier 2)
 │   ├── czi.py               # CZIReader (Tier 2)
-│   └── bioio_adapter.py     # BIOIOReader (Tier 3)
+│   ├── bioio_adapter.py     # BIOIOReader (Tier 3)
+│   └── bioformats.py        # BioFormatsReader (Tier 3+, Java)
 └── writers/
     ├── __init__.py          # Writer exports
     ├── base.py              # BaseWriter abstract class

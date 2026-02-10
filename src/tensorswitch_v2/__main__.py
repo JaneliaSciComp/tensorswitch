@@ -236,6 +236,13 @@ Supported output formats:
         help="Output format (default: zarr3)",
     )
 
+    # Presets for common use cases
+    parser.add_argument(
+        "--preset", default=None,
+        choices=["webknossos"],
+        help="Use preset configuration. 'webknossos': zarr3, chunk 32x32x32, shard 1024x1024x1024, zstd.",
+    )
+
     # Dataset paths
     parser.add_argument(
         "--dataset_path", default="",
@@ -268,6 +275,13 @@ Supported output formats:
     parser.add_argument(
         "--compression_level", type=int, default=5,
         help="Compression level (default: 5)",
+    )
+
+    # Voxel size override
+    parser.add_argument(
+        "--voxel_size", default=None,
+        help="Override voxel size in micrometers, comma-separated X,Y,Z (e.g., '0.16,0.16,0.4'). "
+             "Use when source file lacks embedded voxel size metadata.",
     )
 
     # Manual bsub chunk-range mode
@@ -366,6 +380,11 @@ Supported output formats:
     parser.add_argument(
         "--use_bioio", action="store_true",
         help="Force BIOIO adapter (Tier 3) instead of auto-detected Tier 2 reader",
+    )
+    parser.add_argument(
+        "--use_bioformats", action="store_true",
+        help="Force Bio-Formats reader (Tier 3+, Java-backed) for 150+ formats. "
+             "Requires: conda install -c conda-forge scyjava && pip install bioio-bioformats",
     )
 
     # Memory order (mutually exclusive)
@@ -576,6 +595,10 @@ def create_reader(args):
 
     path = args.input
     path_lower = path.lower()
+
+    # Force Bio-Formats reader if requested (Tier 3+, Java-backed)
+    if getattr(args, 'use_bioformats', False):
+        return Readers.bioformats(path)
 
     # Force BIOIO adapter if requested (for testing Tier 3)
     if getattr(args, 'use_bioio', False):
@@ -796,11 +819,13 @@ def submit_job(args, return_job_id=False):
         print("Reading input metadata for resource estimation...")
         volume_shape, dtype_str = _get_input_metadata(args)
         shard_shape, total_shards = _estimate_shard_info(args, volume_shape, dtype_str)
-        use_bioio = getattr(args, 'use_bioio', False)
+        # Both BIOIO and BioFormats use Dask and have similar overhead
+        use_bioio = getattr(args, 'use_bioio', False) or getattr(args, 'use_bioformats', False)
         print(f"  Shape: {volume_shape}, dtype: {dtype_str}")
         print(f"  Shard shape: {shard_shape}, total shards: {total_shards}")
         if use_bioio:
-            print(f"  BioIO mode: applying 10x wall time and 3x memory multipliers")
+            mode_name = "Bio-Formats" if getattr(args, 'use_bioformats', False) else "BioIO"
+            print(f"  {mode_name} mode: applying 10x wall time and 3x memory multipliers")
 
         if memory_gb is None:
             memory_gb = _calculate_memory(volume_shape, dtype_str, shard_shape, total_shards, use_bioio=use_bioio)
@@ -861,10 +886,14 @@ def submit_job(args, return_job_id=False):
         reinvoke.append("--quiet")
     if getattr(args, 'use_bioio', False):
         reinvoke.append("--use_bioio")
+    if getattr(args, 'use_bioformats', False):
+        reinvoke.append("--use_bioformats")
     if getattr(args, 'force_c_order', False):
         reinvoke.append("--force_c_order")
     if getattr(args, 'force_f_order', False):
         reinvoke.append("--force_f_order")
+    if getattr(args, 'voxel_size', None):
+        reinvoke += ["--voxel_size", args.voxel_size]
 
     # Build bsub command
     command = [
@@ -1137,6 +1166,18 @@ def show_conversion_spec(reader, writer, args, chunk_shape, shard_shape):
 def main(argv=None):
     """Run single-process conversion, downsampling, or submit LSF job."""
     args = parse_args(argv)
+
+    # Apply preset configurations
+    if args.preset == "webknossos":
+        # WebKnossos preset: zarr3, chunk 32x32x32, shard 1024x1024x1024
+        if args.output_format == "zarr3":  # Only override if using default
+            pass  # Already zarr3
+        if not args.chunk_shape:
+            args.chunk_shape = "32,32,32"
+        if not args.shard_shape:
+            args.shard_shape = "1024,1024,1024"
+        if not args.quiet:
+            print("Using WebKnossos preset: chunk=32x32x32, shard=1024x1024x1024, zarr3")
 
     # Parse optional shapes
     chunk_shape = parse_shape(args.chunk_shape, "chunk_shape") if args.chunk_shape else None
@@ -1520,6 +1561,22 @@ def main(argv=None):
     elif args.force_f_order:
         force_order = 'f'
 
+    # Parse voxel_size override if provided
+    voxel_size_override = None
+    if args.voxel_size:
+        parts = args.voxel_size.split(',')
+        if len(parts) == 3:
+            voxel_size_override = {
+                'x': float(parts[0]),
+                'y': float(parts[1]),
+                'z': float(parts[2]),
+            }
+        else:
+            raise ValueError(
+                f"Invalid --voxel_size: '{args.voxel_size}'\n"
+                f"Expected comma-separated X,Y,Z values (e.g., '0.16,0.16,0.4')"
+            )
+
     if args.start_idx is not None:
         # Manual chunk-range mode (for bsub workers)
         converter.convert(
@@ -1531,6 +1588,7 @@ def main(argv=None):
             delete_existing=False,
             verbose=verbose,
             force_order=force_order,
+            voxel_size_override=voxel_size_override,
         )
     else:
         # Full single-process conversion
@@ -1540,6 +1598,7 @@ def main(argv=None):
             write_metadata=True,
             verbose=verbose,
             force_order=force_order,
+            voxel_size_override=voxel_size_override,
         )
 
 

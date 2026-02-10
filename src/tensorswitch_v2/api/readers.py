@@ -406,6 +406,69 @@ class Readers:
             reader=reader
         )
 
+    # ========================================================================
+    # Tier 3+: Bio-Formats (Java-backed, 150+ formats)
+    # ========================================================================
+
+    @staticmethod
+    def bioformats(
+        path: str,
+        scene_index: int = 0,
+        channel_index: Optional[int] = None,
+        time_index: Optional[int] = None,
+        resolution_level: int = 0,
+    ) -> BaseReader:
+        """
+        Create Bio-Formats reader (Tier 3+ - Maximum Format Compatibility).
+
+        Uses the OME Bio-Formats Java library via bioio-bioformats plugin.
+        Supports 150+ file formats including many proprietary vendor formats.
+
+        Note: Requires Java and bioio-bioformats to be installed:
+            conda install -c conda-forge scyjava
+            pip install bioio-bioformats
+
+        Args:
+            path: Path to input file (local filesystem only)
+            scene_index: Which scene to load for multi-scene files (default: 0)
+            channel_index: Optional specific channel to extract (None = all)
+            time_index: Optional specific timepoint to extract (None = all)
+            resolution_level: Resolution level for pyramid formats (0=full)
+
+        Returns:
+            BioFormatsReader instance
+
+        Example:
+            >>> # Read Olympus VSI (only supported by Bio-Formats)
+            >>> reader = Readers.bioformats("/data/slide.vsi")
+
+            >>> # Read with specific scene
+            >>> reader = Readers.bioformats("/data/multi.lif", scene_index=2)
+
+        When to use bioformats() vs bioio():
+            - bioio(): Pure Python plugins, no Java required, ~20 common formats
+            - bioformats(): Java-backed, 150+ formats including obscure/legacy ones
+
+        Formats uniquely supported by Bio-Formats:
+            - Olympus VSI, OIB, OIF
+            - Leica SCN
+            - Volocity
+            - Imspector OBF
+            - Many legacy vendor formats
+            - See: https://bio-formats.readthedocs.io/en/latest/supported-formats.html
+
+        Implementation Status:
+            ✅ Complete - Wraps BIOIOReader with Bio-Formats Java backend
+        """
+        from ..readers.bioformats import BioFormatsReader
+        return BioFormatsReader(
+            path,
+            scene_index=scene_index,
+            channel_index=channel_index,
+            time_index=time_index,
+            resolution_level=resolution_level,
+        )
+
 
 # ============================================================================
 # Helper Functions
