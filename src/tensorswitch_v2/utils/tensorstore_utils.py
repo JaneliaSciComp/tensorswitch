@@ -195,7 +195,7 @@ def zarr3_store_spec(path, shape, dtype, use_shard=True, level_path="s0", use_om
     Non-spatial axes (c, t, v) get chunk size 1 for per-channel/per-timepoint access.
     Spatial axes (z, y, x) get default 256 inner chunk, 1024 shard.
     """
-    NON_SPATIAL_AXES = ['c', 't', 'v']
+    NON_SPATIAL_AXES = ['c', 't', 'v', 'channel']
 
     def build_default_shape(shape, axes_order, spatial_size):
         """Build default chunk/shard shape respecting axis types."""
@@ -317,9 +317,17 @@ def zarr3_store_spec(path, shape, dtype, use_shard=True, level_path="s0", use_om
     else:
         array_path = path
 
-    # Determine dimension names
+    # Determine dimension names (normalize to OME-NGFF standard)
+    def normalize_axis(ax):
+        ax_lower = ax.lower()
+        if ax_lower == 'channel':
+            return 'c'
+        elif ax_lower == 'v':
+            return 't'
+        return ax_lower
+
     if axes_order is not None and len(axes_order) == len(shape):
-        dimension_names = ['t' if ax == 'v' else ax for ax in axes_order]
+        dimension_names = [normalize_axis(ax) for ax in axes_order]
         print(f"Using dimension names from source metadata: {dimension_names}")
     else:
         if len(shape) == 3:
@@ -489,7 +497,7 @@ def zarr2_store_spec(zarr_level_path, shape, chunks=None, use_fortran_order=Fals
         compressor: Compressor dict (default: zstd level 5)
     """
     # Non-spatial axes that should have chunk size 1 for efficient per-slice access
-    NON_SPATIAL_AXES = ['c', 't', 'v']
+    NON_SPATIAL_AXES = ['c', 't', 'v', 'channel']
     # Default spatial chunk size (1024 for good tile-based access)
     DEFAULT_SPATIAL_CHUNK = 1024
 

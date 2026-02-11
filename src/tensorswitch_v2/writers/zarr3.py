@@ -83,6 +83,8 @@ class Zarr3Writer(BaseWriter):
         self._original_shape = None
         self._original_axes = None
         self._expanded_axes = None
+        # Axis reordering (for precomputed XYZC -> CXYZ)
+        self._transpose_order = None
 
     def supports_sharding(self) -> bool:
         """Zarr3 supports sharding via sharding_indexed codec."""
@@ -142,14 +144,29 @@ class Zarr3Writer(BaseWriter):
                 custom_shard_shape = self._expand_shard_shape(list(shard_shape), axes_order)
         else:
             # NEW DEFAULT: Preserve source layout (per OME-NGFF RFC-3)
+            # But reorder axes so non-spatial (t, c) come before spatial (x, y, z)
             shape_list = list(shape)
-            expanded_axes = axes_order if axes_order else self._infer_axes(shape_list)
-            self._expanded_axes = expanded_axes
-            print(f"Zarr3 preserving layout: shape={shape_list}, axes={expanded_axes}")
+            source_axes = axes_order if axes_order else self._infer_axes(shape_list)
 
-            # Use provided chunks, or None for auto
-            custom_chunk_shape = list(chunk_shape) if chunk_shape else None
-            custom_shard_shape = list(shard_shape) if shard_shape else None
+            # Reorder axes for OME-NGFF compliance (non-spatial before spatial)
+            reordered_axes, reordered_shape, reordered_chunk, reordered_shard, transpose_order = \
+                self._reorder_axes_for_ome(source_axes, shape_list, chunk_shape, shard_shape)
+
+            self._expanded_axes = reordered_axes
+            self._transpose_order = transpose_order
+
+            if transpose_order:
+                print(f"Zarr3 reordering axes: {source_axes} -> {reordered_axes}")
+                print(f"  Shape: {shape_list} -> {reordered_shape}")
+            else:
+                print(f"Zarr3 preserving layout: shape={shape_list}, axes={source_axes}")
+
+            shape_list = reordered_shape
+            expanded_axes = reordered_axes
+
+            # Use reordered chunks/shards
+            custom_chunk_shape = reordered_chunk
+            custom_shard_shape = reordered_shard
 
         # Create spec using existing utility function with 5D shape/axes
         spec = zarr3_store_spec(
@@ -267,6 +284,113 @@ class Zarr3Writer(BaseWriter):
         else:
             return [f'dim_{i}' for i in range(len(shape))]
 
+    def _reorder_axes_for_ome(
+        self,
+        axes: List[str],
+        shape: List[int],
+        chunk_shape: Optional[Tuple[int, ...]],
+        shard_shape: Optional[Tuple[int, ...]]
+    ) -> Tuple[List[str], List[int], Optional[List[int]], Optional[List[int]], Optional[Tuple[int, ...]]]:
+        """
+        Reorder axes so non-spatial dimensions come before spatial dimensions.
+
+        For precomputed format which stores as XYZC, this converts to CXYZ.
+        Preserves the relative order within spatial and non-spatial groups.
+
+        Args:
+            axes: Original axis names (e.g., ['x', 'y', 'z', 'channel'])
+            shape: Original shape
+            chunk_shape: Original chunk shape
+            shard_shape: Original shard shape
+
+        Returns:
+            (reordered_axes, reordered_shape, reordered_chunk, reordered_shard, transpose_order)
+        """
+        # Identify spatial and non-spatial axes
+        SPATIAL_AXES = {'x', 'y', 'z'}
+
+        axes_lower = [a.lower() for a in axes]
+
+        # Separate into non-spatial (first) and spatial (second), preserving order
+        non_spatial_indices = []
+        spatial_indices = []
+
+        for i, axis in enumerate(axes_lower):
+            if axis in SPATIAL_AXES:
+                spatial_indices.append(i)
+            else:
+                non_spatial_indices.append(i)
+
+        # New order: non-spatial first, then spatial
+        new_order = non_spatial_indices + spatial_indices
+
+        # Check if reordering is needed
+        if new_order == list(range(len(axes))):
+            # Already in correct order - but still need to pad chunks/shards if needed
+            padded_chunk = None
+            if chunk_shape:
+                padded_chunk = list(chunk_shape)
+                while len(padded_chunk) < len(axes):
+                    padded_chunk.append(1)
+            padded_shard = None
+            if shard_shape:
+                padded_shard = list(shard_shape)
+                while len(padded_shard) < len(axes):
+                    padded_shard.append(1)
+            return axes, shape, padded_chunk, padded_shard, None
+
+        # Reorder axes
+        reordered_axes = [axes[i] for i in new_order]
+        reordered_shape = [shape[i] for i in new_order]
+
+        # Reorder chunk shape if provided (pad with 1s if needed for non-spatial dims)
+        reordered_chunk = None
+        if chunk_shape:
+            # Pad chunk_shape if it's shorter than axes (e.g., 3D chunks for 4D data)
+            padded_chunk = list(chunk_shape)
+            while len(padded_chunk) < len(axes):
+                padded_chunk.append(1)  # Non-spatial dims get chunk=1
+            reordered_chunk = [padded_chunk[i] for i in new_order]
+
+        # Reorder shard shape if provided (pad with 1s if needed)
+        reordered_shard = None
+        if shard_shape:
+            padded_shard = list(shard_shape)
+            while len(padded_shard) < len(axes):
+                padded_shard.append(1)  # Non-spatial dims get shard=1
+            reordered_shard = [padded_shard[i] for i in new_order]
+
+        # Store transpose order for data transformation
+        transpose_order = tuple(new_order)
+
+        return reordered_axes, reordered_shape, reordered_chunk, reordered_shard, transpose_order
+
+    def _reorder_domain(self, domain: Any, transpose_order: Tuple[int, ...]) -> Any:
+        """
+        Reorder a chunk domain according to the transpose order.
+
+        Args:
+            domain: TensorStore IndexDomain or tuple of slices
+            transpose_order: New axis order (e.g., (3, 0, 1, 2) for XYZC -> CXYZ)
+
+        Returns:
+            Reordered domain
+        """
+        if hasattr(domain, 'origin'):
+            # TensorStore IndexDomain - extract slices, reorder, return tuple
+            slices = []
+            for i in range(len(domain.origin)):
+                start = int(domain.origin[i])
+                stop = start + int(domain.shape[i])
+                slices.append(slice(start, stop))
+            return tuple(slices[i] for i in transpose_order)
+        elif isinstance(domain, tuple):
+            # Already a tuple of slices
+            return tuple(domain[i] for i in transpose_order)
+        else:
+            # Unknown format, return as-is
+            return domain
+
     def open_store(
         self,
         spec: Optional[Dict] = None,
@@ -335,8 +459,15 @@ class Zarr3Writer(BaseWriter):
         # Handle 5D expansion only if enabled (legacy behavior)
         if getattr(self, '_expand_to_5d', False) and self._original_shape is not None:
             output_domain, expanded_data = self._expand_chunk_to_5d(chunk_domain, data)
+        elif self._transpose_order is not None:
+            # Reorder axes (e.g., XYZC -> CXYZ for precomputed)
+            # IMPORTANT: np.transpose creates a view with different strides but same memory
+            # TensorStore needs contiguous memory, so we must copy to rearrange the data
+            expanded_data = np.ascontiguousarray(np.transpose(data, self._transpose_order))
+            # Reorder the domain to match
+            output_domain = self._reorder_domain(chunk_domain, self._transpose_order)
         else:
-            # NEW DEFAULT: Write directly without expansion
+            # Write directly without modification
             output_domain = chunk_domain
             expanded_data = data
 
@@ -352,8 +483,10 @@ class Zarr3Writer(BaseWriter):
         output shape. This method converts them back to input coordinates for
         reading from the native (e.g., 3D) input array.
 
-        When expand_to_5d=False (new default), output and input have the same
-        shape, so the domain is returned as-is.
+        When axis reordering is active (e.g., XYZC -> CXYZ), output domain
+        needs to be reordered back to input order for reading.
+
+        When expand_to_5d=False and no reordering, domains are returned as-is.
 
         Args:
             output_domain: TensorStore IndexDomain or slice tuple
@@ -361,6 +494,14 @@ class Zarr3Writer(BaseWriter):
         Returns:
             Domain in input coordinates
         """
+        # Handle axis reordering case (e.g., XYZC -> CXYZ)
+        if self._transpose_order is not None:
+            # Compute inverse transpose to go from output -> input
+            inverse_order = [0] * len(self._transpose_order)
+            for i, j in enumerate(self._transpose_order):
+                inverse_order[j] = i
+            return self._reorder_domain(output_domain, tuple(inverse_order))
+
         # If not expanding to 5D, input and output have same shape
         if not getattr(self, '_expand_to_5d', False):
             return output_domain

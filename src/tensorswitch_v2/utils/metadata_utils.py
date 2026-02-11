@@ -79,12 +79,22 @@ def create_zarr3_ome_metadata(ome_xml, array_shape, image_name, pixel_sizes=None
                       generates default colors.
     """
     def get_axis_type(axis_name):
-        if axis_name == 'c':
+        axis_lower = axis_name.lower()
+        if axis_lower in ['c', 'channel']:
             return 'channel'
-        elif axis_name in ['t', 'v']:
+        elif axis_lower in ['t', 'v']:
             return 'time'
         else:
             return 'space'
+
+    def normalize_axis_name(axis_name):
+        """Normalize axis name to OME-NGFF standard (c instead of channel, etc.)"""
+        axis_lower = axis_name.lower()
+        if axis_lower == 'channel':
+            return 'c'
+        elif axis_lower == 'v':
+            return 't'
+        return axis_lower
 
     def get_axis_unit(axis_name):
         if axis_name in ['x', 'y', 'z']:
@@ -99,7 +109,7 @@ def create_zarr3_ome_metadata(ome_xml, array_shape, image_name, pixel_sizes=None
 
     if axes_order and len(axes_order) == ndim:
         for axis_name in axes_order:
-            output_name = 't' if axis_name == 'v' else axis_name
+            output_name = normalize_axis_name(axis_name)
             axis_entry = {"name": output_name, "type": get_axis_type(axis_name)}
             unit = get_axis_unit(axis_name)
             if unit:

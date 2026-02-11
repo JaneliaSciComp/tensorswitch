@@ -236,7 +236,14 @@ pixi run python -m tensorswitch_v2 -i input.tif -o output.zarr --preset webknoss
 |----------|-------------|
 | `--expand-to-5d` | Force 5D TCZYX expansion (legacy behavior) |
 
-**Default behavior**: Source dimensionality and axis order are preserved (3D→3D, 4D→4D, XYZ→XYZ). Use `--expand-to-5d` for compatibility with tools requiring 5D TCZYX format.
+**Default behavior (RFC-3 compliant)**: Source dimensionality and axis order are preserved:
+- 3D XYZ → 3D XYZ (not expanded to 5D)
+- 4D CZYX → 4D CZYX
+- Axis order preserved (XYZ stays XYZ, ZYX stays ZYX)
+
+**Singleton channel squeeze**: When reading neuroglancer precomputed format with `num_channels=1`, the implicit 4th channel dimension is automatically squeezed out to preserve true 3D output.
+
+Use `--expand-to-5d` for compatibility with tools requiring strict 5D TCZYX format.
 
 ### Memory Order
 
@@ -438,6 +445,39 @@ print(f"Completed: {result.completed}/{result.total}")
 | 20+ more | various | 3 | BIOIOReader |
 | Olympus VSI, Leica SCN, etc. | various | 3+ | BioFormatsReader (Java) |
 | 150+ formats | various | 3+ | BioFormatsReader (Java) |
+
+### Source Layout Preservation
+
+TensorSwitch v2 preserves source data layout by default (RFC-3 compliant):
+
+**1. Dimension Preservation:**
+- 3D → 3D, 4D → 4D (no automatic 5D expansion)
+- Precomputed with `num_channels=1`: singleton channel squeezed (`[X,Y,Z,1]` → `[X,Y,Z]`)
+
+**2. Axis Order Rules:**
+- Source order preserved: XYZ→XYZ, ZYX→ZYX
+- Non-spatial axes (T, C) always come before spatial axes (Z, Y, X) in OME-NGFF output
+- Example: `[X,Y,Z,channel]` → reordered to `[channel,X,Y,Z]` for OME-NGFF compliance
+
+**3. Memory Order (F-order vs C-order):**
+- Auto-detected from source and preserved by default
+- Override with `--force_c_order` or `--force_f_order`
+- F-order (column-major): common in N5, Fortran, MATLAB
+- C-order (row-major): common in Python, NumPy, most image formats
+
+**4. Reader-Specific Behavior:**
+
+| Reader | Shape Handling | Notes |
+|--------|---------------|-------|
+| N5, Zarr | Direct pass-through | TensorStore native |
+| Precomputed (1ch) | `[X,Y,Z,1]` → `[X,Y,Z]` | Singleton squeezed |
+| Precomputed (Nch) | `[X,Y,Z,N]` preserved | Multi-channel kept |
+| TIFF, ND2, CZI, IMS | Shape preserved | Tier 2 readers |
+
+**5. Legacy Mode (`--expand-to-5d`):**
+- Input: `[Z, Y, X]` → Output: `[1, 1, Z, Y, X]` (T=1, C=1)
+- Input: `[C, Z, Y, X]` → Output: `[1, C, Z, Y, X]` (T=1)
+- Use for tools requiring strict OME-NGFF v0.4/v0.5 5D format
 
 ### Output Formats
 
@@ -760,13 +800,6 @@ info         → Precomputed
 
 - Non-spatial axes (t, c): chunk = 1 (per-channel access)
 - Spatial axes (z, y, x): chunk = 256 (inner), shard = 1024
-
-### 5D TCZYX Expansion
-
-All outputs are automatically expanded to 5D TCZYX format:
-- Input: `[Z, Y, X]` → Output: `[1, 1, Z, Y, X]` (T=1, C=1)
-- Input: `[C, Z, Y, X]` → Output: `[1, C, Z, Y, X]` (T=1)
-- Compliant with OME-NGFF v0.4/v0.5 specifications
 
 ---
 

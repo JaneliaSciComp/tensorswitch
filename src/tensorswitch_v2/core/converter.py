@@ -212,6 +212,34 @@ class DistributedConverter:
         # Store for use during chunk reading
         self._use_fortran_order = use_fortran_order
 
+        # 2b. Detect and squeeze singleton channel dimension
+        # TensorStore's neuroglancer_precomputed driver adds a 4th channel dimension
+        # even when num_channels=1. For truly 3D data, we should squeeze this out.
+        self._squeeze_channel = False
+        self._squeeze_axis = None
+
+        if axes_order and len(axes_order) == len(input_shape):
+            # Check for singleton trailing channel dimension (precomputed format)
+            axes_lower = [a.lower() for a in axes_order]
+            if 'channel' in axes_lower:
+                channel_idx = axes_lower.index('channel')
+                if input_shape[channel_idx] == 1:
+                    # Singleton channel - squeeze it out
+                    self._squeeze_channel = True
+                    self._squeeze_axis = channel_idx
+
+                    # Create squeezed shape and axes
+                    squeezed_shape = tuple(s for i, s in enumerate(input_shape) if i != channel_idx)
+                    squeezed_axes = [a for i, a in enumerate(axes_order) if i != channel_idx]
+
+                    if verbose:
+                        print(f"  Squeezing singleton channel: {input_shape} -> {squeezed_shape}")
+                        print(f"  Axes: {axes_order} -> {squeezed_axes}")
+
+                    # Update for output
+                    input_shape = squeezed_shape
+                    axes_order = squeezed_axes
+
         # 3. Get metadata from reader
         try:
             voxel_sizes = self.reader.get_voxel_sizes()
@@ -290,8 +318,26 @@ class DistributedConverter:
                 # The chunk_domain is in OUTPUT coordinates (e.g., 5D)
                 # We need INPUT coordinates (e.g., 3D) for reading
                 read_domain = chunk_domain
+                write_domain = chunk_domain  # Keep original for writing
                 if hasattr(self.writer, 'get_input_domain_from_output'):
                     read_domain = self.writer.get_input_domain_from_output(chunk_domain)
+
+                # If we squeezed a singleton channel, expand domain back for reading
+                # but keep the squeezed domain for writing
+                if self._squeeze_channel and self._squeeze_axis is not None:
+                    # Convert domain to slices if needed
+                    if hasattr(read_domain, 'origin'):
+                        slices = []
+                        for i in range(read_domain.ndim):
+                            start = int(read_domain.origin[i])
+                            stop = start + int(read_domain.shape[i])
+                            slices.append(slice(start, stop))
+                        read_domain = tuple(slices)
+
+                    # Insert slice(0, 1) for the squeezed channel axis
+                    read_domain = list(read_domain)
+                    read_domain.insert(self._squeeze_axis, slice(0, 1))
+                    read_domain = tuple(read_domain)
 
                 # Read from input (handle both Tier 1 and Tier 2 readers)
                 if self._is_tier2:
@@ -308,9 +354,13 @@ class DistributedConverter:
                     read_order = 'F' if getattr(self, '_use_fortran_order', False) else 'C'
                     data = self._input_store[read_domain].read(order=read_order).result()
 
+                # Squeeze singleton channel if we detected one
+                if self._squeeze_channel and self._squeeze_axis is not None:
+                    data = np.squeeze(data, axis=self._squeeze_axis)
+
                 # Write using writer's method (handles 5D expansion for Zarr2)
-                # Pass the INPUT domain - write_chunk will expand it for output
-                self.writer.write_chunk(read_domain, data, self._output_store)
+                # Use write_domain (squeezed/original) not read_domain (expanded for input)
+                self.writer.write_chunk(write_domain, data, self._output_store)
                 chunks_processed += 1
 
                 # Progress reporting
