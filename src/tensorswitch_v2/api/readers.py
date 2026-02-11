@@ -5,7 +5,7 @@ Provides both auto-detection and explicit reader selection via static methods.
 """
 
 from typing import Optional
-from ..readers.base import BaseReader
+from ..readers.base import BaseReader, is_local_precomputed as _is_local_precomputed
 
 
 class Readers:
@@ -108,6 +108,9 @@ class Readers:
             else:
                 return Readers.zarr2(path)
         elif 'precomputed://' in path_lower or path_lower.endswith('.precomputed'):
+            return Readers.precomputed(path)
+        elif _is_local_precomputed(path):
+            # Local precomputed directory (has info file with @type)
             return Readers.precomputed(path)
 
         # Tier 2: Custom Optimized (production formats)

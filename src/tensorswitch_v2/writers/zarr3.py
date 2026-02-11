@@ -96,13 +96,14 @@ class Zarr3Writer(BaseWriter):
         shard_shape: Optional[Tuple[int, ...]] = None,
         use_fortran_order: bool = False,
         axes_order: Optional[List[str]] = None,
+        expand_to_5d: bool = False,
         **kwargs
     ) -> Dict:
         """
-        Create TensorStore spec for Zarr3 output with automatic 5D TCZYX expansion.
+        Create TensorStore spec for Zarr3 output.
 
-        All data is expanded to 5D TCZYX format for OME-NGFF viewer compatibility.
-        Singleton dimensions are added for missing T, C, Z axes.
+        By default (expand_to_5d=False), preserves source dimensionality and axis order
+        per OME-NGFF RFC-3. Use expand_to_5d=True for legacy 5D TCZYX expansion.
 
         Args:
             shape: Array shape (e.g., (100, 1024, 1024))
@@ -111,31 +112,44 @@ class Zarr3Writer(BaseWriter):
             shard_shape: Outer shard dimensions (only used if use_sharding=True)
             use_fortran_order: Use Fortran (column-major) order
             axes_order: Axis names (e.g., ["z", "y", "x"])
+            expand_to_5d: If True, expand to 5D TCZYX (legacy behavior)
             **kwargs: Additional options
 
         Returns:
-            dict: TensorStore spec for Zarr3 output (5D TCZYX)
+            dict: TensorStore spec for Zarr3 output
         """
         # Store original shape and axes for domain conversion
         self._original_shape = tuple(shape)
         self._original_axes = axes_order
+        self._expand_to_5d = expand_to_5d
 
-        # Expand to 5D TCZYX
-        shape_list = list(shape)
-        shape_list, expanded_axes, expanded_chunks = self._expand_to_5d(
-            shape_list, axes_order, chunk_shape
-        )
-        self._expanded_axes = expanded_axes
-        print(f"Zarr3 5D expansion: {self._original_shape} -> {shape_list}")
-        print(f"  Axes: {axes_order} -> {expanded_axes}")
+        if expand_to_5d:
+            # Legacy behavior: Expand to 5D TCZYX
+            shape_list = list(shape)
+            shape_list, expanded_axes, expanded_chunks = self._expand_to_5d(
+                shape_list, axes_order, chunk_shape
+            )
+            self._expanded_axes = expanded_axes
+            print(f"Zarr3 5D expansion: {self._original_shape} -> {shape_list}")
+            print(f"  Axes: {axes_order} -> {expanded_axes}")
 
-        # Use expanded chunks, or let zarr3_store_spec calculate if None
-        custom_chunk_shape = expanded_chunks if expanded_chunks else None
+            # Use expanded chunks, or let zarr3_store_spec calculate if None
+            custom_chunk_shape = expanded_chunks if expanded_chunks else None
 
-        # Expand shard shape if provided
-        custom_shard_shape = None
-        if shard_shape:
-            custom_shard_shape = self._expand_shard_shape(list(shard_shape), axes_order)
+            # Expand shard shape if provided
+            custom_shard_shape = None
+            if shard_shape:
+                custom_shard_shape = self._expand_shard_shape(list(shard_shape), axes_order)
+        else:
+            # NEW DEFAULT: Preserve source layout (per OME-NGFF RFC-3)
+            shape_list = list(shape)
+            expanded_axes = axes_order if axes_order else self._infer_axes(shape_list)
+            self._expanded_axes = expanded_axes
+            print(f"Zarr3 preserving layout: shape={shape_list}, axes={expanded_axes}")
+
+            # Use provided chunks, or None for auto
+            custom_chunk_shape = list(chunk_shape) if chunk_shape else None
+            custom_shard_shape = list(shard_shape) if shard_shape else None
 
         # Create spec using existing utility function with 5D shape/axes
         spec = zarr3_store_spec(
@@ -318,10 +332,11 @@ class Zarr3Writer(BaseWriter):
         if store is None:
             raise ValueError("No store available. Call open_store first.")
 
-        # Handle 5D expansion: expand domain and data to 5D
-        if self._original_shape is not None:
+        # Handle 5D expansion only if enabled (legacy behavior)
+        if getattr(self, '_expand_to_5d', False) and self._original_shape is not None:
             output_domain, expanded_data = self._expand_chunk_to_5d(chunk_domain, data)
         else:
+            # NEW DEFAULT: Write directly without expansion
             output_domain = chunk_domain
             expanded_data = data
 
@@ -331,18 +346,25 @@ class Zarr3Writer(BaseWriter):
 
     def get_input_domain_from_output(self, output_domain: Any) -> Any:
         """
-        Convert a 5D output domain back to input coordinates for reading.
+        Convert output domain back to input coordinates for reading.
 
-        When 5D expansion is enabled, chunk domains are generated based on the 5D
+        When expand_to_5d=True, chunk domains are generated based on the 5D
         output shape. This method converts them back to input coordinates for
         reading from the native (e.g., 3D) input array.
 
+        When expand_to_5d=False (new default), output and input have the same
+        shape, so the domain is returned as-is.
+
         Args:
-            output_domain: TensorStore IndexDomain or slice tuple in 5D
+            output_domain: TensorStore IndexDomain or slice tuple
 
         Returns:
-            Domain in input coordinates (e.g., 3D for CYX data)
+            Domain in input coordinates
         """
+        # If not expanding to 5D, input and output have same shape
+        if not getattr(self, '_expand_to_5d', False):
+            return output_domain
+
         if self._original_shape is None:
             return output_domain
 
@@ -370,11 +392,11 @@ class Zarr3Writer(BaseWriter):
         Expand chunk domain and data from native shape to 5D TCZYX.
 
         Args:
-            chunk_domain: Domain for input data (in input coordinates, e.g., 3D)
+            chunk_domain: Domain for input data (in input coordinates, e.g., 3D or 4D XYZC)
             data: Native shape numpy array
 
         Returns:
-            (expanded_domain, expanded_data) both in 5D
+            (expanded_domain, expanded_data) both in 5D TCZYX order
         """
         # Get the mapping from original axes to 5D axes
         original_axes = self._original_axes or self._infer_axes(list(self._original_shape))
@@ -402,10 +424,27 @@ class Zarr3Writer(BaseWriter):
                 expanded_slices.append(slice(0, 1))
                 expand_dims_positions.append(i)
 
-        # Reshape data to add singleton dimensions
+        # Step 1: Add singleton dimensions for missing axes
         expanded_data = data
         for pos in expand_dims_positions:
             expanded_data = np.expand_dims(expanded_data, axis=pos)
+
+        # Step 2: Transpose to TCZYX order if needed
+        # After expand_dims, the axis order is: [new_axes_at_their_positions] + [original_axes_shifted]
+        # We need to compute the current axis order and transpose to target order
+        current_axes = []
+        orig_idx = 0
+        for i in range(5):
+            if i in expand_dims_positions:
+                current_axes.append(target_axes[i])  # This is a newly added axis
+            else:
+                current_axes.append(original_axes_lower[orig_idx])
+                orig_idx += 1
+
+        # Only transpose if current order differs from target
+        if current_axes != target_axes:
+            transpose_order = [current_axes.index(t) for t in target_axes]
+            expanded_data = np.transpose(expanded_data, transpose_order)
 
         return tuple(expanded_slices), expanded_data
 
@@ -417,6 +456,7 @@ class Zarr3Writer(BaseWriter):
         array_shape: Optional[Tuple[int, ...]] = None,
         axes_order: Optional[List[str]] = None,
         ome_xml: Optional[str] = None,
+        is_label: bool = False,
         **kwargs
     ) -> None:
         """
@@ -431,6 +471,7 @@ class Zarr3Writer(BaseWriter):
             array_shape: Array shape (ignored - uses 5D expanded shape)
             axes_order: Axis names (ignored - always uses 5D TCZYX)
             ome_xml: Raw OME-XML string from source data (stored in attributes.ome_xml)
+            is_label: If True, add OME-NGFF image-label metadata for segmentation data
             **kwargs: Additional arguments (ignored for compatibility)
         """
         # ALWAYS use 5D expanded shape and axes for metadata
@@ -457,7 +498,8 @@ class Zarr3Writer(BaseWriter):
             image_name=image_name,
             pixel_sizes=voxel_sizes,
             axes_order=axes_order,
-            include_omero=self.include_omero
+            include_omero=self.include_omero,
+            is_label=is_label
         )
 
         # Write to zarr.json at root

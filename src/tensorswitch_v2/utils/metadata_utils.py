@@ -63,7 +63,7 @@ def extract_omero_channels(ome_xml: str) -> list:
     return channels if channels else None
 
 
-def create_zarr3_ome_metadata(ome_xml, array_shape, image_name, pixel_sizes=None, axes_order=None, include_omero=False):
+def create_zarr3_ome_metadata(ome_xml, array_shape, image_name, pixel_sizes=None, axes_order=None, include_omero=False, is_label=False, label_colors=None):
     """
     Create OME-ZARR metadata structure for zarr3 format.
 
@@ -71,9 +71,12 @@ def create_zarr3_ome_metadata(ome_xml, array_shape, image_name, pixel_sizes=None
         ome_xml: OME-XML string to include in metadata (can be None)
         array_shape: Shape of the array
         image_name: Name for the image/dataset
-        pixel_sizes: Dict with 'x', 'y', 'z' voxel sizes in micrometers
+        pixel_sizes: Dict with 'x', 'y', 'z' voxel sizes in nanometers
         axes_order: List of axis names (e.g., ["v", "c", "z", "y", "x"] for CZI multi-view)
         include_omero: If True, extract and add omero channel metadata from ome_xml
+        is_label: If True, add image-label metadata for segmentation data
+        label_colors: Optional list of color dicts for labels. If None and is_label=True,
+                      generates default colors.
     """
     def get_axis_type(axis_name):
         if axis_name == 'c':
@@ -85,7 +88,7 @@ def create_zarr3_ome_metadata(ome_xml, array_shape, image_name, pixel_sizes=None
 
     def get_axis_unit(axis_name):
         if axis_name in ['x', 'y', 'z']:
-            return 'micrometer'
+            return 'nanometer'
         elif axis_name == 't':
             return 'millisecond'
         return None
@@ -108,25 +111,25 @@ def create_zarr3_ome_metadata(ome_xml, array_shape, image_name, pixel_sizes=None
         if array_shape[0] <= 10:
             axes = [
                 {"name": "c", "type": "channel"},
-                {"name": "y", "type": "space", "unit": "micrometer"},
-                {"name": "x", "type": "space", "unit": "micrometer"}
+                {"name": "y", "type": "space", "unit": "nanometer"},
+                {"name": "x", "type": "space", "unit": "nanometer"}
             ]
             if pixel_sizes:
                 scale_factors = [1.0, pixel_sizes.get('y', 1.0), pixel_sizes.get('x', 1.0)]
         else:
             axes = [
-                {"name": "z", "type": "space", "unit": "micrometer"},
-                {"name": "y", "type": "space", "unit": "micrometer"},
-                {"name": "x", "type": "space", "unit": "micrometer"}
+                {"name": "z", "type": "space", "unit": "nanometer"},
+                {"name": "y", "type": "space", "unit": "nanometer"},
+                {"name": "x", "type": "space", "unit": "nanometer"}
             ]
             if pixel_sizes:
                 scale_factors = [pixel_sizes.get('z', 1.0), pixel_sizes.get('y', 1.0), pixel_sizes.get('x', 1.0)]
     elif ndim == 4:
         axes = [
             {"name": "c", "type": "channel"},
-            {"name": "z", "type": "space", "unit": "micrometer"},
-            {"name": "y", "type": "space", "unit": "micrometer"},
-            {"name": "x", "type": "space", "unit": "micrometer"}
+            {"name": "z", "type": "space", "unit": "nanometer"},
+            {"name": "y", "type": "space", "unit": "nanometer"},
+            {"name": "x", "type": "space", "unit": "nanometer"}
         ]
         if pixel_sizes:
             scale_factors = [1.0, pixel_sizes.get('z', 1.0), pixel_sizes.get('y', 1.0), pixel_sizes.get('x', 1.0)]
@@ -134,9 +137,9 @@ def create_zarr3_ome_metadata(ome_xml, array_shape, image_name, pixel_sizes=None
         axes = [
             {"name": "t", "type": "time", "unit": "millisecond"},
             {"name": "c", "type": "channel"},
-            {"name": "z", "type": "space", "unit": "micrometer"},
-            {"name": "y", "type": "space", "unit": "micrometer"},
-            {"name": "x", "type": "space", "unit": "micrometer"}
+            {"name": "z", "type": "space", "unit": "nanometer"},
+            {"name": "y", "type": "space", "unit": "nanometer"},
+            {"name": "x", "type": "space", "unit": "nanometer"}
         ]
         if pixel_sizes:
             scale_factors = [1.0, 1.0, pixel_sizes.get('z', 1.0), pixel_sizes.get('y', 1.0), pixel_sizes.get('x', 1.0)]
@@ -182,6 +185,20 @@ def create_zarr3_ome_metadata(ome_xml, array_shape, image_name, pixel_sizes=None
             metadata["attributes"]["ome_xml"] = ome_xml
         else:
             metadata["attributes"]["ome_xml"] = str(ome_xml)
+
+    # Add image-label metadata for segmentation data
+    if is_label:
+        if label_colors is None:
+            label_colors = generate_default_label_colors(256)  # Default 256 colors
+        image_label = create_image_label_metadata(
+            label_colors=label_colors,
+            source_path=None,  # Standalone label, no source reference
+            ngff_version="0.5"
+        )
+        metadata["attributes"]["ome"]["image-label"] = image_label
+        # Remove "type": "image" from multiscales for labels (optional but cleaner)
+        if "type" in metadata["attributes"]["ome"]["multiscales"][0]:
+            del metadata["attributes"]["ome"]["multiscales"][0]["type"]
 
     return metadata
 
@@ -567,3 +584,108 @@ def precreate_zarr3_output(output_path, level, output_shape, shard_shape, chunk_
     print("="*80 + "\n")
 
     return result
+
+
+# ============================================================================
+# OME-NGFF Labels Support Functions
+# ============================================================================
+
+def generate_default_label_colors(num_labels, alpha=255):
+    """
+    Generate distinct colors for label values using golden ratio.
+
+    Args:
+        num_labels: Number of unique label values (excluding 0/background)
+        alpha: Alpha value (0-255, default: 255 for opaque)
+
+    Returns:
+        list: List of dicts with label-value and rgba
+
+    Example:
+        [
+            {"label-value": 1, "rgba": [174, 25, 242, 255]},
+            {"label-value": 2, "rgba": [111, 206, 59, 255]},
+            ...
+        ]
+    """
+    import colorsys
+
+    colors = []
+    for i in range(1, num_labels + 1):
+        # Generate distinct hues using golden ratio (0.618...)
+        # This distributes colors evenly around the color wheel
+        hue = (i * 0.618033988749895) % 1.0
+        saturation = 0.7
+        value = 0.9
+
+        # Convert HSV to RGB
+        rgb = colorsys.hsv_to_rgb(hue, saturation, value)
+        rgba = [int(rgb[0] * 255), int(rgb[1] * 255), int(rgb[2] * 255), alpha]
+
+        colors.append({
+            "label-value": i,
+            "rgba": rgba
+        })
+
+    return colors
+
+
+def is_segmentation_dtype(dtype_str):
+    """
+    Check if dtype suggests segmentation/label data.
+
+    Segmentation data typically uses integer types for label IDs:
+    - uint64: Most common for large segmentations (connectomics)
+    - uint32: Common for smaller segmentations
+    - uint16: Smaller label counts
+    - int64/int32: Signed variants
+
+    Args:
+        dtype_str: Data type string (e.g., "uint64", "uint8")
+
+    Returns:
+        bool: True if dtype suggests segmentation data
+    """
+    segmentation_dtypes = ['uint64', 'int64', 'uint32', 'int32']
+    return dtype_str in segmentation_dtypes
+
+
+def create_image_label_metadata(label_colors=None, source_path=None, ngff_version="0.5", num_default_colors=256):
+    """
+    Create the image-label metadata object for OME-NGFF labels.
+
+    Args:
+        label_colors: Optional list of dicts with label-value and rgba.
+                     If None, generates default colors.
+        source_path: Relative path to parent image (e.g., "../../" if label is at image.zarr/labels/seg/)
+                    If None, no source reference is added.
+        ngff_version: OME-NGFF version (default: "0.5")
+        num_default_colors: Number of default colors to generate if label_colors is None
+
+    Returns:
+        dict: image-label metadata object
+
+    Example output:
+        {
+            "version": "0.5",
+            "colors": [
+                {"label-value": 1, "rgba": [174, 25, 242, 255]},
+                ...
+            ],
+            "source": {"image": "../../"}
+        }
+    """
+    image_label = {
+        "version": ngff_version
+    }
+
+    # Add colors (generate defaults if not provided)
+    if label_colors is None:
+        label_colors = generate_default_label_colors(num_default_colors)
+    image_label["colors"] = label_colors
+
+    # Add source reference if provided
+    if source_path:
+        image_label["source"] = {"image": source_path}
+
+    return image_label

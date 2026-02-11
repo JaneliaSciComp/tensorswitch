@@ -280,8 +280,16 @@ Supported output formats:
     # Voxel size override
     parser.add_argument(
         "--voxel_size", default=None,
-        help="Override voxel size in micrometers, comma-separated X,Y,Z (e.g., '0.16,0.16,0.4'). "
+        help="Override voxel size in nanometers, comma-separated X,Y,Z (e.g., '9,9,12'). "
              "Use when source file lacks embedded voxel size metadata.",
+    )
+
+    # Label/segmentation mode
+    parser.add_argument(
+        "--is-label", "--is_label", action="store_true",
+        dest="is_label",
+        help="Mark output as label/segmentation data. Adds OME-NGFF image-label metadata. "
+             "Auto-detected for uint64/uint32 data types, use this flag to force for other types.",
     )
 
     # Manual bsub chunk-range mode
@@ -396,6 +404,13 @@ Supported output formats:
     order_group.add_argument(
         "--force_f_order", action="store_true",
         help="Force F-order (column-major) output, overriding auto-detected source order",
+    )
+
+    # Layout control
+    parser.add_argument(
+        "--expand-to-5d", action="store_true",
+        help="Force 5D TCZYX expansion (old behavior). "
+             "Default: preserve source dimensionality and axis order per OME-NGFF RFC-3",
     )
 
     # Batch processing mode
@@ -660,22 +675,44 @@ def create_writer(args):
 
 
 def _get_input_metadata(args):
-    """Read input shape and dtype for resource estimation."""
+    """Read input shape, dtype, and axes for resource estimation.
+
+    Returns:
+        tuple: (shape, dtype_str, axes_order) where axes_order may be None
+    """
     reader = create_reader(args)
     spec = reader.get_tensorstore_spec()
     if spec.get('driver') == 'array' and 'array' in spec:
         arr = spec['array']
-        return tuple(arr.shape), str(arr.dtype)
+        # Try to get axes from spec schema
+        axes_order = spec.get('schema', {}).get('dimension_names')
+        return tuple(arr.shape), str(arr.dtype), axes_order
     else:
         import tensorstore as ts
         from .utils import get_tensorstore_context
         spec['context'] = get_tensorstore_context()
         store = ts.open(spec, read=True).result()
-        return tuple(store.shape), store.dtype.name
+        # Get axes from TensorStore domain labels (e.g., precomputed has ['x','y','z','channel'])
+        axes_order = None
+        if hasattr(store, 'domain') and hasattr(store.domain, 'labels'):
+            labels = store.domain.labels
+            if labels and all(labels):
+                # Normalize 'channel' to 'c'
+                axes_order = ['c' if l.lower() == 'channel' else l.lower() for l in labels]
+        # Fallback to spec schema if available
+        if not axes_order:
+            axes_order = spec.get('schema', {}).get('dimension_names')
+        return tuple(store.shape), store.dtype.name, axes_order
 
 
-def _estimate_shard_info(args, volume_shape, dtype_str):
+def _estimate_shard_info(args, volume_shape, dtype_str, axes_order=None):
     """Estimate shard shape and total shards for resource calculation.
+
+    Args:
+        args: Parsed command-line arguments
+        volume_shape: Input volume shape (may be 3D, 4D, or 5D)
+        dtype_str: Data type string
+        axes_order: Axis names (e.g., ['x','y','z','c'] for precomputed)
 
     Returns:
         (shard_shape, total_shards) tuple. If no sharding, shard_shape is the
@@ -702,7 +739,21 @@ def _estimate_shard_info(args, volume_shape, dtype_str):
     else:
         shard_shape = chunk_shape
 
-    total_shards = int(np.prod(np.ceil(np.array(volume_shape) / np.array(shard_shape)).astype(int)))
+    # Expand both shapes to 5D for compatible division
+    # Use writer's expansion methods if available (Zarr3Writer has _expand_to_5d)
+    if hasattr(writer, '_expand_to_5d') and hasattr(writer, '_expand_shard_shape'):
+        expanded_shape, _, _ = writer._expand_to_5d(list(volume_shape), axes_order, None)
+        expanded_shard = writer._expand_shard_shape(list(shard_shape), axes_order if axes_order else ['z', 'y', 'x'])
+        total_shards = int(np.prod(np.ceil(np.array(expanded_shape) / np.array(expanded_shard)).astype(int)))
+    else:
+        # Fallback: pad shard_shape to match volume_shape dimensions
+        if len(shard_shape) < len(volume_shape):
+            extra_dims = len(volume_shape) - len(shard_shape)
+            shard_shape_padded = [1] * extra_dims + list(shard_shape)
+        else:
+            shard_shape_padded = shard_shape
+        total_shards = int(np.prod(np.ceil(np.array(volume_shape) / np.array(shard_shape_padded)).astype(int)))
+
     return shard_shape, total_shards
 
 
@@ -817,8 +868,8 @@ def submit_job(args, return_job_id=False):
 
     if memory_gb is None or wall_time is None:
         print("Reading input metadata for resource estimation...")
-        volume_shape, dtype_str = _get_input_metadata(args)
-        shard_shape, total_shards = _estimate_shard_info(args, volume_shape, dtype_str)
+        volume_shape, dtype_str, axes_order = _get_input_metadata(args)
+        shard_shape, total_shards = _estimate_shard_info(args, volume_shape, dtype_str, axes_order)
         # Both BIOIO and BioFormats use Dask and have similar overhead
         use_bioio = getattr(args, 'use_bioio', False) or getattr(args, 'use_bioformats', False)
         print(f"  Shape: {volume_shape}, dtype: {dtype_str}")
@@ -894,6 +945,10 @@ def submit_job(args, return_job_id=False):
         reinvoke.append("--force_f_order")
     if getattr(args, 'voxel_size', None):
         reinvoke += ["--voxel_size", args.voxel_size]
+    if getattr(args, 'is_label', False):
+        reinvoke.append("--is-label")
+    if getattr(args, 'expand_to_5d', False):
+        reinvoke.append("--expand-to-5d")
 
     # Build bsub command
     command = [
@@ -1561,6 +1616,29 @@ def main(argv=None):
     elif args.force_f_order:
         force_order = 'f'
 
+    # Auto-detect segmentation data based on dtype, or use explicit --is-label flag
+    is_label = getattr(args, 'is_label', False)
+    if not is_label:
+        # Auto-detect based on dtype
+        try:
+            spec = reader.get_tensorstore_spec()
+            if spec.get('driver') == 'array' and 'array' in spec:
+                dtype_str = str(spec['array'].dtype)
+            else:
+                import tensorstore as ts
+                from .utils import get_tensorstore_context
+                spec['context'] = get_tensorstore_context()
+                store = ts.open(spec, read=True).result()
+                dtype_str = store.dtype.name
+
+            from .utils.metadata_utils import is_segmentation_dtype
+            if is_segmentation_dtype(dtype_str):
+                is_label = True
+                if verbose:
+                    print(f"Auto-detected segmentation data (dtype: {dtype_str}), adding image-label metadata")
+        except Exception:
+            pass  # If detection fails, default to is_label=False
+
     # Parse voxel_size override if provided
     voxel_size_override = None
     if args.voxel_size:
@@ -1577,6 +1655,9 @@ def main(argv=None):
                 f"Expected comma-separated X,Y,Z values (e.g., '0.16,0.16,0.4')"
             )
 
+    # Get expand_to_5d flag (default False = preserve source layout)
+    expand_to_5d = getattr(args, 'expand_to_5d', False)
+
     if args.start_idx is not None:
         # Manual chunk-range mode (for bsub workers)
         converter.convert(
@@ -1589,6 +1670,8 @@ def main(argv=None):
             verbose=verbose,
             force_order=force_order,
             voxel_size_override=voxel_size_override,
+            is_label=is_label,
+            expand_to_5d=expand_to_5d,
         )
     else:
         # Full single-process conversion
@@ -1599,6 +1682,8 @@ def main(argv=None):
             verbose=verbose,
             force_order=force_order,
             voxel_size_override=voxel_size_override,
+            is_label=is_label,
+            expand_to_5d=expand_to_5d,
         )
 
 

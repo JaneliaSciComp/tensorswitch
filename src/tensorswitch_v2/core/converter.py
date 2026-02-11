@@ -102,6 +102,8 @@ class DistributedConverter:
         verbose: bool = True,
         delete_existing: Optional[bool] = None,
         voxel_size_override: Optional[Dict[str, float]] = None,
+        is_label: bool = False,
+        expand_to_5d: bool = False,
     ) -> Dict[str, Any]:
         """
         Convert data from reader to writer.
@@ -122,6 +124,7 @@ class DistributedConverter:
                 False for manual bsub jobs where the store is pre-created.
             voxel_size_override: Override voxel sizes {'x': um, 'y': um, 'z': um}.
                 Use when source file lacks embedded voxel size metadata.
+            is_label: If True, write OME-NGFF image-label metadata for segmentation data.
 
         Returns:
             dict: Conversion statistics (chunks_processed, elapsed_time, etc.)
@@ -164,12 +167,25 @@ class DistributedConverter:
         # 2. Detect source order and axes
         use_fortran_order = False
         axes_order = None
-        # Prefer dimension_names from the reader spec (CZI, etc. provide explicit axes)
-        reader_axes = input_spec.get('schema', {}).get('dimension_names')
-        if reader_axes and all(isinstance(a, str) for a in reader_axes):
-            axes_order = list(reader_axes)
-            if verbose:
-                print(f"  Axes from reader: {axes_order}")
+
+        # First try to get actual domain labels from TensorStore (most accurate)
+        if not self._is_tier2 and self._input_store is not None:
+            try:
+                domain_labels = list(self._input_store.domain.labels)
+                if domain_labels and all(isinstance(l, str) and l for l in domain_labels):
+                    axes_order = domain_labels
+                    if verbose:
+                        print(f"  Axes from TensorStore domain: {axes_order}")
+            except Exception:
+                pass
+
+        # Fallback: try dimension_names from reader spec (CZI, etc.)
+        if axes_order is None:
+            reader_axes = input_spec.get('schema', {}).get('dimension_names')
+            if reader_axes and all(isinstance(a, str) for a in reader_axes):
+                axes_order = list(reader_axes)
+                if verbose:
+                    print(f"  Axes from reader: {axes_order}")
 
         # Handle order: force_order overrides auto-detection
         if force_order is not None:
@@ -192,6 +208,9 @@ class DistributedConverter:
                     print(f"  Auto-detected {order_name} from source")
             except Exception:
                 pass  # Default to C-order
+
+        # Store for use during chunk reading
+        self._use_fortran_order = use_fortran_order
 
         # 3. Get metadata from reader
         try:
@@ -228,7 +247,8 @@ class DistributedConverter:
             chunk_shape=chunk_shape,
             shard_shape=shard_shape,
             use_fortran_order=use_fortran_order,
-            axes_order=axes_order
+            axes_order=axes_order,
+            expand_to_5d=expand_to_5d
         )
         _delete = delete_existing if delete_existing is not None else (start_idx == 0)
         self._output_store = self.writer.open_store(
@@ -284,7 +304,9 @@ class DistributedConverter:
                     data = self._dask_array[slices].compute()
                 else:
                     # Tier 1: Read from TensorStore directly
-                    data = self._input_store[read_domain].read().result()
+                    # Pass order parameter to preserve source memory layout (F-order vs C-order)
+                    read_order = 'F' if getattr(self, '_use_fortran_order', False) else 'C'
+                    data = self._input_store[read_domain].read(order=read_order).result()
 
                 # Write using writer's method (handles 5D expansion for Zarr2)
                 # Pass the INPUT domain - write_chunk will expand it for output
@@ -325,7 +347,8 @@ class DistributedConverter:
                     array_shape=input_shape,
                     axes_order=axes_order,
                     ome_xml=ome_xml,
-                    image_name=image_name
+                    image_name=image_name,
+                    is_label=is_label
                 )
                 # Also update root zarr.json for OME-NGFF multiscales
                 root_path = os.path.dirname(self.writer.output_path)

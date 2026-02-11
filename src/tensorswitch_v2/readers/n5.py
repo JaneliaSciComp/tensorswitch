@@ -11,6 +11,7 @@ from typing import Dict, Optional, Tuple
 from urllib.parse import urlparse
 import tensorstore as ts
 from .base import BaseReader
+from ..utils.format_loaders import convert_to_nanometers
 
 
 def _parse_remote_url(url: str) -> Tuple[str, dict]:
@@ -291,17 +292,17 @@ class N5Reader(BaseReader):
         N5 typically stores this in 'pixelResolution' or 'resolution' fields.
 
         Returns:
-            dict: Voxel dimensions with keys 'x', 'y', 'z' in micrometers
+            dict: Voxel dimensions with keys 'x', 'y', 'z' in nanometers
 
         Example:
             >>> reader = N5Reader("/data.n5")
             >>> voxel_sizes = reader.get_voxel_sizes()
             >>> print(voxel_sizes)
-            {'x': 0.116, 'y': 0.116, 'z': 0.5}
+            {'x': 116.0, 'y': 116.0, 'z': 500.0}
 
         Notes:
             - Returns 1.0 for each dimension if metadata doesn't contain voxel sizes
-            - Assumes metadata is in micrometers (converts if needed)
+            - Detects unit from metadata and converts to nanometers
             - N5 convention: dimensions = [z, y, x] (reverse of XYZ)
         """
         metadata = self.get_metadata()
@@ -320,27 +321,22 @@ class N5Reader(BaseReader):
                 if len(dimensions) >= 3:
                     z, y, x = dimensions[0], dimensions[1], dimensions[2]
 
-                    # Convert to micrometers if needed
-                    scale = 1.0
-                    if unit in ['nm', 'nanometer']:
-                        scale = 0.001  # nm to µm
-                    elif unit in ['mm', 'millimeter']:
-                        scale = 1000.0  # mm to µm
-
+                    # Convert to nanometers using helper
                     return {
-                        'x': float(x) * scale,
-                        'y': float(y) * scale,
-                        'z': float(z) * scale
+                        'x': convert_to_nanometers(x, unit),
+                        'y': convert_to_nanometers(y, unit),
+                        'z': convert_to_nanometers(z, unit)
                     }
 
-        # Check for 'resolution' (alternative convention)
+        # Check for 'resolution' (alternative convention) - assume nanometers if no unit
         elif 'resolution' in metadata:
             resolution = metadata['resolution']
             if isinstance(resolution, list) and len(resolution) >= 3:
                 z, y, x = resolution[0], resolution[1], resolution[2]
+                # No unit specified, assume already nanometers
                 return {'x': float(x), 'y': float(y), 'z': float(z)}
 
-        # Check for 'scales' (multi-scale metadata)
+        # Check for 'scales' (multi-scale metadata) - assume nanometers if no unit
         elif 'scales' in metadata:
             scales = metadata['scales']
             if isinstance(scales, list) and len(scales) > 0:

@@ -53,10 +53,15 @@ def detect_input_mode(input_path: str) -> str:
     Returns:
         'single_file' or 'batch_directory'
     """
+    from ..readers.base import is_local_precomputed
+
     # Check if path ends with known format extension
     ext = os.path.splitext(input_path)[1].lower()
 
     if ext in SUPPORTED_EXTENSIONS:
+        return 'single_file'
+    elif is_local_precomputed(input_path):
+        # Local precomputed directory (has info file) - treat as single file
         return 'single_file'
     elif os.path.isdir(input_path) or input_path.endswith('/'):
         return 'batch_directory'

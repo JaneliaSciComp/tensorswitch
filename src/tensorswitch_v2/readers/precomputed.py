@@ -2,11 +2,15 @@
 Neuroglancer Precomputed reader implementation using native TensorStore driver.
 
 Tier 1 reader - maximum performance with zero conversion overhead.
+Supports local paths and remote URLs (HTTP, GCS, S3).
 """
 
-from typing import Dict
+import os
+import json
+from typing import Dict, Optional
 import tensorstore as ts
-from .base import BaseReader
+from .base import BaseReader, build_kvstore, is_remote_path
+from ..utils.format_loaders import extract_precomputed_metadata
 
 
 class PrecomputedReader(BaseReader):
@@ -59,30 +63,39 @@ class PrecomputedReader(BaseReader):
         Return TensorStore spec using native Neuroglancer Precomputed driver.
 
         This is a Tier 1 reader - uses TensorStore's native driver
-        with zero conversion overhead.
+        with zero conversion overhead. Supports local paths and remote URLs.
 
         Returns:
             dict: TensorStore spec for Precomputed dataset
 
-        Example:
+        Example (remote GCS):
             >>> reader = PrecomputedReader("precomputed://gs://bucket/data")
             >>> spec = reader.get_tensorstore_spec()
-            >>> print(spec)
-            {
-                'driver': 'neuroglancer_precomputed',
-                'kvstore': 'gs://bucket/data',
-                'scale_index': 0,
-                'open': True
-            }
+            >>> print(spec['kvstore'])
+            {'driver': 'gcs', 'bucket': 'bucket', 'path': 'data'}
+
+        Example (local path):
+            >>> reader = PrecomputedReader("/path/to/precomputed_data")
+            >>> spec = reader.get_tensorstore_spec()
+            >>> print(spec['kvstore'])
+            {'driver': 'file', 'path': '/path/to/precomputed_data'}
 
         Notes:
             - Native driver = maximum performance
-            - Excellent for remote data (HTTP, GCS, S3)
-            - Handles multi-resolution automatically
+            - Supports local, HTTP, GCS, S3 via build_kvstore()
+            - Handles multi-resolution automatically via scale_index
         """
+        # Strip precomputed:// prefix if present
+        clean_path = self.path
+        if clean_path.startswith('precomputed://'):
+            clean_path = clean_path[len('precomputed://'):]
+
+        # Build kvstore using shared utility (handles local, gs://, s3://, http://)
+        kvstore = build_kvstore(clean_path)
+
         spec = {
             'driver': 'neuroglancer_precomputed',
-            'kvstore': self.path.replace('precomputed://', ''),
+            'kvstore': kvstore,
             'scale_index': self.scale_index,
             'open': True
         }
@@ -97,52 +110,69 @@ class PrecomputedReader(BaseReader):
         multi-scale metadata, data type, voxel sizes, etc.
 
         Returns:
-            dict: Precomputed metadata
+            dict: Precomputed metadata including:
+                - shape: Array dimensions
+                - dtype: Data type
+                - scale_index: Current resolution level
+                - info: Full precomputed info file content
+                - scales: Multi-resolution scale information
 
         Notes:
-            - Metadata fetched from TensorStore
-            - Contains multi-scale information
-            - Includes voxel sizes and coordinate space
+            - Reads info file directly for full metadata
+            - Also fetches shape/dtype from TensorStore
+            - Contains multi-scale information and voxel sizes
         """
-        # Open the dataset to get metadata
+        # Get full info file content
+        info, _ = extract_precomputed_metadata(self.path, self.scale_index)
+
+        # Also get basic info from TensorStore for shape/dtype
         spec = self.get_tensorstore_spec()
         try:
             store = ts.open(spec).result()
-            # Extract basic metadata from TensorStore
             metadata = {
                 'shape': list(store.shape),
                 'dtype': str(store.dtype),
                 'scale_index': self.scale_index
             }
-            return metadata
         except Exception as e:
-            print(f"Warning: Failed to read Precomputed metadata: {e}")
-            return {}
+            print(f"Warning: Failed to read Precomputed shape from TensorStore: {e}")
+            metadata = {'scale_index': self.scale_index}
+
+        # Add info file content
+        if info:
+            metadata['info'] = info
+            metadata['scales'] = info.get('scales', [])
+
+        return metadata
 
     def get_voxel_sizes(self) -> Dict[str, float]:
         """
         Return voxel dimensions from Precomputed metadata.
 
-        Precomputed format includes voxel sizes in the info file.
+        Precomputed format includes voxel sizes in the info file as 'resolution'
+        in nanometers with XYZ order.
 
         Returns:
             dict: Voxel dimensions with keys 'x', 'y', 'z' in nanometers
-                  (converted to micrometers)
 
         Example:
             >>> reader = PrecomputedReader("precomputed://gs://bucket/data")
             >>> voxel_sizes = reader.get_voxel_sizes()
             >>> print(voxel_sizes)
-            {'x': 8.0, 'y': 8.0, 'z': 40.0}  # in micrometers
+            {'x': 8.0, 'y': 8.0, 'z': 40.0}  # in nanometers
 
         Notes:
-            - Precomputed stores in nanometers, converted to micrometers
+            - Precomputed stores resolution in nanometers (preserved as-is)
+            - Resolution is in XYZ order in the info file
             - Returns 1.0 for each dimension if metadata unavailable
         """
-        # For now, return defaults
-        # TODO: Parse Precomputed info file for actual voxel sizes
-        print(f"Warning: Precomputed voxel size parsing not yet implemented, using default 1.0")
-        return {'x': 1.0, 'y': 1.0, 'z': 1.0}
+        _, voxel_sizes = extract_precomputed_metadata(self.path, self.scale_index)
+
+        if voxel_sizes is None:
+            print(f"Warning: Could not extract voxel sizes from precomputed info, using default 1.0")
+            return {'x': 1.0, 'y': 1.0, 'z': 1.0}
+
+        return voxel_sizes
 
     def supports_remote(self) -> bool:
         """

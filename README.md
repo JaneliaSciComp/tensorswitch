@@ -35,7 +35,7 @@ A high-performance microscopy data conversion tool with TensorStore as the unifi
 - **Multi-Scale Pyramids**: Automatic pyramid generation with chained downsampling
 - **Batch Processing**: Convert thousands of files with LSF job arrays
 - **LSF Cluster Support**: Auto-calculated resources (memory, wall time, cores)
-- **5D TCZYX Output**: Automatic expansion to OME-NGFF compliant 5D format
+- **Preserve Source Layout**: Maintains source dimensionality (3D/4D/5D) and axis order per OME-NGFF RFC-3
 - **Compression**: zstd compression with configurable levels
 
 ---
@@ -229,6 +229,14 @@ pixi run python -m tensorswitch_v2 -i input.tif -o output.zarr --preset webknoss
 | `--use_bioio` | Force BIOIO adapter (Tier 3, Python plugins) |
 | `--use_bioformats` | Force Bio-Formats reader (Tier 3+, Java-backed, 150+ formats) |
 | `--dataset_path` | Path within container (e.g., `s0` for N5) |
+
+### Layout Preservation
+
+| Argument | Description |
+|----------|-------------|
+| `--expand-to-5d` | Force 5D TCZYX expansion (legacy behavior) |
+
+**Default behavior**: Source dimensionality and axis order are preserved (3D→3D, 4D→4D, XYZ→XYZ). Use `--expand-to-5d` for compatibility with tools requiring 5D TCZYX format.
 
 ### Memory Order
 

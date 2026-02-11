@@ -7,7 +7,115 @@ the abstract methods to convert their format into TensorStore arrays.
 
 from abc import ABC, abstractmethod
 from typing import Dict, Optional, Tuple
+from urllib.parse import urlparse
+import os
+import json
 import numpy as np
+
+
+# ============================================================================
+# Shared kvstore utilities for all Tier 1 readers
+# ============================================================================
+
+def build_kvstore(path: str) -> Dict:
+    """
+    Build TensorStore kvstore specification from a path.
+
+    Handles local paths and remote URLs (HTTP, HTTPS, S3, GCS).
+    This is used by all Tier 1 readers (N5, Zarr, Precomputed) to create
+    proper kvstore specs for TensorStore.
+
+    Args:
+        path: Local path or remote URL
+            - Local: /path/to/data or file:///path/to/data
+            - GCS: gs://bucket/path
+            - S3: s3://bucket/path
+            - HTTP: http://example.com/data or https://...
+
+    Returns:
+        dict: TensorStore kvstore specification
+
+    Examples:
+        >>> build_kvstore('/local/path/data')
+        {'driver': 'file', 'path': '/local/path/data'}
+
+        >>> build_kvstore('gs://my-bucket/data')
+        {'driver': 'gcs', 'bucket': 'my-bucket', 'path': 'data'}
+
+        >>> build_kvstore('s3://my-bucket/data')
+        {'driver': 's3', 'bucket': 'my-bucket', 'path': 'data'}
+
+        >>> build_kvstore('https://example.com/data')
+        {'driver': 'http', 'base_url': 'https://example.com/data'}
+    """
+    parsed = urlparse(path)
+    scheme = parsed.scheme.lower()
+
+    if scheme in ('http', 'https'):
+        # HTTP/HTTPS URL
+        return {'driver': 'http', 'base_url': path}
+
+    elif scheme == 's3':
+        # S3 URL: s3://bucket/path
+        bucket = parsed.netloc
+        s3_path = parsed.path.lstrip('/')
+        return {'driver': 's3', 'bucket': bucket, 'path': s3_path}
+
+    elif scheme == 'gs':
+        # Google Cloud Storage URL: gs://bucket/path
+        bucket = parsed.netloc
+        gcs_path = parsed.path.lstrip('/')
+        return {'driver': 'gcs', 'bucket': bucket, 'path': gcs_path}
+
+    elif scheme == 'file':
+        # Explicit file:// URL
+        return {'driver': 'file', 'path': parsed.path}
+
+    else:
+        # Local file path (no scheme or unknown scheme)
+        local_path = path if not scheme else parsed.path
+        return {'driver': 'file', 'path': local_path}
+
+
+def is_remote_path(path: str) -> bool:
+    """Check if path is a remote URL (HTTP, S3, GCS)."""
+    parsed = urlparse(path)
+    return parsed.scheme.lower() in ('http', 'https', 's3', 'gs')
+
+
+def is_local_precomputed(path: str) -> bool:
+    """
+    Check if path is a local Neuroglancer Precomputed directory.
+
+    Detects precomputed format by checking for an 'info' file with
+    the '@type': 'neuroglancer_multiscale_volume' field.
+
+    Args:
+        path: Path to check
+
+    Returns:
+        bool: True if path is a local precomputed directory
+
+    Example:
+        >>> is_local_precomputed('/data/image_230130b')
+        True  # if contains valid info file
+    """
+    # Skip remote URLs
+    if is_remote_path(path):
+        return False
+
+    # Check if directory exists and contains info file
+    info_path = os.path.join(path, 'info')
+    if not os.path.isdir(path) or not os.path.isfile(info_path):
+        return False
+
+    # Validate info file content
+    try:
+        with open(info_path, 'r') as f:
+            info = json.load(f)
+        return info.get('@type') == 'neuroglancer_multiscale_volume'
+    except (json.JSONDecodeError, IOError, KeyError):
+        return False
 
 
 class BaseReader(ABC):
@@ -129,7 +237,7 @@ class BaseReader(ABC):
     @abstractmethod
     def get_voxel_sizes(self) -> Dict[str, float]:
         """
-        Return physical pixel/voxel dimensions in micrometers.
+        Return physical pixel/voxel dimensions in nanometers.
 
         Extracts the physical size of each voxel from format metadata.
         Critical for anisotropic downsampling and coordinate transformations.
@@ -137,20 +245,20 @@ class BaseReader(ABC):
         Returns:
             dict: Voxel dimensions with keys 'x', 'y', 'z' (and 't' if applicable):
                 {
-                    'x': 0.116,  # micrometers per pixel in X
-                    'y': 0.116,  # micrometers per pixel in Y
-                    'z': 0.5     # micrometers per pixel in Z
+                    'x': 116.0,  # nanometers per pixel in X
+                    'y': 116.0,  # nanometers per pixel in Y
+                    'z': 500.0   # nanometers per pixel in Z
                 }
 
         Example (isotropic):
-            {'x': 0.1, 'y': 0.1, 'z': 0.1}
+            {'x': 100.0, 'y': 100.0, 'z': 100.0}
 
         Example (anisotropic - common in microscopy):
-            {'x': 0.116, 'y': 0.116, 'z': 0.5}  # Z is coarser
+            {'x': 116.0, 'y': 116.0, 'z': 500.0}  # Z is coarser
 
         Notes:
             - Return 1.0 if physical size is unknown
-            - Units MUST be micrometers (convert from other units)
+            - Units MUST be nanometers (convert from other units)
             - Anisotropic voxels will trigger warnings and smart downsampling
         """
         pass
@@ -182,7 +290,7 @@ class BaseReader(ABC):
 
                     # Physical metadata
                     'voxel_sizes': {'x': 0.16, 'y': 0.16, 'z': 0.4},
-                    'voxel_unit': 'micrometer',
+                    'voxel_unit': 'nanometer',
 
                     # Compression (if applicable)
                     'compression': 'zstd',
@@ -241,7 +349,7 @@ class BaseReader(ABC):
 
             # Physical metadata
             'voxel_sizes': voxel_sizes,
-            'voxel_unit': 'micrometer',
+            'voxel_unit': 'nanometer',
 
             # Compression (default unknown)
             'compression': None,
@@ -269,9 +377,9 @@ class BaseReader(ABC):
                 {
                     'multiscales': [{
                         'axes': [
-                            {'name': 'z', 'type': 'space', 'unit': 'micrometer'},
-                            {'name': 'y', 'type': 'space', 'unit': 'micrometer'},
-                            {'name': 'x', 'type': 'space', 'unit': 'micrometer'}
+                            {'name': 'z', 'type': 'space', 'unit': 'nanometer'},
+                            {'name': 'y', 'type': 'space', 'unit': 'nanometer'},
+                            {'name': 'x', 'type': 'space', 'unit': 'nanometer'}
                         ],
                         'datasets': [{
                             'path': '0',
@@ -351,7 +459,7 @@ class BaseReader(ABC):
                 axes.append({
                     'name': dim_name,
                     'type': 'space',
-                    'unit': 'micrometer'
+                    'unit': 'nanometer'
                 })
             elif dim_name == 't':
                 axes.append({

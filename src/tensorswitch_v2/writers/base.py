@@ -165,7 +165,7 @@ class BaseWriter(ABC):
 
         Args:
             ome_metadata: OME-NGFF compliant metadata dict
-            voxel_sizes: Optional voxel dimensions (x, y, z in micrometers)
+            voxel_sizes: Optional voxel dimensions (x, y, z in nanometers)
 
         Returns:
             None
