@@ -60,6 +60,10 @@ class Writers:
         use_ome_structure: bool = True,
         level_path: str = "s0",
         include_omero: bool = False,
+        use_nested_structure: bool = True,
+        data_type: str = "image",
+        image_key: str = "raw",
+        label_key: str = "segmentation",
         **kwargs
     ) -> BaseWriter:
         """
@@ -70,6 +74,7 @@ class Writers:
         - Flexible codecs (blosc, gzip, zstd, etc.)
         - OME-NGFF v0.5 metadata
         - Remote storage support (GCS, S3)
+        - Nested structure support (raw/, labels/segmentation/)
 
         Args:
             output_path: Path to output Zarr3 dataset
@@ -78,6 +83,10 @@ class Writers:
             compression_level: Compression level (1-9, default: 5)
             use_ome_structure: Use OME-ZARR directory structure (default: True)
             level_path: Level subdirectory name (default: "s0")
+            use_nested_structure: Use OME-NGFF nested structure (default: True)
+            data_type: 'image' or 'labels' - determines output subdirectory
+            image_key: Name for image group (default: "raw")
+            label_key: Name for label image (default: "segmentation")
             **kwargs: Additional format-specific options
 
         Returns:
@@ -89,12 +98,8 @@ class Writers:
         Example (No sharding):
             >>> writer = Writers.zarr3("/output.zarr", use_sharding=False)
 
-        Example (Custom compression):
-            >>> writer = Writers.zarr3(
-            ...     "/output.zarr",
-            ...     compression="zstd",
-            ...     compression_level=7
-            ... )
+        Example (Labels output):
+            >>> writer = Writers.zarr3("/output.zarr", data_type="labels")
         """
         from ..writers.zarr3 import Zarr3Writer
         return Zarr3Writer(
@@ -104,7 +109,11 @@ class Writers:
             compression_level=compression_level,
             use_ome_structure=use_ome_structure,
             level_path=level_path,
-            include_omero=include_omero
+            include_omero=include_omero,
+            use_nested_structure=use_nested_structure,
+            data_type=data_type,
+            image_key=image_key,
+            label_key=label_key
         )
 
     @staticmethod

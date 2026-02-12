@@ -11,6 +11,8 @@ Modules:
 - metadata_utils: OME-NGFF metadata functions
 - pyramid_utils: Pyramid planning functions
 - format_loaders: TIFF, ND2, IMS, CZI loaders
+- ome_structure: OME-NGFF nested structure management
+- folder_discovery: Auto-detection and classification of datasets in folders
 """
 
 from .tensorstore_utils import (
@@ -61,6 +63,20 @@ from .format_loaders import (
     extract_czi_metadata,
 )
 
+from .ome_structure import (
+    OMEStructure,
+    OMEStructureConfig,
+)
+
+from .folder_discovery import (
+    discover_datasets,
+    is_neuroglancer_precomputed,
+    classify_dataset,
+    validate_discovery_for_conversion,
+    DiscoveredDataset,
+    DiscoveryResult,
+)
+
 __all__ = [
     # TensorStore utilities
     'get_tensorstore_context',
@@ -100,4 +116,14 @@ __all__ = [
     'extract_ims_metadata',
     'load_czi_stack',
     'extract_czi_metadata',
+    # OME-NGFF structure
+    'OMEStructure',
+    'OMEStructureConfig',
+    # Folder discovery
+    'discover_datasets',
+    'is_neuroglancer_precomputed',
+    'classify_dataset',
+    'validate_discovery_for_conversion',
+    'DiscoveredDataset',
+    'DiscoveryResult',
 ]

@@ -70,7 +70,7 @@ A high-performance microscopy data conversion tool with TensorStore as the unifi
 | **Tier 1** | Maximum | N5, Zarr2, Zarr3, Precomputed | Native TensorStore drivers |
 | **Tier 2** | Optimized | TIFF, ND2, IMS, HDF5, CZI | Custom optimized readers |
 | **Tier 3** | Compatible | LIF + 20 more | BIOIO Python plugins |
-| **Tier 3+** | Universal | 150+ formats | Bio-Formats Java (via bioio-bioformats) |
+| **Tier 4** | Universal | 150+ formats | Bio-Formats Java (via bioio-bioformats) |
 
 ---
 
@@ -227,7 +227,7 @@ pixi run python -m tensorswitch_v2 -i input.tif -o output.zarr --preset webknoss
 |----------|-------------|
 | `--view_index` | CZI view index (None = all views as 5D) |
 | `--use_bioio` | Force BIOIO adapter (Tier 3, Python plugins) |
-| `--use_bioformats` | Force Bio-Formats reader (Tier 3+, Java-backed, 150+ formats) |
+| `--use_bioformats` | Force Bio-Formats reader (Tier 4, Java-backed, 150+ formats) |
 | `--dataset_path` | Path within container (e.g., `s0` for N5) |
 
 ### Layout Preservation
@@ -309,7 +309,7 @@ reader = Readers.ims("/path/to/data.ims")       # Tier 2
 reader = Readers.n5("/path/to/data.n5")         # Tier 1
 reader = Readers.zarr3("/path/to/data.zarr")    # Tier 1
 reader = Readers.bioio("/path/to/data.lif")     # Tier 3
-reader = Readers.bioformats("/path/to/data.vsi")  # Tier 3+ (Java)
+reader = Readers.bioformats("/path/to/data.vsi")  # Tier 4 (Java)
 
 # Get TensorStore spec
 spec = reader.get_tensorstore_spec()
@@ -487,6 +487,51 @@ TensorSwitch v2 preserves source data layout by default (RFC-3 compliant):
 | **Zarr v2** | Legacy format | OME-NGFF v0.4, blosc compression |
 | **N5** | Java tools | BigDataViewer compatible |
 
+### OME-NGFF Nested Structure
+
+Zarr3 output uses OME-NGFF spec-compliant nested structure:
+
+```
+output.zarr/
+├── zarr.json                 # Root metadata
+├── raw/                      # Image data (for --data-type image)
+│   ├── zarr.json
+│   └── s0/, s1/...
+└── labels/                   # Labels (for --data-type labels)
+    ├── zarr.json
+    └── segmentation/
+        ├── zarr.json         # Includes image-label colors
+        └── s0/, s1/...
+```
+
+**CLI Options:**
+
+| Argument | Description |
+|----------|-------------|
+| `--data-type {image,labels,auto}` | Data type (default: auto-detect) |
+| `--image PATH` | Explicit image path for combined conversion |
+| `--labels PATH` | Explicit labels path for combined conversion |
+| `--image-only` | Only convert image when folder has both |
+| `--labels-only` | Only convert labels when folder has both |
+| `--image-key NAME` | Name for image group (default: "raw") |
+| `--label-key NAME` | Name for label image (default: "segmentation") |
+| `--no-nested-structure` | Disable nested structure |
+
+**Examples:**
+
+```bash
+# Convert as image (default)
+tensorswitch -i data.tif -o output.zarr
+
+# Convert as labels/segmentation
+tensorswitch -i segmentation.tif -o output.zarr --data-type labels
+
+# Auto-detect from folder (Neuroglancer Precomputed)
+tensorswitch -i /path/to/folder/ -o output.zarr
+```
+
+See [OME_NGFF_STRUCTURE_PLAN.md](docs/OME_NGFF_STRUCTURE_PLAN.md) for full documentation.
+
 ---
 
 ## Multi-Scale Pyramids
@@ -631,30 +676,51 @@ Each semicolon-separated entry is the factor **from previous level to current le
 
 ### Batch Pyramid Generation
 
-Generate pyramids for multiple datasets at once (e.g., after batch conversion):
+Generate pyramids for multiple datasets at once. Supports both regular directories and multi-tile `.zarr` directories (e.g., BigStitcher format).
 
+**Case 1: Directory containing .zarr files**
 ```bash
-# Step 1: Batch convert TIFFs to Zarr3
-pixi run python -m tensorswitch_v2 \
-  -i /path/to/tiff_directory/ \
-  -o /path/to/zarr_output/ \
-  --pattern "*.tif" \
-  --submit -P scicompsoft --max_concurrent 100
+# Directory structure:
+# /path/to/zarr_output/
+# ├── tile001.zarr/
+# ├── tile002.zarr/
+# └── tile003.zarr/
 
-# Step 2: Batch generate pyramids for all zarr files
 pixi run python -m tensorswitch_v2 --auto_multiscale \
   -i /path/to/zarr_output/ \
-  --pattern '*.zarr' \
-  --max_concurrent 50 \
   --submit -P scicompsoft
+```
 
-# Step 2 (alternative): Batch pyramids with custom anisotropic factors
-# Use this when all tiles have the same voxel anisotropy
+**Case 2: Multi-tile .zarr directory (BigStitcher format)**
+```bash
+# Directory structure:
+# dataset.ome.zarr/
+# ├── s0-t0.zarr/
+# ├── s1-t0.zarr/
+# ├── s2-t0.zarr/
+# └── ...
+
+pixi run python -m tensorswitch_v2 --auto_multiscale \
+  -i /path/to/dataset.ome.zarr \
+  --per_level_factors "1,1,1,2,2;1,1,2,2,2;1,1,2,2,2" \
+  --submit -P tavakoli
+```
+
+**With custom anisotropic factors:**
+```bash
+# Apply same factors to all tiles (e.g., skip Z, downsample Y,X)
 pixi run python -m tensorswitch_v2 --auto_multiscale \
   -i /path/to/zarr_output/ \
-  --pattern '*.zarr' \
   --per_level_factors "1,2,2;1,2,2;1,2,2;1,2,2" \
   --max_concurrent 50 \
+  --submit -P scicompsoft
+```
+
+**Paths with spaces are supported:**
+```bash
+# Paths containing spaces work correctly (use quotes)
+pixi run python -m tensorswitch_v2 --auto_multiscale \
+  -i "/path/to/my data/dataset.ome.zarr" \
   --submit -P scicompsoft
 ```
 
@@ -910,7 +976,7 @@ tensorswitch_v2/
 │   ├── hdf5.py              # HDF5Reader (Tier 2)
 │   ├── czi.py               # CZIReader (Tier 2)
 │   ├── bioio_adapter.py     # BIOIOReader (Tier 3)
-│   └── bioformats.py        # BioFormatsReader (Tier 3+, Java)
+│   └── bioformats.py        # BioFormatsReader (Tier 4, Java)
 └── writers/
     ├── __init__.py          # Writer exports
     ├── base.py              # BaseWriter abstract class

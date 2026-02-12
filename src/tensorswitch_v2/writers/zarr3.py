@@ -56,7 +56,11 @@ class Zarr3Writer(BaseWriter):
         compression_level: int = 5,
         use_ome_structure: bool = True,
         level_path: str = "s0",
-        include_omero: bool = False
+        include_omero: bool = False,
+        use_nested_structure: bool = True,
+        data_type: str = "image",
+        image_key: str = "raw",
+        label_key: str = "segmentation"
     ):
         """
         Initialize Zarr3 writer.
@@ -69,6 +73,10 @@ class Zarr3Writer(BaseWriter):
             use_ome_structure: Use OME-ZARR directory structure (s0/, s1/, etc.)
             level_path: Level subdirectory name (default "s0")
             include_omero: Extract and include structured omero channel metadata
+            use_nested_structure: Use OME-NGFF nested structure (raw/, labels/)
+            data_type: 'image' or 'labels' - determines output subdirectory
+            image_key: Name for image group (default: "raw")
+            label_key: Name for label image (default: "segmentation")
         """
         super().__init__(output_path)
         self.use_sharding = use_sharding
@@ -85,6 +93,19 @@ class Zarr3Writer(BaseWriter):
         self._expanded_axes = None
         # Axis reordering (for precomputed XYZC -> CXYZ)
         self._transpose_order = None
+        # OME-NGFF nested structure
+        self.use_nested_structure = use_nested_structure
+        self.data_type = data_type
+        self.image_key = image_key
+        self.label_key = label_key
+        self._ome_structure = None
+        if use_nested_structure:
+            from ..utils.ome_structure import OMEStructure, OMEStructureConfig
+            config = OMEStructureConfig(
+                image_key=image_key,
+                label_name=label_key
+            )
+            self._ome_structure = OMEStructure(output_path, config)
 
     def supports_sharding(self) -> bool:
         """Zarr3 supports sharding via sharding_indexed codec."""
@@ -168,9 +189,19 @@ class Zarr3Writer(BaseWriter):
             custom_chunk_shape = reordered_chunk
             custom_shard_shape = reordered_shard
 
+        # Determine the actual data path based on nested structure settings
+        if self.use_nested_structure and self._ome_structure:
+            if self.data_type == 'labels':
+                data_path = self._ome_structure.get_label_data_path()
+            else:
+                data_path = self._ome_structure.get_image_data_path()
+            print(f"Zarr3 nested structure: data_type={self.data_type}, path={data_path}")
+        else:
+            data_path = self.output_path
+
         # Create spec using existing utility function with 5D shape/axes
         spec = zarr3_store_spec(
-            path=self.output_path,
+            path=data_path,
             shape=shape_list,
             dtype=dtype,
             use_shard=self.use_sharding,
@@ -187,6 +218,7 @@ class Zarr3Writer(BaseWriter):
         spec['context'] = get_tensorstore_context()
 
         self._spec = spec
+        self._data_path = data_path  # Store for metadata writing
         return spec
 
     def _expand_to_5d(
@@ -630,21 +662,120 @@ class Zarr3Writer(BaseWriter):
 
         # Always use 5D axes
         axes_order = self._expanded_axes or ['t', 'c', 'z', 'y', 'x']
-        print(f"Zarr3 metadata: using 5D expanded axes: {axes_order}")
+        print(f"Zarr3 metadata: using axes: {axes_order}")
 
-        # Always rebuild metadata for 5D format
-        full_metadata = create_zarr3_ome_metadata(
-            ome_xml=ome_xml,
-            array_shape=array_shape,
-            image_name=image_name,
-            pixel_sizes=voxel_sizes,
-            axes_order=axes_order,
-            include_omero=self.include_omero,
-            is_label=is_label
-        )
+        # Handle nested structure metadata
+        if self.use_nested_structure and self._ome_structure:
+            self._write_nested_metadata(
+                array_shape=array_shape,
+                axes_order=axes_order,
+                voxel_sizes=voxel_sizes,
+                image_name=image_name,
+                ome_xml=ome_xml,
+                is_label=is_label
+            )
+        else:
+            # Legacy: write single metadata file at root
+            full_metadata = create_zarr3_ome_metadata(
+                ome_xml=ome_xml,
+                array_shape=array_shape,
+                image_name=image_name,
+                pixel_sizes=voxel_sizes,
+                axes_order=axes_order,
+                include_omero=self.include_omero,
+                is_label=is_label
+            )
+            write_zarr3_group_metadata(self.output_path, full_metadata)
 
-        # Write to zarr.json at root
-        write_zarr3_group_metadata(self.output_path, full_metadata)
+    def _write_nested_metadata(
+        self,
+        array_shape: Tuple[int, ...],
+        axes_order: List[str],
+        voxel_sizes: Optional[Dict[str, float]],
+        image_name: str,
+        ome_xml: Optional[str],
+        is_label: bool
+    ) -> None:
+        """
+        Write metadata for OME-NGFF nested structure.
+
+        Creates metadata at all required levels:
+        - Data group (raw/zarr.json or labels/segmentation/zarr.json)
+        - Labels container (labels/zarr.json) if writing labels
+        - Root (zarr.json)
+        """
+        from ..utils.metadata_utils import generate_default_label_colors
+
+        # Build axes list for metadata
+        axes = []
+        for axis_name in axes_order:
+            axis_lower = axis_name.lower()
+            if axis_lower in ['x', 'y', 'z']:
+                axes.append({'name': axis_lower, 'type': 'space', 'unit': 'nanometer'})
+            elif axis_lower in ['c', 'channel']:
+                axes.append({'name': 'c', 'type': 'channel'})
+            elif axis_lower in ['t', 'v']:
+                axes.append({'name': 't', 'type': 'time', 'unit': 'millisecond'})
+            else:
+                axes.append({'name': axis_lower, 'type': 'space'})
+
+        # Build scale factors from voxel sizes
+        scale_factors = []
+        for axis_name in axes_order:
+            axis_lower = axis_name.lower()
+            if voxel_sizes and axis_lower in voxel_sizes:
+                scale_factors.append(voxel_sizes[axis_lower])
+            elif voxel_sizes and axis_lower in ['c', 'channel', 't', 'v']:
+                scale_factors.append(1.0)
+            else:
+                scale_factors.append(1.0)
+
+        # Build datasets list (just s0 for now, downsampling adds more)
+        datasets = [{
+            'path': self.level_path,
+            'coordinateTransformations': [{'type': 'scale', 'scale': scale_factors}]
+        }]
+
+        multiscales = {'axes': axes, 'datasets': datasets}
+
+        if self.data_type == 'labels' or is_label:
+            # Writing labels
+            label_colors = generate_default_label_colors(256)
+
+            # Write label image metadata (includes image-label)
+            self._ome_structure.write_label_image_metadata(
+                multiscales=multiscales,
+                name=image_name,
+                colors=label_colors,
+                source_image_path=f"../../{self.image_key}"  # Reference to image
+            )
+
+            # Write labels container metadata
+            self._ome_structure.write_labels_container_metadata()
+
+            # Write root metadata (labels only, no image multiscales)
+            self._ome_structure.write_root_metadata(
+                image_multiscales=None,
+                has_labels=True,
+                image_name=image_name
+            )
+
+            print(f"Wrote nested labels metadata to {self.output_path}")
+        else:
+            # Writing image
+            self._ome_structure.write_image_metadata(
+                multiscales=multiscales,
+                name=image_name
+            )
+
+            # Write root metadata (image only)
+            self._ome_structure.write_root_metadata(
+                image_multiscales=multiscales,
+                has_labels=False,
+                image_name=image_name
+            )
+
+            print(f"Wrote nested image metadata to {self.output_path}")
 
     def get_chunk_shape(self) -> Optional[Tuple[int, ...]]:
         """Get the write chunk shape from the opened store."""

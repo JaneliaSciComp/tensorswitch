@@ -292,6 +292,48 @@ Supported output formats:
              "Auto-detected for uint64/uint32 data types, use this flag to force for other types.",
     )
 
+    # OME-NGFF nested structure options
+    parser.add_argument(
+        "--data-type", choices=["image", "labels", "auto"],
+        default="auto",
+        help="Data type for output structure. 'auto' detects based on dtype/encoding. "
+             "'image' writes to raw/ subdirectory, 'labels' writes to labels/segmentation/.",
+    )
+    parser.add_argument(
+        "--use-nested-structure", action="store_true", default=True,
+        dest="use_nested_structure",
+        help="Use OME-NGFF nested structure (raw/, labels/). Default: True for zarr3.",
+    )
+    parser.add_argument(
+        "--no-nested-structure", action="store_false",
+        dest="use_nested_structure",
+        help="Disable nested structure (write directly to output path).",
+    )
+    parser.add_argument(
+        "--image", type=str, default=None,
+        help="Explicit path to image data for combined conversion.",
+    )
+    parser.add_argument(
+        "--labels", type=str, default=None,
+        help="Explicit path to labels/segmentation data for combined conversion.",
+    )
+    parser.add_argument(
+        "--image-only", action="store_true",
+        help="Only convert image data (skip labels) when both are found in source folder.",
+    )
+    parser.add_argument(
+        "--labels-only", action="store_true",
+        help="Only convert labels data (skip image) when both are found in source folder.",
+    )
+    parser.add_argument(
+        "--image-key", type=str, default="raw",
+        help="Name for image group in output (default: 'raw').",
+    )
+    parser.add_argument(
+        "--label-key", type=str, default="segmentation",
+        help="Name for label image in output (default: 'segmentation').",
+    )
+
     # Manual bsub chunk-range mode
     parser.add_argument(
         "--start_idx", type=int, default=None,
@@ -391,7 +433,7 @@ Supported output formats:
     )
     parser.add_argument(
         "--use_bioformats", action="store_true",
-        help="Force Bio-Formats reader (Tier 3+, Java-backed) for 150+ formats. "
+        help="Force Bio-Formats reader (Tier 4, Java-backed) for 150+ formats. "
              "Requires: conda install -c conda-forge scyjava && pip install bioio-bioformats",
     )
 
@@ -611,7 +653,7 @@ def create_reader(args):
     path = args.input
     path_lower = path.lower()
 
-    # Force Bio-Formats reader if requested (Tier 3+, Java-backed)
+    # Force Bio-Formats reader if requested (Tier 4, Java-backed)
     if getattr(args, 'use_bioformats', False):
         return Readers.bioformats(path)
 
@@ -635,8 +677,13 @@ def create_reader(args):
     return Readers.auto_detect(path)
 
 
-def create_writer(args):
-    """Create a writer from CLI arguments."""
+def create_writer(args, data_type: str = 'image'):
+    """Create a writer from CLI arguments.
+
+    Args:
+        args: Parsed command-line arguments
+        data_type: 'image' or 'labels' - determines output path structure
+    """
     from .api.writers import Writers
 
     fmt = args.output_format
@@ -646,6 +693,11 @@ def create_writer(args):
     if level_path == "s0" and fmt == "zarr2":
         level_path = "0"  # Default to numeric paths for OME-NGFF viewer compatibility
 
+    # Determine if we should use nested structure
+    use_nested = getattr(args, 'use_nested_structure', True) and fmt == "zarr3"
+    image_key = getattr(args, 'image_key', 'raw')
+    label_key = getattr(args, 'label_key', 'segmentation')
+
     if fmt == "zarr3":
         return Writers.zarr3(
             output_path=args.output,
@@ -654,6 +706,10 @@ def create_writer(args):
             compression_level=args.compression_level,
             level_path=level_path,
             include_omero=getattr(args, 'omero', False),
+            use_nested_structure=use_nested,
+            data_type=data_type,
+            image_key=image_key,
+            label_key=label_key,
         )
     elif fmt == "zarr2":
         return Writers.zarr2(
@@ -1279,12 +1335,15 @@ def main(argv=None):
 
         # Check if this is batch pyramid mode (auto_multiscale + directory of zarrs)
         # In this mode, -o is not required because pyramids are written into each zarr
+        # This handles both:
+        # - Regular directories containing .zarr files
+        # - BigStitcher multi-tile .zarr directories containing tile .zarr subdirectories
         is_batch_pyramid_mode = False
         if args.auto_multiscale and args.input:
             input_path = args.input.rstrip('/')
             # Batch mode: directory containing multiple .zarr subdirectories
-            # NOT batch mode: path ends with .zarr/.n5, or has s0/.zarray inside (single dataset)
-            if os.path.isdir(input_path) and not input_path.endswith('.zarr') and not input_path.endswith('.n5'):
+            # NOT batch mode: has s0/.zarray inside (single multiscale dataset)
+            if os.path.isdir(input_path):
                 has_s0 = os.path.exists(os.path.join(input_path, 's0'))
                 has_zarray = os.path.exists(os.path.join(input_path, '.zarray'))
                 zarr_subdirs = [d for d in os.listdir(input_path) if d.endswith('.zarr') and os.path.isdir(os.path.join(input_path, d))]
@@ -1386,13 +1445,19 @@ def main(argv=None):
             print(f"Using custom per-level factors: {custom_per_level_factors}")
 
         # Detect batch mode: directory containing multiple .zarr subdirectories
-        # NOT batch mode: path ends with .zarr/.n5, or has s0/.zarray inside (single dataset)
+        # Batch mode is triggered when:
+        # 1. Input is a directory containing .zarr subdirectories (e.g., dataset.ome.zarr/s0-t0.zarr, s1-t0.zarr, ...)
+        # 2. AND the input does NOT have s0/.zarray directly (not a single multiscale dataset)
+        # This handles both:
+        # - Regular directories containing .zarr files
+        # - BigStitcher multi-tile .zarr directories containing tile .zarr subdirectories
         input_path = args.input.rstrip('/')
         is_batch_mode = False
-        if os.path.isdir(input_path) and not input_path.endswith('.zarr') and not input_path.endswith('.n5'):
+        if os.path.isdir(input_path):
             has_s0 = os.path.exists(os.path.join(input_path, 's0'))
             has_zarray = os.path.exists(os.path.join(input_path, '.zarray'))
             zarr_subdirs = [d for d in os.listdir(input_path) if d.endswith('.zarr') and os.path.isdir(os.path.join(input_path, d))]
+            # Batch mode if: has .zarr subdirs AND is NOT a single multiscale dataset (no s0/.zarray)
             is_batch_mode = len(zarr_subdirs) > 0 and not has_s0 and not has_zarray
 
         # Batch downsampling mode: process multiple datasets
@@ -1509,10 +1574,10 @@ def main(argv=None):
                 custom_per_level_factors=custom_per_level_factors,
             )
             num_levels = result.get('pyramid_plan', {}).get('num_levels', 0)
-            job_ids = result.get('job_ids', [])
-            if num_levels > 0:
-                print(f"\nSubmitted {len(job_ids)} jobs for {num_levels} levels")
-                print("Jobs will run in parallel - all levels downsample directly from s0.")
+            coordinator_job_id = result.get('coordinator_job_id')
+            if num_levels > 0 and coordinator_job_id:
+                print(f"\nCoordinator will submit {num_levels} level jobs sequentially (chained mode).")
+                print("Each level reads from the previous level: s1←s0, s2←s1, etc.")
                 print("After all jobs complete, root metadata will be updated automatically.")
             else:
                 print("\nNo pyramid levels needed - dataset is already at minimum size.")
