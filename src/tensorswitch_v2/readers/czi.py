@@ -125,7 +125,10 @@ class CZIReader(BaseReader):
         Return voxel dimensions from CZI metadata.
 
         Returns:
-            dict: Voxel dimensions with keys 'x', 'y', 'z' in micrometers
+            dict: Voxel dimensions with keys 'x', 'y', 'z' in nanometers
+
+        Notes:
+            - Values are converted to nanometers from source units (meters in CZI)
         """
         metadata = self.get_metadata()
         return {

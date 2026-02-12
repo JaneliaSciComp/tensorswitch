@@ -44,16 +44,24 @@ def convert_to_nanometers(value: float, unit: str) -> float:
     # Nanometers - no conversion
     if unit_lower in ['nm', 'nanometer', 'nanometers', 'nanometre', 'nanometres']:
         return float(value)
+    # Also check for enum-style format (e.g., 'unitslength.nanometer')
+    if 'nanometer' in unit_lower or 'nanometre' in unit_lower:
+        return float(value)
 
     # Micrometers - multiply by 1000
     if unit_lower in ['um', 'µm', 'micrometer', 'micrometers', 'micrometre', 'micrometres', 'micron', 'microns']:
+        return float(value) * 1000.0
+    # Also check for enum-style format (e.g., 'unitslength.micrometer')
+    if 'micrometer' in unit_lower or 'micrometre' in unit_lower or 'micron' in unit_lower:
         return float(value) * 1000.0
 
     # Millimeters - multiply by 1,000,000
     if unit_lower in ['mm', 'millimeter', 'millimeters', 'millimetre', 'millimetres']:
         return float(value) * 1_000_000.0
+    if 'millimeter' in unit_lower or 'millimetre' in unit_lower:
+        return float(value) * 1_000_000.0
 
-    # Meters - multiply by 1,000,000,000
+    # Meters - multiply by 1,000,000,000 (but not if already matched above)
     if unit_lower in ['m', 'meter', 'meters', 'metre', 'metres']:
         return float(value) * 1_000_000_000.0
 

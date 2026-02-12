@@ -172,7 +172,7 @@ class TiffReader(BaseReader):
         Extracts voxel sizes from OME-XML or ImageJ metadata if available.
 
         Returns:
-            dict: Voxel dimensions with keys 'x', 'y', 'z' in micrometers
+            dict: Voxel dimensions with keys 'x', 'y', 'z' in nanometers
 
         Example:
             >>> reader = TiffReader("/data.tif")
@@ -181,6 +181,7 @@ class TiffReader(BaseReader):
         Notes:
             - Returns 1.0 for each dimension if metadata unavailable
             - Checks OME-XML first, then ImageJ metadata
+            - Values are converted to nanometers from source units
         """
         metadata = self.get_metadata()
 

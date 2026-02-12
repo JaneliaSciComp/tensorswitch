@@ -203,7 +203,7 @@ class IMSReader(BaseReader):
         Extracts voxel sizes from IMS HDF5 attributes.
 
         Returns:
-            dict: Voxel dimensions with keys 'x', 'y', 'z' in micrometers
+            dict: Voxel dimensions with keys 'x', 'y', 'z' in nanometers
 
         Example:
             >>> reader = IMSReader("/data.ims")
@@ -212,6 +212,7 @@ class IMSReader(BaseReader):
         Notes:
             - Returns 1.0 for each dimension if metadata unavailable
             - IMS files typically store voxel sizes in ImageInfo attributes
+            - Values are converted to nanometers from source units
         """
         metadata = self.get_metadata()
 

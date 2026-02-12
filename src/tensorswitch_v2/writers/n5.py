@@ -258,7 +258,7 @@ class N5Writer(BaseWriter):
 
         Args:
             ome_metadata: Pre-built metadata dict
-            voxel_sizes: Voxel dimensions dict {"x": um, "y": um, "z": um}
+            voxel_sizes: Voxel dimensions dict {"x": nm, "y": nm, "z": nm} in nanometers
             image_name: Image name for metadata
             array_shape: Array shape
             axes_order: Axis names (e.g., ["z", "y", "x"])
@@ -298,6 +298,7 @@ class N5Writer(BaseWriter):
         # Add pixel resolution if available
         if voxel_sizes:
             # N5 uses pixelResolution in XYZ order (reversed from ZYX)
+            # Voxel sizes are in nanometers (internal standard)
             resolution = [
                 voxel_sizes.get('x', 1.0),
                 voxel_sizes.get('y', 1.0),
@@ -305,7 +306,7 @@ class N5Writer(BaseWriter):
             ]
             attrs["pixelResolution"] = {
                 "dimensions": resolution,
-                "unit": "um"
+                "unit": "nm"
             }
 
         # Add axes information if available

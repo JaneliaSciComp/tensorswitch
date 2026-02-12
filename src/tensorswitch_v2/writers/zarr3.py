@@ -607,7 +607,7 @@ class Zarr3Writer(BaseWriter):
 
         Args:
             ome_metadata: Pre-built OME metadata dict (ignored - always rebuilt for 5D)
-            voxel_sizes: Voxel dimensions dict {"x": um, "y": um, "z": um}
+            voxel_sizes: Voxel dimensions dict {"x": nm, "y": nm, "z": nm} in nanometers
             image_name: Image name for metadata
             array_shape: Array shape (ignored - uses 5D expanded shape)
             axes_order: Axis names (ignored - always uses 5D TCZYX)

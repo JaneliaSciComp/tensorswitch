@@ -342,26 +342,27 @@ class BIOIOReader(BaseReader):
         BIOIO provides standardized access to voxel sizes across all formats.
 
         Returns:
-            dict: Voxel dimensions with keys 'x', 'y', 'z' in micrometers
+            dict: Voxel dimensions with keys 'x', 'y', 'z' in nanometers
 
         Example:
             >>> reader = BIOIOReader("/data.czi")
             >>> voxel_sizes = reader.get_voxel_sizes()
             >>> print(voxel_sizes)
-            {'x': 0.116, 'y': 0.116, 'z': 0.5}
+            {'x': 116.0, 'y': 116.0, 'z': 500.0}  # nanometers
 
         Notes:
             - Returns 1.0 for dimensions where size is not available
-            - BIOIO returns sizes in micrometers
+            - BIOIO returns sizes in micrometers, converted to nanometers here
         """
         self._load_bioimage()
 
         try:
             pps = self._bioimage.physical_pixel_sizes
+            # BIOIO returns micrometers, convert to nanometers (×1000)
             return {
-                'x': pps.X if pps.X else 1.0,
-                'y': pps.Y if pps.Y else 1.0,
-                'z': pps.Z if pps.Z else 1.0,
+                'x': pps.X * 1000.0 if pps.X else 1.0,
+                'y': pps.Y * 1000.0 if pps.Y else 1.0,
+                'z': pps.Z * 1000.0 if pps.Z else 1.0,
             }
         except Exception:
             return {'x': 1.0, 'y': 1.0, 'z': 1.0}

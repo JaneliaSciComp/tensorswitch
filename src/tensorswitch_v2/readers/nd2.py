@@ -155,7 +155,7 @@ class ND2Reader(BaseReader):
         Extracts voxel sizes from OME metadata via nd2 library.
 
         Returns:
-            dict: Voxel dimensions with keys 'x', 'y', 'z' in micrometers
+            dict: Voxel dimensions with keys 'x', 'y', 'z' in nanometers
 
         Example:
             >>> reader = ND2Reader("/data.nd2")
@@ -164,6 +164,7 @@ class ND2Reader(BaseReader):
         Notes:
             - Returns 1.0 for each dimension if metadata unavailable
             - ND2 files typically have good voxel size metadata
+            - Values are converted to nanometers from source units
         """
         metadata = self.get_metadata()
 

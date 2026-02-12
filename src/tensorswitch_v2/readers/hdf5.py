@@ -250,6 +250,16 @@ class HDF5Reader(BaseReader):
 
         metadata['attributes'] = attrs
 
+        # Try to detect unit from common attribute names
+        unit_names = ['unit', 'units', 'voxel_unit', 'pixel_unit', 'resolution_unit',
+                      'spatial_unit', 'voxel_units', 'pixel_units']
+        detected_unit = 'micrometer'  # Default for microscopy data
+        for unit_name in unit_names:
+            if unit_name in attrs:
+                detected_unit = str(attrs[unit_name])
+                break
+        metadata['voxel_unit'] = detected_unit
+
         # Try to extract voxel sizes from common attribute names
         voxel_size_names = {
             'x': ['voxel_size_x', 'pixel_size_x', 'resolution_x', 'dx', 'scale_x'],
@@ -273,7 +283,7 @@ class HDF5Reader(BaseReader):
         Return voxel dimensions from HDF5 attributes.
 
         Returns:
-            dict: Voxel dimensions with keys 'x', 'y', 'z' in micrometers
+            dict: Voxel dimensions with keys 'x', 'y', 'z' in nanometers
 
         Example:
             >>> reader = HDF5Reader("/data.h5", dataset_path="/volume")
@@ -282,13 +292,17 @@ class HDF5Reader(BaseReader):
         Notes:
             - Returns 1.0 for each dimension if not found in attributes
             - Searches common attribute names for voxel/pixel size info
+            - Auto-detects unit from attributes and converts to nanometers
         """
+        from ..utils.format_loaders import convert_to_nanometers
+
         metadata = self.get_metadata()
+        unit = metadata.get('voxel_unit', 'micrometer')
 
         return {
-            'x': metadata.get('voxel_size_x', 1.0),
-            'y': metadata.get('voxel_size_y', 1.0),
-            'z': metadata.get('voxel_size_z', 1.0)
+            'x': convert_to_nanometers(metadata.get('voxel_size_x', 1.0), unit),
+            'y': convert_to_nanometers(metadata.get('voxel_size_y', 1.0), unit),
+            'z': convert_to_nanometers(metadata.get('voxel_size_z', 1.0), unit)
         }
 
     def _infer_dimension_names(self, shape):

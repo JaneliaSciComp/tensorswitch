@@ -193,14 +193,17 @@ class Zarr3Reader(BaseReader):
         Return voxel dimensions from OME-NGFF coordinateTransformations.
 
         Extracts voxel sizes from the multiscales metadata if available.
+        Converts to nanometers based on the unit specified in axes metadata.
 
         Returns:
-            dict: Voxel dimensions with keys 'x', 'y', 'z' in micrometers
+            dict: Voxel dimensions with keys 'x', 'y', 'z' in nanometers
 
         Example:
             >>> reader = Zarr3Reader("/data.zarr")
             >>> voxel_sizes = reader.get_voxel_sizes()
         """
+        from ..utils.format_loaders import convert_to_nanometers
+
         metadata = self.get_metadata()
 
         # Try to get from OME-NGFF multiscales
@@ -208,6 +211,12 @@ class Zarr3Reader(BaseReader):
         if multiscales:
             datasets = multiscales[0].get('datasets', [])
             axes = multiscales[0].get('axes', [])
+
+            # Build axis name to unit mapping
+            axis_units = {}
+            for axis in axes:
+                axis_name = axis.get('name', '').lower()
+                axis_units[axis_name] = axis.get('unit', 'micrometer')
 
             # Find the dataset matching our path
             for ds in datasets:
@@ -217,12 +226,13 @@ class Zarr3Reader(BaseReader):
                     for t in transforms:
                         if t.get('type') == 'scale':
                             scales = t.get('scale', [])
-                            # Map scales to axes
+                            # Map scales to axes and convert to nanometers
                             voxel_sizes = {'x': 1.0, 'y': 1.0, 'z': 1.0}
                             for i, axis in enumerate(axes):
                                 axis_name = axis.get('name', '').lower()
                                 if i < len(scales) and axis_name in voxel_sizes:
-                                    voxel_sizes[axis_name] = scales[i]
+                                    unit = axis_units.get(axis_name, 'micrometer')
+                                    voxel_sizes[axis_name] = convert_to_nanometers(scales[i], unit)
                             return voxel_sizes
 
         # Default
@@ -385,9 +395,13 @@ class Zarr2Reader(BaseReader):
         """
         Return voxel dimensions from OME-NGFF coordinateTransformations.
 
+        Converts to nanometers based on the unit specified in axes metadata.
+
         Returns:
-            dict: Voxel dimensions with keys 'x', 'y', 'z' in micrometers
+            dict: Voxel dimensions with keys 'x', 'y', 'z' in nanometers
         """
+        from ..utils.format_loaders import convert_to_nanometers
+
         metadata = self.get_metadata()
 
         # Try to get from OME-NGFF multiscales
@@ -395,6 +409,12 @@ class Zarr2Reader(BaseReader):
         if multiscales:
             datasets = multiscales[0].get('datasets', [])
             axes = multiscales[0].get('axes', [])
+
+            # Build axis name to unit mapping
+            axis_units = {}
+            for axis in axes:
+                axis_name = axis.get('name', '').lower()
+                axis_units[axis_name] = axis.get('unit', 'micrometer')
 
             for ds in datasets:
                 ds_path = ds.get('path', '')
@@ -407,7 +427,8 @@ class Zarr2Reader(BaseReader):
                             for i, axis in enumerate(axes):
                                 axis_name = axis.get('name', '').lower()
                                 if i < len(scales) and axis_name in voxel_sizes:
-                                    voxel_sizes[axis_name] = scales[i]
+                                    unit = axis_units.get(axis_name, 'micrometer')
+                                    voxel_sizes[axis_name] = convert_to_nanometers(scales[i], unit)
                             return voxel_sizes
 
         return {'x': 1.0, 'y': 1.0, 'z': 1.0}
