@@ -258,14 +258,14 @@ Use `--expand-to-5d` for compatibility with tools requiring strict 5D TCZYX form
 
 | Argument | Description |
 |----------|-------------|
-| `--voxel_size` | Override voxel size in micrometers, comma-separated X,Y,Z (e.g., `0.16,0.16,0.4`) |
+| `--voxel_size` | Override voxel size in nanometers, comma-separated X,Y,Z (e.g., `160,160,400`) |
 
 **Use case**: When source files lack embedded voxel size metadata (e.g., raw TIFF stacks, BigStitcher output).
 
 ```bash
-# Example: Set voxel size for a TIFF without embedded metadata
+# Example: Set voxel size for a TIFF without embedded metadata (160nm x 160nm x 400nm)
 pixi run python -m tensorswitch_v2 -i input.tif -o output.zarr \
-  --voxel_size 0.16,0.16,0.4
+  --voxel_size 160,160,400
 ```
 
 ---
@@ -290,7 +290,7 @@ ts_array = dataset.get_tensorstore_array(mode='open')
 
 # Get OME-NGFF metadata
 metadata = dataset.get_ome_ngff_metadata()
-voxel_sizes = dataset.get_voxel_sizes()  # [z, y, x] in micrometers
+voxel_sizes = dataset.get_voxel_sizes()  # {'x': nm, 'y': nm, 'z': nm} in nanometers
 ```
 
 ### Readers Factory

@@ -122,7 +122,7 @@ class DistributedConverter:
             delete_existing: Override store deletion behavior. None (default)
                 preserves existing logic (delete when start_idx==0). Set to
                 False for manual bsub jobs where the store is pre-created.
-            voxel_size_override: Override voxel sizes {'x': um, 'y': um, 'z': um}.
+            voxel_size_override: Override voxel sizes {'x': nm, 'y': nm, 'z': nm} in nanometers.
                 Use when source file lacks embedded voxel size metadata.
             is_label: If True, write OME-NGFF image-label metadata for segmentation data.
 
