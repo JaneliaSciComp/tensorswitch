@@ -2,10 +2,19 @@
 Batch processing module for tensorswitch_v2.
 
 Handles batch conversion of multiple files with LSF job array support.
+Supports both traditional file-based batch processing and folder-based
+dataset discovery (for directories containing image and segmentation datasets).
 
 Usage:
-    # Batch convert directory (LSF)
-    python -m tensorswitch_v2 -i /path/to/dir/ -o /path/to/output/ --submit -P project
+    # Batch convert directory of files (LSF)
+    python -m tensorswitch_v2 -i /path/to/tiffs/ -o /path/to/output/ --submit -P project
+
+    # Convert folder with auto-detected image and segmentation
+    python -m tensorswitch_v2 -i /path/to/folder/ -o output.zarr
+
+    # Convert only image or labels from discovered folder
+    python -m tensorswitch_v2 -i /path/to/folder/ -o output.zarr --image-only
+    python -m tensorswitch_v2 -i /path/to/folder/ -o output.zarr --labels-only
 
     # Check status
     python -m tensorswitch_v2 -i /path/to/dir/ -o /path/to/output/ --status
@@ -15,6 +24,7 @@ import os
 import sys
 import glob
 import json
+import shlex
 import subprocess
 from dataclasses import dataclass, field
 from typing import List, Tuple, Optional, Dict
@@ -45,15 +55,18 @@ OUTPUT_EXTENSIONS = {
 
 def detect_input_mode(input_path: str) -> str:
     """
-    Determine if input is single file or batch directory.
+    Determine if input is single file, batch directory, or discovered folder.
 
     Args:
         input_path: Input path from CLI
 
     Returns:
-        'single_file' or 'batch_directory'
+        'single_file': Single file or single dataset (e.g., one Precomputed dir)
+        'batch_directory': Directory with multiple files to batch process
+        'discovered_folder': Directory with discoverable datasets (image/segmentation)
     """
     from ..readers.base import is_local_precomputed
+    from ..utils.folder_discovery import discover_datasets, is_neuroglancer_precomputed
 
     # Check if path ends with known format extension
     ext = os.path.splitext(input_path)[1].lower()
@@ -64,6 +77,11 @@ def detect_input_mode(input_path: str) -> str:
         # Local precomputed directory (has info file) - treat as single file
         return 'single_file'
     elif os.path.isdir(input_path) or input_path.endswith('/'):
+        # Check if directory contains discoverable datasets (e.g., image + segmentation)
+        # This takes priority over batch_directory mode
+        result = discover_datasets(input_path, verbose=False)
+        if result.has_image or result.has_segmentation:
+            return 'discovered_folder'
         return 'batch_directory'
     else:
         # Could be a path that doesn't exist yet or ambiguous
@@ -393,8 +411,8 @@ class BatchConverter:
         job_name = f"tsv2_batch_{os.path.basename(self.output_dir.rstrip('/'))}"
         job_name = job_name.replace(" ", "_")[:64]
 
-        # Build worker command
-        worker_cmd = [
+        # Build worker command list
+        worker_cmd_list = [
             sys.executable, "-m", "tensorswitch_v2",
             "--batch_worker",
             "--index_file", index_file,
@@ -403,11 +421,16 @@ class BatchConverter:
             "--compression_level", str(compression_level),
         ]
         if chunk_shape:
-            worker_cmd += ["--chunk_shape", chunk_shape]
+            worker_cmd_list += ["--chunk_shape", chunk_shape]
         if shard_shape:
-            worker_cmd += ["--shard_shape", shard_shape]
+            worker_cmd_list += ["--shard_shape", shard_shape]
 
-        # Build bsub command
+        # Convert to properly quoted shell command string
+        # This handles paths with spaces correctly when bsub creates its wrapper
+        worker_cmd_str = shlex.join(worker_cmd_list)
+
+        # Build bsub command - use bash -c to run the quoted command
+        # This ensures paths with spaces are handled correctly
         bsub_cmd = [
             "bsub",
             "-J", f"{job_name}{array_spec}",
@@ -423,7 +446,8 @@ class BatchConverter:
         if job_group:
             bsub_cmd += ["-g", job_group]
 
-        bsub_cmd += worker_cmd
+        # Use bash -c with quoted command to handle paths with spaces
+        bsub_cmd += ["/bin/bash", "-c", worker_cmd_str]
 
         # Print summary
         print("=" * 72)
@@ -442,7 +466,7 @@ class BatchConverter:
         print(f"  Index file:    {index_file}")
         print(f"  Log dir:       {log_dir}")
         print("-" * 72)
-        print(f"  Worker cmd:    {' '.join(worker_cmd)}")
+        print(f"  Worker cmd:    {worker_cmd_str}")
         print("=" * 72)
 
         if dry_run:
@@ -685,3 +709,379 @@ def read_index_file(index_file: str, job_index: int) -> Tuple[str, str]:
                     return parts[1], parts[2]
 
     raise ValueError(f"Job index {job_index} not found in {index_file}")
+
+
+@dataclass
+class DiscoveredConversionResult:
+    """Result of discovered folder conversion."""
+    image_converted: bool = False
+    segmentation_converted: bool = False
+    output_path: str = ""
+    error: Optional[str] = None
+
+
+def convert_discovered_folder(
+    input_dir: str,
+    output_path: str,
+    image_only: bool = False,
+    labels_only: bool = False,
+    image_key: str = "raw",
+    label_key: str = "segmentation",
+    use_nested_structure: bool = True,
+    output_format: str = "zarr3",
+    chunk_shape: Optional[Tuple[int, ...]] = None,
+    shard_shape: Optional[Tuple[int, ...]] = None,
+    compression: str = "zstd",
+    compression_level: int = 5,
+    verbose: bool = True,
+) -> DiscoveredConversionResult:
+    """
+    Convert a discovered folder containing image and/or segmentation datasets.
+
+    Uses folder_discovery to find datasets, validates them, and converts
+    to a single zarr output with OME-NGFF nested structure.
+
+    Args:
+        input_dir: Directory containing datasets to discover
+        output_path: Output zarr path
+        image_only: Only convert image dataset (skip segmentation)
+        labels_only: Only convert segmentation dataset (skip image)
+        image_key: Name for image group in output (default: 'raw')
+        label_key: Name for label image in output (default: 'segmentation')
+        use_nested_structure: Use OME-NGFF nested structure (default: True)
+        output_format: Output format (zarr3, zarr2, n5)
+        chunk_shape: Optional chunk shape
+        shard_shape: Optional shard shape
+        compression: Compression codec
+        compression_level: Compression level
+        verbose: Print progress
+
+    Returns:
+        DiscoveredConversionResult with conversion status
+
+    Example:
+        >>> result = convert_discovered_folder(
+        ...     '/data/230130b/',
+        ...     '/output/230130b.zarr',
+        ...     image_only=False,
+        ...     labels_only=False,
+        ... )
+        >>> if result.error:
+        ...     print(f"Error: {result.error}")
+    """
+    from ..utils.folder_discovery import (
+        discover_datasets,
+        validate_discovery_for_conversion,
+        print_discovery_summary,
+    )
+    from ..api.readers import Readers
+    from ..api.writers import Writers
+    from .converter import DistributedConverter
+
+    result = DiscoveredConversionResult(output_path=output_path)
+
+    # Discover datasets in the folder
+    if verbose:
+        print(f"\nDiscovering datasets in: {input_dir}")
+
+    discovery = discover_datasets(input_dir, verbose=verbose)
+
+    if verbose:
+        print_discovery_summary(discovery)
+
+    # Validate and get datasets to convert
+    image_ds, seg_ds, error = validate_discovery_for_conversion(
+        discovery,
+        image_only=image_only,
+        labels_only=labels_only,
+    )
+
+    if error:
+        result.error = error
+        return result
+
+    # Check we have something to convert
+    if not image_ds and not seg_ds:
+        result.error = "No datasets found to convert in directory."
+        return result
+
+    # Create output directory
+    os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
+
+    # Convert image dataset if found
+    if image_ds and not labels_only:
+        if verbose:
+            print(f"\n{'='*60}")
+            print(f"Converting IMAGE: {image_ds.name}")
+            print(f"{'='*60}")
+
+        try:
+            reader = Readers.auto_detect(image_ds.path)
+
+            if output_format == "zarr3":
+                writer = Writers.zarr3(
+                    output_path=output_path,
+                    use_sharding=True,
+                    compression=compression,
+                    compression_level=compression_level,
+                    use_nested_structure=use_nested_structure,
+                    data_type='image',
+                    image_key=image_key,
+                    label_key=label_key,
+                )
+            elif output_format == "zarr2":
+                writer = Writers.zarr2(
+                    output_path=output_path,
+                    compression=compression,
+                    compression_level=compression_level,
+                )
+            else:
+                writer = Writers.n5(
+                    output_path=output_path,
+                    compression=compression,
+                    compression_level=compression_level,
+                )
+
+            converter = DistributedConverter(reader, writer)
+            converter.convert(
+                chunk_shape=chunk_shape,
+                shard_shape=shard_shape,
+                write_metadata=True,
+                verbose=verbose,
+            )
+            result.image_converted = True
+
+        except Exception as e:
+            result.error = f"Failed to convert image: {e}"
+            return result
+
+    # Convert segmentation dataset if found
+    if seg_ds and not image_only:
+        if verbose:
+            print(f"\n{'='*60}")
+            print(f"Converting SEGMENTATION: {seg_ds.name}")
+            print(f"{'='*60}")
+
+        try:
+            reader = Readers.auto_detect(seg_ds.path)
+
+            if output_format == "zarr3":
+                writer = Writers.zarr3(
+                    output_path=output_path,
+                    use_sharding=True,
+                    compression=compression,
+                    compression_level=compression_level,
+                    use_nested_structure=use_nested_structure,
+                    data_type='labels',
+                    image_key=image_key,
+                    label_key=label_key,
+                )
+            elif output_format == "zarr2":
+                writer = Writers.zarr2(
+                    output_path=output_path,
+                    compression=compression,
+                    compression_level=compression_level,
+                )
+            else:
+                writer = Writers.n5(
+                    output_path=output_path,
+                    compression=compression,
+                    compression_level=compression_level,
+                )
+
+            converter = DistributedConverter(reader, writer)
+            converter.convert(
+                chunk_shape=chunk_shape,
+                shard_shape=shard_shape,
+                write_metadata=True,
+                verbose=verbose,
+                is_label=True,
+            )
+            result.segmentation_converted = True
+
+        except Exception as e:
+            result.error = f"Failed to convert segmentation: {e}"
+            return result
+
+    # Print summary
+    if verbose:
+        print(f"\n{'='*60}")
+        print("DISCOVERED FOLDER CONVERSION COMPLETE")
+        print(f"{'='*60}")
+        print(f"  Output: {output_path}")
+        if result.image_converted:
+            print(f"  Image:  {image_key}/ ✓")
+        if result.segmentation_converted:
+            print(f"  Labels: labels/{label_key}/ ✓")
+        print(f"{'='*60}")
+
+    return result
+
+
+def submit_discovered_folder_lsf(
+    input_dir: str,
+    output_path: str,
+    project: str,
+    image_only: bool = False,
+    labels_only: bool = False,
+    image_key: str = "raw",
+    label_key: str = "segmentation",
+    use_nested_structure: bool = True,
+    output_format: str = "zarr3",
+    chunk_shape: Optional[str] = None,
+    shard_shape: Optional[str] = None,
+    compression: str = "zstd",
+    compression_level: int = 5,
+    memory_gb: int = 30,
+    wall_time: str = "2:00",
+    cores: int = 4,
+    job_group: str = "/scicompsoft/chend/tensorstore",
+    dry_run: bool = False,
+) -> Dict:
+    """
+    Submit LSF jobs for discovered folder conversion.
+
+    Submits separate jobs for image and segmentation datasets if both are found.
+
+    Args:
+        input_dir: Directory containing datasets to discover
+        output_path: Output zarr path
+        project: LSF project name
+        image_only: Only convert image dataset
+        labels_only: Only convert segmentation dataset
+        image_key: Name for image group
+        label_key: Name for label image
+        use_nested_structure: Use OME-NGFF nested structure
+        output_format: Output format
+        chunk_shape: Chunk shape string
+        shard_shape: Shard shape string
+        compression: Compression codec
+        compression_level: Compression level
+        memory_gb: Memory per job
+        wall_time: Wall time per job
+        cores: Cores per job
+        job_group: LSF job group
+        dry_run: Print commands without submitting
+
+    Returns:
+        Dict with job_ids for submitted jobs
+    """
+    from ..utils.folder_discovery import (
+        discover_datasets,
+        validate_discovery_for_conversion,
+    )
+
+    result = {'job_ids': [], 'error': None}
+
+    # Discover and validate
+    discovery = discover_datasets(input_dir, verbose=True)
+    image_ds, seg_ds, error = validate_discovery_for_conversion(
+        discovery,
+        image_only=image_only,
+        labels_only=labels_only,
+    )
+
+    if error:
+        result['error'] = error
+        print(f"\nError: {error}")
+        return result
+
+    # Create log directory
+    output_parent = os.path.dirname(os.path.abspath(output_path))
+    log_dir = os.path.join(output_parent, "output")
+    os.makedirs(log_dir, exist_ok=True)
+
+    jobs_to_submit = []
+
+    # Prepare image job
+    if image_ds and not labels_only:
+        jobs_to_submit.append({
+            'input_path': image_ds.path,
+            'data_type': 'image',
+            'name': image_ds.name,
+        })
+
+    # Prepare segmentation job
+    if seg_ds and not image_only:
+        jobs_to_submit.append({
+            'input_path': seg_ds.path,
+            'data_type': 'labels',
+            'name': seg_ds.name,
+        })
+
+    # Submit jobs
+    for job_info in jobs_to_submit:
+        job_name = f"tsv2_disc_{job_info['data_type']}_{job_info['name']}"
+        job_name = job_name.replace(" ", "_")[:64]
+
+        log_path = os.path.join(log_dir, f"output__{job_name}_%J.log")
+        error_path = os.path.join(log_dir, f"error__{job_name}_%J.log")
+
+        # Build worker command
+        worker_cmd = [
+            sys.executable, "-m", "tensorswitch_v2",
+            "--input", job_info['input_path'],
+            "--output", output_path,
+            "--output_format", output_format,
+            "--data-type", job_info['data_type'],
+            "--compression", compression,
+            "--compression_level", str(compression_level),
+            "--image-key", image_key,
+            "--label-key", label_key,
+        ]
+        if use_nested_structure:
+            worker_cmd.append("--use-nested-structure")
+        else:
+            worker_cmd.append("--no-nested-structure")
+        if chunk_shape:
+            worker_cmd += ["--chunk_shape", chunk_shape]
+        if shard_shape:
+            worker_cmd += ["--shard_shape", shard_shape]
+        if job_info['data_type'] == 'labels':
+            worker_cmd.append("--is-label")
+
+        # Convert to properly quoted shell command string
+        # This handles paths with spaces correctly when bsub creates its wrapper
+        worker_cmd_str = shlex.join(worker_cmd)
+
+        # Build bsub command - use bash -c to run the quoted command
+        bsub_cmd = [
+            "bsub",
+            "-J", job_name,
+            "-n", str(cores),
+            "-W", wall_time,
+            "-M", f"{memory_gb}GB",
+            "-R", f"rusage[mem={memory_gb * 1024}]",
+            "-P", project,
+            "-g", job_group,
+            "-o", log_path,
+            "-e", error_path,
+            "/bin/bash", "-c", worker_cmd_str,
+        ]
+
+        print(f"\n{'='*60}")
+        print(f"LSF Job: {job_info['data_type'].upper()}")
+        print(f"{'='*60}")
+        print(f"  Job name:  {job_name}")
+        print(f"  Input:     {job_info['input_path']}")
+        print(f"  Output:    {output_path}")
+        print(f"  Data type: {job_info['data_type']}")
+        print(f"  Resources: {cores} cores, {memory_gb} GB, {wall_time}")
+
+        if dry_run:
+            print(f"\n[DRY RUN] Would submit:")
+            print(f"  {worker_cmd_str}")
+            result['job_ids'].append('DRY_RUN')
+        else:
+            submit_result = subprocess.run(bsub_cmd, capture_output=True, text=True)
+            if submit_result.returncode == 0:
+                print(f"\nJob submitted: {submit_result.stdout.strip()}")
+                import re
+                match = re.search(r'Job <(\d+)>', submit_result.stdout)
+                if match:
+                    result['job_ids'].append(match.group(1))
+            else:
+                print(f"\nJob submission failed: {submit_result.stderr}")
+                result['error'] = submit_result.stderr
+
+    return result

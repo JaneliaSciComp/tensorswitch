@@ -26,6 +26,7 @@ Usage:
 import os
 import sys
 import subprocess
+import shlex
 import math
 import argparse
 from typing import Optional, Tuple
@@ -1006,7 +1007,11 @@ def submit_job(args, return_job_id=False):
     if getattr(args, 'expand_to_5d', False):
         reinvoke.append("--expand-to-5d")
 
-    # Build bsub command
+    # Convert to properly quoted shell command string
+    # This handles paths with spaces correctly when bsub creates its wrapper
+    reinvoke_str = shlex.join(reinvoke)
+
+    # Build bsub command - use bash -c to run the quoted command
     command = [
         "bsub",
         "-J", job_name,
@@ -1018,7 +1023,8 @@ def submit_job(args, return_job_id=False):
         "-g", args.job_group,
         "-o", log_path,
         "-e", error_path,
-    ] + reinvoke
+        "/bin/bash", "-c", reinvoke_str,
+    ]
 
     # Print summary and submit
     print("=" * 72)
@@ -1032,7 +1038,7 @@ def submit_job(args, return_job_id=False):
     print(f"  Job group: {args.job_group}")
     print(f"  Log:       {log_path}")
     print(f"  Error:     {error_path}")
-    print(f"  Command:   {' '.join(reinvoke)}")
+    print(f"  Command:   {reinvoke_str}")
     print("=" * 72)
 
     result = subprocess.run(command, capture_output=True, text=True)
@@ -1115,7 +1121,11 @@ def submit_downsample_job(args, cumulative_factors):
     if args.quiet:
         reinvoke.append("--quiet")
 
-    # Build bsub command
+    # Convert to properly quoted shell command string
+    # This handles paths with spaces correctly when bsub creates its wrapper
+    reinvoke_str = shlex.join(reinvoke)
+
+    # Build bsub command - use bash -c to run the quoted command
     command = [
         "bsub",
         "-J", job_name,
@@ -1127,7 +1137,8 @@ def submit_downsample_job(args, cumulative_factors):
         "-g", args.job_group,
         "-o", log_path,
         "-e", error_path,
-    ] + reinvoke
+        "/bin/bash", "-c", reinvoke_str,
+    ]
 
     # Print summary and submit
     print("=" * 72)

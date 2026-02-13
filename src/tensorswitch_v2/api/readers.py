@@ -410,7 +410,7 @@ class Readers:
         )
 
     # ========================================================================
-    # Tier 3+: Bio-Formats (Java-backed, 150+ formats)
+    # Tier 4: Bio-Formats (Java-backed, 150+ formats)
     # ========================================================================
 
     @staticmethod
@@ -422,7 +422,7 @@ class Readers:
         resolution_level: int = 0,
     ) -> BaseReader:
         """
-        Create Bio-Formats reader (Tier 3+ - Maximum Format Compatibility).
+        Create Bio-Formats reader (Tier 4 - Maximum Format Compatibility).
 
         Uses the OME Bio-Formats Java library via bioio-bioformats plugin.
         Supports 150+ file formats including many proprietary vendor formats.

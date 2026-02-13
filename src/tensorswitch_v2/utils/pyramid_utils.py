@@ -287,6 +287,9 @@ def calculate_pyramid_plan(s0_path, min_array_nbytes=None, min_array_shape=None)
                 attrs = json.load(f)
                 if 'multiscales' in attrs and len(attrs['multiscales']) > 0:
                     multiscales = attrs['multiscales'][0]
+                    # Extract axes from OME-NGFF multiscales (if not found in level .zattrs)
+                    if not axes_names and 'axes' in multiscales:
+                        axes_names = [ax.get('name', f'dim_{i}') for i, ax in enumerate(multiscales['axes'])]
                     if 'datasets' in multiscales and len(multiscales['datasets']) > 0:
                         s0_dataset = multiscales['datasets'][0]
                         if 'coordinateTransformations' in s0_dataset:

@@ -13,7 +13,8 @@ Architecture Overview:
 Hybrid Reader Strategy:
     Tier 1 (Native TensorStore): N5, Zarr2/3, Precomputed - Maximum performance
     Tier 2 (Custom Optimized): TIFF, ND2, IMS, HDF5, CZI - Production ready
-    Tier 3 (BIOIO Adapter): LIF, + 20 more - Broad compatibility
+    Tier 3 (BIOIO Adapter): LIF, + 20 more - Broad compatibility (Python plugins)
+    Tier 4 (Bio-Formats): 150+ formats - Maximum compatibility (Java-backed)
 
 Usage Example:
     >>> from tensorswitch_v2.api import TensorSwitchDataset, Readers, Writers

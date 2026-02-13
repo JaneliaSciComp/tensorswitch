@@ -13,7 +13,7 @@ Tier Strategy:
 - Tier 1 (Native TensorStore): N5, Zarr2/3, Precomputed - Maximum performance
 - Tier 2 (Custom Optimized): TIFF, ND2, IMS, HDF5, CZI - Reuse existing code
 - Tier 3 (BIOIO Adapter): LIF, + 20 more formats - Broad compatibility (Python plugins)
-- Tier 3+ (Bio-Formats): 150+ formats - Maximum compatibility (Java-backed)
+- Tier 4 (Bio-Formats): 150+ formats - Maximum compatibility (Java-backed)
 
 Public API:
     Tier 1 (Native TensorStore):
@@ -32,7 +32,7 @@ Public API:
     Tier 3 (BIOIO Adapter):
     - BIOIOReader: BIOIO adapter for 20+ formats (LIF, etc.) - Python plugins
 
-    Tier 3+ (Bio-Formats):
+    Tier 4 (Bio-Formats):
     - BioFormatsReader: Bio-Formats Java backend for 150+ formats
 
     Base:
@@ -56,7 +56,7 @@ from .czi import CZIReader
 # Tier 3: BIOIO Adapter (Python plugins)
 from .bioio_adapter import BIOIOReader
 
-# Tier 3+: Bio-Formats (Java-backed, 150+ formats)
+# Tier 4: Bio-Formats (Java-backed, 150+ formats)
 from .bioformats import BioFormatsReader
 
 __all__ = [
@@ -68,6 +68,6 @@ __all__ = [
     'TiffReader', 'ND2Reader', 'IMSReader', 'HDF5Reader', 'CZIReader',
     # Tier 3
     'BIOIOReader',
-    # Tier 3+
+    # Tier 4
     'BioFormatsReader',
 ]

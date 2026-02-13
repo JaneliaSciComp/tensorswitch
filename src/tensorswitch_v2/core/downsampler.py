@@ -28,6 +28,7 @@ from tensorswitch_v2.utils import (
     get_tensorstore_context,
     downsample_spec,
     zarr3_store_spec,
+    zarr2_store_spec,
     get_input_driver,
     get_chunk_linear_indices_in_shard,
 )
@@ -156,13 +157,52 @@ class Downsampler:
         self._s0_metadata = None
 
     def _load_s0_metadata(self) -> Dict[str, Any]:
-        """Load metadata from s0 array."""
-        zarr_json_path = os.path.join(self.s0_path, 'zarr.json')
-        if not os.path.exists(zarr_json_path):
-            raise FileNotFoundError(f"s0 zarr.json not found at {zarr_json_path}")
+        """Load metadata from s0 array (supports both Zarr v2 and v3).
 
-        with open(zarr_json_path, 'r') as f:
-            return json.load(f)
+        Returns dict with '_format' key indicating 'zarr2' or 'zarr3',
+        and '_zarray' key with raw .zarray content for Zarr2.
+        """
+        # Try Zarr v3 first
+        zarr_json_path = os.path.join(self.s0_path, 'zarr.json')
+        if os.path.exists(zarr_json_path):
+            with open(zarr_json_path, 'r') as f:
+                metadata = json.load(f)
+            metadata['_format'] = 'zarr3'
+            return metadata
+
+        # Try Zarr v2
+        zarray_path = os.path.join(self.s0_path, '.zarray')
+        if os.path.exists(zarray_path):
+            with open(zarray_path, 'r') as f:
+                zarray = json.load(f)
+            # Wrap in a dict with format info
+            metadata = {
+                '_format': 'zarr2',
+                '_zarray': zarray,
+                'shape': zarray.get('shape'),
+                'dtype': zarray.get('dtype'),
+                'chunks': zarray.get('chunks'),
+            }
+            return metadata
+
+        raise FileNotFoundError(
+            f"s0 metadata not found. Expected zarr.json (Zarr v3) or .zarray (Zarr v2) at {self.s0_path}"
+        )
+
+    def _detect_output_format(self, output_level_path: str) -> str:
+        """Detect if pre-created output is Zarr2 or Zarr3."""
+        if os.path.exists(os.path.join(output_level_path, '.zarray')):
+            return 'zarr2'
+        if os.path.exists(os.path.join(output_level_path, 'zarr.json')):
+            return 'zarr3'
+        # Check parent for format hints
+        parent = os.path.dirname(output_level_path)
+        if os.path.exists(os.path.join(parent, '.zgroup')):
+            return 'zarr2'
+        if os.path.exists(os.path.join(parent, 'zarr.json')):
+            return 'zarr3'
+        # Default to source format
+        return self._s0_metadata.get('_format', 'zarr3')
 
     def _get_output_level_path(self) -> str:
         """Get the output path for the target level, following source format."""
@@ -267,55 +307,87 @@ class Downsampler:
         level_name = get_level_name(self.target_level, prefix)
         output_level_path = self._get_output_level_path()
 
+        # Create output directory
+        os.makedirs(output_level_path, exist_ok=True)
+
+        # Detect output format (Zarr2 vs Zarr3)
+        output_format = self._detect_output_format(output_level_path)
+        if verbose:
+            print(f"Output format: {output_format}")
+
         # Extract compression from source metadata to inherit it
         source_compression = None
         if self._s0_metadata.get('_format') == 'zarr2':
             source_compression = extract_compression_from_zarr2_metadata(
                 self._s0_metadata.get('_zarray', {})
             )
-            # Convert zarr2 compressor format to zarr3 codec format if needed
-            if source_compression and 'id' in source_compression:
-                source_compression = {
-                    'name': source_compression['id'],
-                    'configuration': {'level': source_compression.get('level', 5)}
-                }
         else:
             source_compression = extract_compression_from_zarr3_metadata(self._s0_metadata)
 
         if verbose and source_compression:
             print(f"Inheriting compression from source: {source_compression}")
 
-        output_spec = zarr3_store_spec(
-            self.output_path,
-            downsampled_shape,  # Use actual shape, not predicted
-            s0_dtype,
-            self.use_shard,
-            level_path=level_name,
-            use_ome_structure=True,
-            custom_shard_shape=shard_shape,
-            custom_chunk_shape=chunk_shape,
-            use_fortran_order=use_fortran_order,
-            axes_order=dimension_names,
-            compression=source_compression
-        )
-        output_spec['context'] = get_tensorstore_context()
+        # Build output spec based on detected format
+        if output_format == 'zarr2':
+            # For Zarr2: use chunk_shape directly (no sharding)
+            # Convert compression to zarr2 format if needed
+            zarr2_compressor = source_compression
+            if zarr2_compressor and 'name' in zarr2_compressor:
+                # Convert zarr3 codec format to zarr2 compressor format
+                zarr2_compressor = {
+                    'id': zarr2_compressor['name'],
+                    'level': zarr2_compressor.get('configuration', {}).get('level', 5)
+                }
 
-        # Create output directory
-        os.makedirs(output_level_path, exist_ok=True)
+            # For Zarr2, use original dtype from source metadata (e.g., ">u2" not "uint16")
+            # TensorStore's zarr driver requires the endian-prefixed format
+            zarr2_dtype = self._s0_metadata.get('dtype') or self._s0_metadata.get('_zarray', {}).get('dtype') or s0_dtype
+            output_spec = zarr2_store_spec(
+                output_level_path,
+                downsampled_shape,
+                chunks=chunk_shape,
+                use_fortran_order=use_fortran_order,
+                axes_order=dimension_names,
+                dtype=zarr2_dtype,
+                compressor=zarr2_compressor
+            )
+        else:
+            # For Zarr3: convert compression to zarr3 codec format if needed
+            if source_compression and 'id' in source_compression:
+                source_compression = {
+                    'name': source_compression['id'],
+                    'configuration': {'level': source_compression.get('level', 5)}
+                }
+
+            output_spec = zarr3_store_spec(
+                self.output_path,
+                downsampled_shape,
+                s0_dtype,
+                self.use_shard,
+                level_path=level_name,
+                use_ome_structure=True,
+                custom_shard_shape=shard_shape,
+                custom_chunk_shape=chunk_shape,
+                use_fortran_order=use_fortran_order,
+                axes_order=dimension_names,
+                compression=source_compression
+            )
+
+        output_spec['context'] = get_tensorstore_context()
 
         # Check if pre-created metadata exists and has wrong shape
         # If so, delete and recreate with correct shape
-        zarr_json_path = os.path.join(output_level_path, 'zarr.json')
+        metadata_file = os.path.join(output_level_path, 'zarr.json' if output_format == 'zarr3' else '.zarray')
         need_recreate = False
-        if os.path.exists(zarr_json_path):
-            with open(zarr_json_path, 'r') as f:
+        if os.path.exists(metadata_file):
+            with open(metadata_file, 'r') as f:
                 existing_metadata = json.load(f)
             existing_shape = existing_metadata.get('shape', [])
             if existing_shape != downsampled_shape:
                 if verbose:
                     print(f"  Fixing pre-created shape: {existing_shape} -> {downsampled_shape}")
-                # Delete the incorrect zarr.json so TensorStore will recreate it
-                os.remove(zarr_json_path)
+                # Delete the incorrect metadata so TensorStore will recreate it
+                os.remove(metadata_file)
                 need_recreate = True
 
         # Open output store

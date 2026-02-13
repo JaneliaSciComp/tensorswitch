@@ -1,7 +1,7 @@
 """
 BioFormats reader for TensorSwitch Phase 5 architecture.
 
-Tier 3+ reader - wraps BIOIOReader with explicit Bio-Formats Java backend,
+Tier 4 reader - wraps BIOIOReader with explicit Bio-Formats Java backend,
 unlocking 150+ microscopy formats supported by the OME Bio-Formats library.
 
 This reader requires Java and bioio-bioformats to be installed:
@@ -21,7 +21,7 @@ class BioFormatsReader(BIOIOReader):
     the bioio-bioformats backend, which bridges to the OME Bio-Formats
     Java library via scyjava.
 
-    Tier: 3+ (Bio-Formats - Maximum Format Compatibility)
+    Tier: 4 (Bio-Formats - Maximum Format Compatibility)
     - Supports 150+ file formats (many proprietary)
     - Requires Java runtime and bioio-bioformats package
     - Higher overhead than pure Python readers (JVM startup)
