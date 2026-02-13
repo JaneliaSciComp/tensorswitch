@@ -249,8 +249,8 @@ Supported output formats:
         help="Path within input container (e.g., 's0' for N5)",
     )
     parser.add_argument(
-        "--level_path", default="s0",
-        help="Level subdirectory name in output (default: s0)",
+        "--level_path", default="0",
+        help="Level subdirectory name in output (default: 0)",
     )
 
     # Chunk/shard configuration
@@ -1377,9 +1377,72 @@ def main(argv=None):
 
     # Detect batch mode (input is directory, not file)
     if not args.batch_worker and not args.downsample and not args.auto_multiscale:
-        from .core.batch import detect_input_mode, BatchConverter
+        from .core.batch import (
+            detect_input_mode,
+            BatchConverter,
+            convert_discovered_folder,
+            submit_discovered_folder_lsf,
+        )
 
         input_mode = detect_input_mode(args.input)
+
+        if input_mode == 'discovered_folder':
+            # Discovered folder mode: convert image and/or segmentation datasets
+            # to a single zarr with nested structure
+            image_only = getattr(args, 'image_only', False)
+            labels_only = getattr(args, 'labels_only', False)
+            image_key = getattr(args, 'image_key', 'raw')
+            label_key = getattr(args, 'label_key', 'segmentation')
+            use_nested = getattr(args, 'use_nested_structure', True)
+
+            if args.submit:
+                if not args.project:
+                    raise ValueError("--project is required with --submit")
+
+                result = submit_discovered_folder_lsf(
+                    input_dir=args.input,
+                    output_path=args.output,
+                    project=args.project,
+                    image_only=image_only,
+                    labels_only=labels_only,
+                    image_key=image_key,
+                    label_key=label_key,
+                    use_nested_structure=use_nested,
+                    output_format=args.output_format,
+                    chunk_shape=args.chunk_shape,
+                    shard_shape=args.shard_shape,
+                    compression=args.compression,
+                    compression_level=args.compression_level,
+                    memory_gb=args.memory or 30,
+                    wall_time=args.wall_time or "2:00",
+                    cores=args.cores or 4,
+                    job_group=args.job_group,
+                    dry_run=args.dry_run,
+                )
+                if result.get('error'):
+                    print(f"\nError: {result['error']}")
+                    sys.exit(1)
+            else:
+                result = convert_discovered_folder(
+                    input_dir=args.input,
+                    output_path=args.output,
+                    image_only=image_only,
+                    labels_only=labels_only,
+                    image_key=image_key,
+                    label_key=label_key,
+                    use_nested_structure=use_nested,
+                    output_format=args.output_format,
+                    chunk_shape=chunk_shape,
+                    shard_shape=shard_shape,
+                    compression=args.compression,
+                    compression_level=args.compression_level,
+                    verbose=verbose,
+                )
+                if result.error:
+                    print(f"\nError: {result.error}")
+                    sys.exit(1)
+
+            return
 
         if input_mode == 'batch_directory':
             # Batch mode: process multiple files
@@ -1663,16 +1726,6 @@ def main(argv=None):
         return
 
     reader = create_reader(args)
-    writer = create_writer(args)
-
-    # Handle --show_spec: print specs and exit without converting
-    if args.show_spec:
-        show_conversion_spec(reader, writer, args, chunk_shape, shard_shape)
-        return
-
-    from .core.converter import DistributedConverter
-
-    converter = DistributedConverter(reader, writer)
 
     # Determine force_order from CLI args (None = auto-detect)
     force_order = None
@@ -1681,10 +1734,21 @@ def main(argv=None):
     elif args.force_f_order:
         force_order = 'f'
 
-    # Auto-detect segmentation data based on dtype, or use explicit --is-label flag
+    # Resolve data_type and is_label consistently
+    # Priority: explicit --data-type > explicit --is-label > auto-detect
+    cli_data_type = getattr(args, 'data_type', 'auto')
     is_label = getattr(args, 'is_label', False)
-    if not is_label:
+
+    if cli_data_type == 'labels':
+        # Explicit --data-type labels
+        resolved_data_type = 'labels'
+        is_label = True
+    elif is_label:
+        # Explicit --is-label flag
+        resolved_data_type = 'labels'
+    elif cli_data_type == 'auto':
         # Auto-detect based on dtype
+        resolved_data_type = 'image'  # Default
         try:
             spec = reader.get_tensorstore_spec()
             if spec.get('driver') == 'array' and 'array' in spec:
@@ -1699,10 +1763,25 @@ def main(argv=None):
             from .utils.metadata_utils import is_segmentation_dtype
             if is_segmentation_dtype(dtype_str):
                 is_label = True
+                resolved_data_type = 'labels'
                 if verbose:
-                    print(f"Auto-detected segmentation data (dtype: {dtype_str}), adding image-label metadata")
+                    print(f"Auto-detected segmentation data (dtype: {dtype_str}), using labels structure")
         except Exception:
-            pass  # If detection fails, default to is_label=False
+            pass  # If detection fails, default to image
+    else:
+        # Explicit --data-type image
+        resolved_data_type = 'image'
+
+    writer = create_writer(args, data_type=resolved_data_type)
+
+    # Handle --show_spec: print specs and exit without converting
+    if args.show_spec:
+        show_conversion_spec(reader, writer, args, chunk_shape, shard_shape)
+        return
+
+    from .core.converter import DistributedConverter
+
+    converter = DistributedConverter(reader, writer)
 
     # Parse voxel_size override if provided
     voxel_size_override = None

@@ -14,7 +14,122 @@ import json
 import glob
 import numpy as np
 import re
+from typing import Optional, Tuple
 
+
+# ============================================================================
+# Level Format Detection Utilities
+# ============================================================================
+
+def detect_level_format(root_path: str) -> str:
+    """
+    Detect the level naming format used in a zarr dataset.
+
+    Checks whether the dataset uses "s0/s1/s2" (s-prefixed) or "0/1/2" (numeric)
+    naming convention for multiscale levels.
+
+    Args:
+        root_path: Root path of the zarr dataset
+
+    Returns:
+        "s" if using s0/s1/s2 format (s-prefixed)
+        "" if using 0/1/2 format (numeric)
+    """
+    # Check for s0 first (legacy format)
+    if os.path.exists(os.path.join(root_path, 's0')):
+        return "s"
+    # Check for numeric 0
+    if os.path.exists(os.path.join(root_path, '0')):
+        return ""
+    # Default to numeric for new datasets
+    return ""
+
+
+def get_level_name(level: int, prefix: str = "") -> str:
+    """
+    Get level directory name with specified prefix.
+
+    Args:
+        level: Level number (0, 1, 2, ...)
+        prefix: Prefix ("s" for s0/s1 format, "" for numeric 0/1 format)
+
+    Returns:
+        Level name like "s0", "s1" or "0", "1"
+    """
+    return f"{prefix}{level}"
+
+
+def get_level_path(root_path: str, level: int, prefix: str = None) -> str:
+    """
+    Get full level path using detected or specified prefix.
+
+    Args:
+        root_path: Root zarr path
+        level: Level number (0, 1, 2, ...)
+        prefix: Override prefix ("s" or ""). If None, auto-detect from existing levels.
+
+    Returns:
+        Full path like "/data/dataset.zarr/s1" or "/data/dataset.zarr/1"
+    """
+    if prefix is None:
+        prefix = detect_level_format(root_path)
+    return os.path.join(root_path, f"{prefix}{level}")
+
+
+# ============================================================================
+# Compression Extraction Utilities
+# ============================================================================
+
+def extract_compression_from_zarr3_metadata(metadata: dict) -> Optional[dict]:
+    """
+    Extract compression codec from Zarr3 metadata.
+
+    Zarr3 stores compression in the codecs array. For sharded arrays,
+    the compression codec is inside sharding_indexed.configuration.codecs.
+
+    Args:
+        metadata: Zarr3 metadata dict (contents of zarr.json)
+
+    Returns:
+        Compression codec dict like {'name': 'zstd', 'configuration': {'level': 5}}
+        or None if not found
+    """
+    codecs = metadata.get('codecs', [])
+
+    # Check for sharding_indexed (compression is in inner codecs)
+    for codec in codecs:
+        if codec.get('name') == 'sharding_indexed':
+            inner_codecs = codec.get('configuration', {}).get('codecs', [])
+            for inner_codec in inner_codecs:
+                if inner_codec.get('name') in ['zstd', 'blosc', 'gzip']:
+                    return inner_codec
+
+    # Check for direct compression codec (non-sharded)
+    for codec in codecs:
+        if codec.get('name') in ['zstd', 'blosc', 'gzip']:
+            return codec
+
+    return None
+
+
+def extract_compression_from_zarr2_metadata(zarray: dict) -> Optional[dict]:
+    """
+    Extract compressor from Zarr2 .zarray metadata.
+
+    Zarr2 stores compression in the 'compressor' field.
+
+    Args:
+        zarray: Zarr2 .zarray metadata dict
+
+    Returns:
+        Compressor dict like {'id': 'zstd', 'level': 5} or None
+    """
+    return zarray.get('compressor')
+
+
+# ============================================================================
+# OME-XML and Channel Metadata
+# ============================================================================
 
 def extract_omero_channels(ome_xml: str) -> list:
     """
@@ -164,7 +279,7 @@ def create_zarr3_ome_metadata(ome_xml, array_shape, image_name, pixel_sizes=None
     multiscales = [{
         "axes": axes,
         "datasets": [{
-            "path": "s0",
+            "path": "0",
             "coordinateTransformations": coordinate_transformations
         }],
         "name": image_name,
@@ -221,31 +336,51 @@ def write_zarr3_group_metadata(output_path, metadata):
 
 
 def auto_detect_max_level(output_path):
-    """Auto-detect the maximum level by scanning for s* directories at root level."""
+    """
+    Auto-detect the maximum level by scanning for level directories.
+
+    Supports both s-prefixed (s0, s1, s2) and numeric (0, 1, 2) formats.
+
+    Returns:
+        tuple: (max_level, prefix) where prefix is "s" or ""
+        None if no levels found
+    """
     if not os.path.exists(output_path):
-        return None
+        return None, ""
 
-    pattern = os.path.join(output_path, 's*')
-    level_dirs = glob.glob(pattern)
-
-    if not level_dirs:
-        return None
+    # Detect the format first
+    prefix = detect_level_format(output_path)
 
     levels = []
-    for level_dir in level_dirs:
-        dirname = os.path.basename(level_dir)
-        if dirname.startswith('s') and dirname[1:].isdigit():
-            levels.append(int(dirname[1:]))
+    if prefix == "s":
+        # S-prefixed format (s0, s1, s2, ...)
+        pattern = os.path.join(output_path, 's*')
+        level_dirs = glob.glob(pattern)
+        for level_dir in level_dirs:
+            dirname = os.path.basename(level_dir)
+            if dirname.startswith('s') and dirname[1:].isdigit():
+                levels.append(int(dirname[1:]))
+    else:
+        # Numeric format (0, 1, 2, ...)
+        try:
+            for item in os.listdir(output_path):
+                item_path = os.path.join(output_path, item)
+                if item.isdigit() and os.path.isdir(item_path):
+                    levels.append(int(item))
+        except OSError:
+            return None, prefix
 
     if not levels:
-        return None
+        return None, prefix
 
-    return max(levels)
+    return max(levels), prefix
 
 
-def update_ome_multiscale_metadata(zarr_path, max_level=4):
+def update_ome_multiscale_metadata(zarr_path, max_level=4, prefix=None):
     """
-    Update OME-ZARR metadata to include all multiscale levels s0 through max_level.
+    Update OME-ZARR metadata to include all multiscale levels.
+
+    Supports both s-prefixed (s0, s1) and numeric (0, 1) level naming.
     """
     zarr_json_path = os.path.join(zarr_path, "zarr.json")
 
@@ -253,19 +388,24 @@ def update_ome_multiscale_metadata(zarr_path, max_level=4):
         metadata = json.load(f)
 
     multiscales = metadata["attributes"]["ome"]["multiscales"][0]
-    s0_scale_factors = multiscales["datasets"][0]["coordinateTransformations"][0]["scale"]
+    level0_scale_factors = multiscales["datasets"][0]["coordinateTransformations"][0]["scale"]
 
     downsampling_factors = metadata.get("attributes", {}).get("custom", {}).get("downsampling_factors", None)
 
-    s0_metadata_path = os.path.join(zarr_path, "s0", "zarr.json")
-    with open(s0_metadata_path, 'r') as f:
-        s0_meta = json.load(f)
-    s0_shape = s0_meta.get('shape')
+    # Detect level naming format if not provided
+    if prefix is None:
+        prefix = detect_level_format(zarr_path)
+
+    level0_name = get_level_name(0, prefix)
+    level0_metadata_path = os.path.join(zarr_path, level0_name, "zarr.json")
+    with open(level0_metadata_path, 'r') as f:
+        level0_meta = json.load(f)
+    level0_shape = level0_meta.get('shape')
 
     if downsampling_factors:
         print("Using downsampling factors from custom metadata (incremental method)")
         use_factors = True
-        previous_scale = s0_scale_factors
+        previous_scale = level0_scale_factors
     else:
         print("No downsampling factors found - using dimension ratio method")
         use_factors = False
@@ -273,14 +413,18 @@ def update_ome_multiscale_metadata(zarr_path, max_level=4):
     datasets = []
 
     for level in range(max_level + 1):
-        level_metadata_path = os.path.join(zarr_path, f"s{level}", "zarr.json")
+        level_name = get_level_name(level, prefix)
+        level_metadata_path = os.path.join(zarr_path, level_name, "zarr.json")
 
         if not os.path.exists(level_metadata_path):
-            print(f"Warning: s{level}/zarr.json not found, skipping level {level}")
+            print(f"Warning: {level_name}/zarr.json not found, skipping level {level}")
             break
 
         if level == 0:
-            datasets.append(multiscales["datasets"][0])
+            # Update path in first dataset to use detected format
+            first_dataset = multiscales["datasets"][0].copy()
+            first_dataset["path"] = level_name
+            datasets.append(first_dataset)
             continue
 
         with open(level_metadata_path, 'r') as f:
@@ -288,26 +432,27 @@ def update_ome_multiscale_metadata(zarr_path, max_level=4):
         level_shape = level_meta.get('shape')
 
         if use_factors:
-            factor_key = f"s{level-1}_to_s{level}"
+            prev_level_name = get_level_name(level - 1, prefix)
+            factor_key = f"{prev_level_name}_to_{level_name}"
             level_factors = downsampling_factors.get(factor_key)
             if level_factors:
                 level_scale = [prev * factor for prev, factor in zip(previous_scale, level_factors)]
             else:
                 print(f"Warning: Missing factors for {factor_key}, falling back to ratio method")
-                level_scale = [s0_scale_factors[i] * (s0_shape[i] / level_shape[i]) for i in range(len(s0_shape))]
+                level_scale = [level0_scale_factors[i] * (level0_shape[i] / level_shape[i]) for i in range(len(level0_shape))]
             previous_scale = level_scale
         else:
-            level_scale = [s0_scale_factors[i] * (s0_shape[i] / level_shape[i]) for i in range(len(s0_shape))]
+            level_scale = [level0_scale_factors[i] * (level0_shape[i] / level_shape[i]) for i in range(len(level0_shape))]
 
         coordinate_transformations = [{"type": "scale", "scale": level_scale}]
 
         # Add translation transform for Neuroglancer compatibility
-        translation = [0.5 * (scale - s0_scale_factors[i]) for i, scale in enumerate(level_scale)]
+        translation = [0.5 * (scale - level0_scale_factors[i]) for i, scale in enumerate(level_scale)]
         if any(t != 0 for t in translation):
             coordinate_transformations.append({"type": "translation", "translation": translation})
 
         datasets.append({
-            "path": f"s{level}",
+            "path": level_name,
             "coordinateTransformations": coordinate_transformations
         })
 
@@ -319,44 +464,57 @@ def update_ome_multiscale_metadata(zarr_path, max_level=4):
     print(f"Updated OME metadata with {len(datasets)} levels")
 
 
-def update_ome_multiscale_metadata_zarr2(zarr_path, max_level=4):
-    """Update OME-ZARR metadata for zarr2 format (.zattrs)."""
+def update_ome_multiscale_metadata_zarr2(zarr_path, max_level=4, prefix=None):
+    """
+    Update OME-ZARR metadata for zarr2 format (.zattrs).
+
+    Supports both s-prefixed (s0, s1) and numeric (0, 1) level naming.
+    """
     zattrs_path = os.path.join(zarr_path, ".zattrs")
 
     with open(zattrs_path, 'r') as f:
         metadata = json.load(f)
 
     multiscales = metadata.get("multiscales", [{}])[0]
-    s0_scale_factors = multiscales.get("datasets", [{}])[0].get("coordinateTransformations", [{}])[0].get("scale", [1.0, 1.0, 1.0])
+    level0_scale_factors = multiscales.get("datasets", [{}])[0].get("coordinateTransformations", [{}])[0].get("scale", [1.0, 1.0, 1.0])
 
-    zarray_path = os.path.join(zarr_path, "s0", ".zarray")
+    # Detect level naming format if not provided
+    if prefix is None:
+        prefix = detect_level_format(zarr_path)
+
+    level0_name = get_level_name(0, prefix)
+    zarray_path = os.path.join(zarr_path, level0_name, ".zarray")
     with open(zarray_path, 'r') as f:
-        s0_meta = json.load(f)
-    s0_shape = s0_meta.get('shape')
+        level0_meta = json.load(f)
+    level0_shape = level0_meta.get('shape')
 
     datasets = []
 
     for level in range(max_level + 1):
-        level_zarray_path = os.path.join(zarr_path, f"s{level}", ".zarray")
+        level_name = get_level_name(level, prefix)
+        level_zarray_path = os.path.join(zarr_path, level_name, ".zarray")
 
         if not os.path.exists(level_zarray_path):
-            print(f"Warning: s{level}/.zarray not found, skipping level {level}")
+            print(f"Warning: {level_name}/.zarray not found, skipping level {level}")
             break
 
         if level == 0:
-            datasets.append(multiscales.get("datasets", [{}])[0])
+            # Update path in first dataset to use detected format
+            first_dataset = multiscales.get("datasets", [{}])[0].copy()
+            first_dataset["path"] = level_name
+            datasets.append(first_dataset)
             continue
 
         with open(level_zarray_path, 'r') as f:
             level_meta = json.load(f)
         level_shape = level_meta.get('shape')
 
-        level_scale = [s0_scale_factors[i] * (s0_shape[i] / level_shape[i]) for i in range(len(s0_shape))]
+        level_scale = [level0_scale_factors[i] * (level0_shape[i] / level_shape[i]) for i in range(len(level0_shape))]
 
         coordinate_transformations = [{"type": "scale", "scale": level_scale}]
 
         datasets.append({
-            "path": f"s{level}",
+            "path": level_name,
             "coordinateTransformations": coordinate_transformations
         })
 
@@ -377,26 +535,28 @@ def update_ome_metadata_if_needed(output_path, use_ome_structure):
     if not use_ome_structure:
         return
 
-    max_level = auto_detect_max_level(output_path)
+    max_level, prefix = auto_detect_max_level(output_path)
     if max_level is None:
         print("No multiscale levels detected - skipping metadata update")
         return
 
+    level0_name = get_level_name(0, prefix)
     if max_level == 0:
-        print("Only s0 level detected - no multiscale metadata update needed")
+        print(f"Only {level0_name} level detected - no multiscale metadata update needed")
         return
 
+    max_level_name = get_level_name(max_level, prefix)
     zarr3_metadata = os.path.join(output_path, 'zarr.json')
     zarr2_metadata = os.path.join(output_path, '.zattrs')
 
     try:
         if os.path.exists(zarr3_metadata):
-            print(f"Updating zarr3 OME metadata for {output_path} with levels s0-s{max_level}")
-            update_ome_multiscale_metadata(output_path, max_level=max_level)
+            print(f"Updating zarr3 OME metadata for {output_path} with levels {level0_name}-{max_level_name}")
+            update_ome_multiscale_metadata(output_path, max_level=max_level, prefix=prefix)
             print("OME metadata updated successfully!")
         elif os.path.exists(zarr2_metadata):
-            print(f"Updating zarr2 OME metadata for {output_path} with levels s0-s{max_level}")
-            update_ome_multiscale_metadata_zarr2(output_path, max_level=max_level)
+            print(f"Updating zarr2 OME metadata for {output_path} with levels {level0_name}-{max_level_name}")
+            update_ome_multiscale_metadata_zarr2(output_path, max_level=max_level, prefix=prefix)
             print("OME metadata updated successfully!")
         else:
             print("Warning: No zarr metadata file found (.zattrs or zarr.json) - skipping metadata update")
@@ -492,9 +652,14 @@ def precreate_shard_directories(output_path, level, output_shape, shard_shape, u
 def precreate_zarr3_metadata_safely(output_path, level, shape, dtype, use_shard,
                                     shard_shape, chunk_shape, use_ome_structure=True,
                                     use_fortran_order=False, use_v2_encoding=False,
-                                    force_precreate=False, axes_order=None):
+                                    force_precreate=False, axes_order=None, compression=None):
     """
     Pre-create zarr.json metadata to avoid worker race conditions.
+
+    Args:
+        compression: Optional compression codec dict from level 0.
+                    Format: {'name': 'zstd', 'configuration': {'level': N}}
+                    If None, defaults to zstd level 5.
     """
     import tensorstore as ts
     from .tensorstore_utils import zarr3_store_spec
@@ -515,7 +680,8 @@ def precreate_zarr3_metadata_safely(output_path, level, shape, dtype, use_shard,
         custom_chunk_shape=chunk_shape,
         use_v2_encoding=use_v2_encoding,
         use_fortran_order=use_fortran_order,
-        axes_order=axes_order
+        axes_order=axes_order,
+        compression=compression
     )
 
     store = ts.open(store_spec, create=True, delete_existing=True).result()
@@ -530,9 +696,15 @@ def precreate_zarr3_metadata_safely(output_path, level, shape, dtype, use_shard,
 
 def precreate_zarr3_output(output_path, level, output_shape, shard_shape, chunk_shape,
                            dtype, use_ome_structure=True, use_v2_encoding=False,
-                           axes_order=None, check_exists=False, create_metadata=True):
+                           axes_order=None, check_exists=False, create_metadata=True,
+                           compression=None):
     """
     UNIFIED function to pre-create both shard directories AND zarr.json metadata.
+
+    Args:
+        compression: Optional compression codec dict from level 0.
+                    Format: {'name': 'zstd', 'configuration': {'level': N}}
+                    If None, defaults to zstd level 5.
     """
     result = {'dirs_created': False, 'metadata_created': False}
 
@@ -580,7 +752,8 @@ def precreate_zarr3_output(output_path, level, output_shape, shard_shape, chunk_
             use_fortran_order=False,
             use_v2_encoding=use_v2_encoding,
             force_precreate=True,
-            axes_order=axes_order
+            axes_order=axes_order,
+            compression=compression
         )
         result['metadata_created'] = metadata_created
 

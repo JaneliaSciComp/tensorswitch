@@ -52,7 +52,7 @@ class N5Writer(BaseWriter):
         output_path: str,
         compression: str = "gzip",
         compression_level: int = 5,
-        dataset_path: str = "s0"
+        dataset_path: str = "0"
     ):
         """
         Initialize N5 writer.
@@ -61,7 +61,7 @@ class N5Writer(BaseWriter):
             output_path: Path to output N5 dataset
             compression: Compression codec ("gzip", "raw", "blosc")
             compression_level: Compression level (1-9, default 5)
-            dataset_path: Dataset path within N5 (default "s0")
+            dataset_path: Dataset path within N5 (default "0")
         """
         super().__init__(output_path)
         self.compression = compression

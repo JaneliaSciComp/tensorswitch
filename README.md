@@ -540,27 +540,29 @@ TensorSwitch v2 uses **chained downsampling** for efficient pyramid generation:
 
 ```
 Chained Downsampling:
-┌────┐
-│ s0 │ (original)
-└──┬─┘
-   │ 2x
-   ▼
-┌────┐
-│ s1 │ ──bwait
-└──┬─┘
-   │ 2x
-   ▼
-┌────┐
-│ s2 │ ──bwait
-└──┬─┘
-   ...
+┌───┐
+│ 0 │ (original)
+└─┬─┘
+  │ 2x
+  ▼
+┌───┐
+│ 1 │ ──bwait
+└─┬─┘
+  │ 2x
+  ▼
+┌───┐
+│ 2 │ ──bwait
+└─┬─┘
+  ...
 ```
 
 **Benefits**:
 - Constant ~8x read amplification per level
-- Deep levels (s4, s5) complete in minutes
+- Deep levels (4, 5) complete in minutes
 - Automatic anisotropic factor calculation
 - OME-NGFF compliant metadata with translation transforms (Neuroglancer compatible)
+- **Numeric level naming** (0/1/2) aligns with OME-NGFF specification
+- **Compression inheritance** from level 0 (consistent settings across pyramid)
 
 ### Generate Pyramid
 
@@ -578,9 +580,15 @@ pixi run python -m tensorswitch_v2 --auto_multiscale \
 ```
 
 **Auto-detection logic**:
-1. If path ends with level pattern (`s0`, `0`, `s1`, etc.) → use as-is
+1. If path ends with level pattern (`0`, `s0`, `1`, `s1`, etc.) → use as-is
 2. Check OME-NGFF metadata (`multiscales[0].datasets[0].path`)
-3. Fallback to common subdirectories: `s0`, `0`
+3. Fallback to common subdirectories: `0`, `s0`
+
+**Level naming**: New conversions use numeric format (`0/1/2`). When downsampling, the source format is auto-detected and followed:
+- Source has `s0/` → creates `s1/`, `s2/`, `s3/`...
+- Source has `0/` → creates `1/`, `2/`, `3/`...
+
+**Compression inheritance**: Downsampled levels inherit compression settings from level 0 (e.g., if level 0 uses zstd level 3, all pyramid levels will use zstd level 3).
 
 ```bash
 # Single level only (e.g., just create s2)

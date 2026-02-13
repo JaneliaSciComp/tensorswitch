@@ -186,16 +186,25 @@ def get_zarr_store_spec(path):
     return zarr_store_spec
 
 
-def zarr3_store_spec(path, shape, dtype, use_shard=True, level_path="s0", use_ome_structure=True,
+def zarr3_store_spec(path, shape, dtype, use_shard=True, level_path="0", use_ome_structure=True,
                      custom_shard_shape=None, custom_chunk_shape=None, use_v2_encoding=False,
-                     use_fortran_order=False, axes_order=None):
+                     use_fortran_order=False, axes_order=None, compression=None):
     """
     Create Zarr3 store specification with smart chunking based on axes.
 
     Non-spatial axes (c, t, v) get chunk size 1 for per-channel/per-timepoint access.
     Spatial axes (z, y, x) get default 256 inner chunk, 1024 shard.
+
+    Args:
+        compression: Optional compression codec dict from source metadata.
+                    Format: {'name': 'zstd', 'configuration': {'level': N}}
+                    If None, defaults to zstd level 5 (sharded) or level 1 (non-sharded).
     """
     NON_SPATIAL_AXES = ['c', 't', 'v', 'channel']
+
+    # Default compression codecs
+    DEFAULT_SHARDED_COMPRESSION = {'name': 'zstd', 'configuration': {'level': 5}}
+    DEFAULT_NONSHARDED_COMPRESSION = {'name': 'zstd', 'configuration': {'level': 1}}
 
     def build_default_shape(shape, axes_order, spatial_size):
         """Build default chunk/shard shape respecting axis types."""
@@ -240,9 +249,12 @@ def zarr3_store_spec(path, shape, dtype, use_shard=True, level_path="s0", use_om
         if use_fortran_order:
             transpose_order = list(range(len(shape) - 1, -1, -1))
             inner_codecs.append({'name': 'transpose', 'configuration': {'order': transpose_order}})
+
+        # Use passed compression or default for sharded
+        compression_codec = compression if compression else DEFAULT_SHARDED_COMPRESSION
         inner_codecs.extend([
             {'name': 'bytes', 'configuration': {'endian': 'little'}},
-            {'name': 'zstd', 'configuration': {'level': 5}}
+            compression_codec
         ])
 
         # Array-level codecs (transpose is inside sharding's inner codecs when using F-order)
@@ -286,9 +298,12 @@ def zarr3_store_spec(path, shape, dtype, use_shard=True, level_path="s0", use_om
         if use_fortran_order:
             transpose_order = list(range(len(shape) - 1, -1, -1))
             codecs.append({'name': 'transpose', 'configuration': {'order': transpose_order}})
+
+        # Use passed compression or default for non-sharded
+        compression_codec = compression if compression else DEFAULT_NONSHARDED_COMPRESSION
         codecs.extend([
             {'name': 'bytes', 'configuration': {'endian': 'little'}},
-            {'name': 'zstd', 'configuration': {'level': 1}}
+            compression_codec
         ])
         # Use custom_chunk_shape if provided
         if custom_chunk_shape is not None:

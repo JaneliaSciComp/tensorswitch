@@ -58,7 +58,7 @@ class Writers:
         compression: str = "zstd",
         compression_level: int = 5,
         use_ome_structure: bool = True,
-        level_path: str = "s0",
+        level_path: str = "0",
         include_omero: bool = False,
         use_nested_structure: bool = True,
         data_type: str = "image",
@@ -174,7 +174,7 @@ class Writers:
         output_path: str,
         compression: str = "gzip",
         compression_level: int = 5,
-        dataset_path: str = "s0",
+        dataset_path: str = "0",
         **kwargs
     ) -> BaseWriter:
         """

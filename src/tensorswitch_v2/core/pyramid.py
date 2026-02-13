@@ -544,16 +544,30 @@ class PyramidPlanner:
             print(f"PRE-CREATING {pyramid_plan['num_levels']} PYRAMID LEVELS")
             print(f"{'='*60}")
 
-        # Get s0 metadata for dtype and format
+        # Get s0 metadata for dtype, format, and compression
         s0_metadata = self._load_s0_metadata()
         dtype = s0_metadata.get('data_type', 'uint16')
         zarr_format = s0_metadata.get('_format', 'zarr3')
 
+        # Detect level naming format (s0/s1 vs 0/1)
+        from tensorswitch_v2.utils.metadata_utils import (
+            detect_level_format, get_level_name,
+            extract_compression_from_zarr3_metadata, extract_compression_from_zarr2_metadata
+        )
+        prefix = detect_level_format(self.root_path)
+
+        # Extract compression from level 0
+        if zarr_format == 'zarr2':
+            compressor = extract_compression_from_zarr2_metadata(s0_metadata.get('_zarray', {}))
+        else:
+            compressor = extract_compression_from_zarr3_metadata(s0_metadata)
+
         for level_info in pyramid_plan['levels']:
             level = level_info['level']
+            level_name = get_level_name(level, prefix)
 
             if verbose:
-                print(f"\nPre-creating s{level}...")
+                print(f"\nPre-creating {level_name}...")
                 print(f"  Shape: {level_info['predicted_shape']}")
                 print(f"  Shard shape: {level_info['shard_shape']}")
                 print(f"  Chunk shape: {level_info['chunk_shape']}")
@@ -566,10 +580,12 @@ class PyramidPlanner:
                     chunk_shape=level_info['chunk_shape'],
                     dtype=dtype,
                     axes_names=pyramid_plan['axes_names'],
+                    prefix=prefix,
+                    compressor=compressor,
                     verbose=verbose,
                 )
             else:
-                # Use Zarr3 precreation
+                # Use Zarr3 precreation with inherited compression
                 precreate_zarr3_output(
                     output_path=self.root_path,
                     level=level,
@@ -580,10 +596,11 @@ class PyramidPlanner:
                     use_ome_structure=True,
                     use_v2_encoding=False,
                     axes_order=pyramid_plan['axes_names'],
+                    compression=compressor,
                 )
 
             if verbose:
-                print(f"  Pre-created s{level}")
+                print(f"  Pre-created {level_name}")
 
         if verbose:
             print(f"\n{'='*60}")
@@ -597,6 +614,8 @@ class PyramidPlanner:
         chunk_shape: List[int],
         dtype: str,
         axes_names: List[str],
+        prefix: str = "",
+        compressor: Optional[Dict] = None,
         verbose: bool = True,
     ) -> None:
         """
@@ -608,10 +627,14 @@ class PyramidPlanner:
             chunk_shape: Chunk shape
             dtype: Data type string
             axes_names: Dimension names
+            prefix: Level naming prefix ("s" for s1/s2, "" for 1/2)
+            compressor: Compressor config from level 0 (default: zstd level 5)
             verbose: Print progress
         """
-        # Zarr2 uses numeric level paths (1, 2, 3) not s1, s2, s3
-        level_path = os.path.join(self.root_path, str(level))
+        # Use detected level naming format
+        from tensorswitch_v2.utils.metadata_utils import get_level_name
+        level_name = get_level_name(level, prefix)
+        level_path = os.path.join(self.root_path, level_name)
         os.makedirs(level_path, exist_ok=True)
 
         if verbose:
@@ -625,13 +648,17 @@ class PyramidPlanner:
         }
         zarr_dtype = dtype_map.get(str(dtype).replace('<', '').replace('>', '').replace('|', ''), '<u2')
 
+        # Use compression from level 0, or default
+        if compressor is None:
+            compressor = {"id": "zstd", "level": 5}
+
         # Write .zarray
         zarray = {
             "zarr_format": 2,
             "shape": list(shape),
             "chunks": list(chunk_shape),
             "dtype": zarr_dtype,
-            "compressor": {"id": "zstd", "level": 5},
+            "compressor": compressor,
             "fill_value": 0,
             "order": "C",
             "filters": None,
@@ -753,7 +780,7 @@ fi
 
 echo ""
 echo "All jobs complete. Updating root metadata..."
-{python_path} -c "from tensorswitch_v2.utils import update_ome_metadata_if_needed; update_ome_metadata_if_needed('{self.root_path}', use_ome_structure=True)"
+{python_path} -c "from tensorswitch_v2.utils import update_ome_metadata_if_needed; update_ome_metadata_if_needed(r'''{self.root_path}''', use_ome_structure=True)"
 
 echo ""
 echo "================================================================"
@@ -828,7 +855,7 @@ echo "All level jobs completed. Updating root metadata..."
 
 # Update OME-NGFF metadata
 cd {tensorswitch_dir}
-{python_path} -c "from tensorswitch_v2.utils import update_ome_metadata_if_needed; update_ome_metadata_if_needed('{self.root_path}', use_ome_structure=True)"
+{python_path} -c "from tensorswitch_v2.utils import update_ome_metadata_if_needed; update_ome_metadata_if_needed(r'''{self.root_path}''', use_ome_structure=True)"
 
 echo ""
 echo "=========================================="
@@ -1064,6 +1091,12 @@ echo "=========================================="
         num_levels = pyramid_plan['num_levels']
         dtype_size = pyramid_plan.get('dtype_size', 2)
 
+        # Detect level naming format
+        from tensorswitch_v2.utils.metadata_utils import detect_level_format, get_level_name
+        prefix = detect_level_format(self.root_path)
+        first_level = get_level_name(1, prefix)
+        last_level = get_level_name(num_levels, prefix)
+
         # Build the script header
         script = f"""#!/bin/bash
 set -e
@@ -1072,7 +1105,7 @@ echo "========================================================================"
 echo "CHAINED PYRAMID GENERATION"
 echo "========================================================================"
 echo "Dataset: {self.root_path}"
-echo "Levels: s1 to s{num_levels}"
+echo "Levels: {first_level} to {last_level}"
 echo "Mode: Chained (each level reads from previous level)"
 echo "Started: $(date)"
 echo ""
@@ -1157,9 +1190,10 @@ submit_and_wait() {{
             per_level_factor = level_info['per_level_factor']
             factor_str = ",".join(map(str, per_level_factor))
 
-            # Source is previous level (s0 for s1, s1 for s2, etc.)
+            # Source is previous level (0 for 1, 1 for 2, etc. - or s0 for s1 if using s-prefix)
             source_level = level - 1
-            source_path = os.path.join(self.root_path, f"s{source_level}")
+            source_level_name = get_level_name(source_level, prefix)
+            source_path = os.path.join(self.root_path, source_level_name)
             source_shape = shapes[source_level]  # Shape of source level
 
             level_shard_shape = level_info.get('shard_shape') or [1024, 1024, 1024]
@@ -1192,7 +1226,8 @@ submit_and_wait() {{
             # Enforce cluster policy: 15 GB per core minimum
             level_memory = max(level_memory, level_cores * 15)
 
-            script += f"""# s{level}: reads from s{source_level}, factor {per_level_factor}
+            level_name = get_level_name(level, prefix)
+            script += f"""# {level_name}: reads from {source_level_name}, factor {per_level_factor}
 submit_and_wait {level} "{source_path}" "{factor_str}" {level_memory} "{level_wall_time}" {level_cores} "{shard_shape_str}" "{chunk_shape_str}"
 
 """
@@ -1204,7 +1239,7 @@ echo "============================================================"
 echo "UPDATING ROOT METADATA"
 echo "============================================================"
 echo "All levels complete, updating root zarr.json..."
-{python_path} -c "from tensorswitch_v2.utils import update_ome_metadata_if_needed; update_ome_metadata_if_needed('{self.root_path}', use_ome_structure=True)"
+{python_path} -c "from tensorswitch_v2.utils import update_ome_metadata_if_needed; update_ome_metadata_if_needed(r'''{self.root_path}''', use_ome_structure=True)"
 echo "Metadata update complete."
 
 echo ""
@@ -1212,7 +1247,7 @@ echo "========================================================================"
 echo "PYRAMID GENERATION COMPLETE"
 echo "========================================================================"
 echo "Dataset: {self.root_path}"
-echo "Levels: s0 to s{num_levels}"
+echo "Levels: {get_level_name(0, prefix)} to {get_level_name(num_levels, prefix)}"
 echo "Completed: $(date)"
 echo ""
 """

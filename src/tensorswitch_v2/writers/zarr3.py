@@ -55,7 +55,7 @@ class Zarr3Writer(BaseWriter):
         compression: str = "zstd",
         compression_level: int = 5,
         use_ome_structure: bool = True,
-        level_path: str = "s0",
+        level_path: str = "0",
         include_omero: bool = False,
         use_nested_structure: bool = True,
         data_type: str = "image",
@@ -71,7 +71,7 @@ class Zarr3Writer(BaseWriter):
             compression: Compression codec ("zstd", "blosc", "gzip")
             compression_level: Compression level (1-9, default 5)
             use_ome_structure: Use OME-ZARR directory structure (s0/, s1/, etc.)
-            level_path: Level subdirectory name (default "s0")
+            level_path: Level subdirectory name (default "0")
             include_omero: Extract and include structured omero channel metadata
             use_nested_structure: Use OME-NGFF nested structure (raw/, labels/)
             data_type: 'image' or 'labels' - determines output subdirectory
@@ -200,6 +200,12 @@ class Zarr3Writer(BaseWriter):
             data_path = self.output_path
 
         # Create spec using existing utility function with 5D shape/axes
+        # Build compression codec from writer settings
+        compression_codec = {
+            'name': self.compression,
+            'configuration': {'level': self.compression_level}
+        }
+
         spec = zarr3_store_spec(
             path=data_path,
             shape=shape_list,
@@ -211,7 +217,8 @@ class Zarr3Writer(BaseWriter):
             custom_chunk_shape=custom_chunk_shape,
             use_v2_encoding=False,
             use_fortran_order=use_fortran_order,
-            axes_order=expanded_axes
+            axes_order=expanded_axes,
+            compression=compression_codec
         )
 
         # Add context for concurrency control

@@ -165,8 +165,10 @@ class Downsampler:
             return json.load(f)
 
     def _get_output_level_path(self) -> str:
-        """Get the output path for the target level."""
-        return os.path.join(self.output_path, f"s{self.target_level}")
+        """Get the output path for the target level, following source format."""
+        from tensorswitch_v2.utils.metadata_utils import detect_level_format
+        prefix = detect_level_format(self.output_path)
+        return os.path.join(self.output_path, f"{prefix}{self.target_level}")
 
     def downsample(
         self,
@@ -256,18 +258,45 @@ class Downsampler:
                 print(f"Using default shard shape: {shard_shape}")
 
         # Create output store spec using the ACTUAL downsampled shape from TensorStore
+        # Detect level naming format and follow it
+        from tensorswitch_v2.utils.metadata_utils import (
+            detect_level_format, get_level_name,
+            extract_compression_from_zarr3_metadata, extract_compression_from_zarr2_metadata
+        )
+        prefix = detect_level_format(self.output_path)
+        level_name = get_level_name(self.target_level, prefix)
         output_level_path = self._get_output_level_path()
+
+        # Extract compression from source metadata to inherit it
+        source_compression = None
+        if self._s0_metadata.get('_format') == 'zarr2':
+            source_compression = extract_compression_from_zarr2_metadata(
+                self._s0_metadata.get('_zarray', {})
+            )
+            # Convert zarr2 compressor format to zarr3 codec format if needed
+            if source_compression and 'id' in source_compression:
+                source_compression = {
+                    'name': source_compression['id'],
+                    'configuration': {'level': source_compression.get('level', 5)}
+                }
+        else:
+            source_compression = extract_compression_from_zarr3_metadata(self._s0_metadata)
+
+        if verbose and source_compression:
+            print(f"Inheriting compression from source: {source_compression}")
+
         output_spec = zarr3_store_spec(
             self.output_path,
             downsampled_shape,  # Use actual shape, not predicted
             s0_dtype,
             self.use_shard,
-            level_path=f"s{self.target_level}",
+            level_path=level_name,
             use_ome_structure=True,
             custom_shard_shape=shard_shape,
             custom_chunk_shape=chunk_shape,
             use_fortran_order=use_fortran_order,
-            axes_order=dimension_names
+            axes_order=dimension_names,
+            compression=source_compression
         )
         output_spec['context'] = get_tensorstore_context()
 
