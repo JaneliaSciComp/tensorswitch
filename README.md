@@ -268,6 +268,19 @@ pixi run python -m tensorswitch_v2 -i input.tif -o output.zarr \
   --voxel_size 160,160,400
 ```
 
+### Unit Handling
+
+TensorSwitch v2 follows these rules for spatial units:
+
+| Operation | Unit Behavior |
+|-----------|---------------|
+| **New conversions** (TIFF/ND2/CZI → Zarr) | Always converts to **nanometers**. Source units (µm, mm, etc.) are auto-detected and converted. |
+| **Downsampling/Pyramid** (existing Zarr → pyramid levels) | **Preserves source s0 unit** (micrometer, nanometer, etc.) for consistency. |
+
+**Examples:**
+- TIFF with 0.116 µm voxels → Zarr with `"unit": "nanometer"` and scale `[116.0, 116.0, 400.0]`
+- BigStitcher Zarr2 with `"unit": "micrometer"` → Pyramid levels keep `"unit": "micrometer"`
+
 ---
 
 ## Python API

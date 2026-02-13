@@ -15,6 +15,7 @@ Key Features:
 
 import os
 import json
+import shlex
 import subprocess
 import sys
 from typing import Optional, List, Dict, Any, Tuple
@@ -33,6 +34,46 @@ from tensorswitch_v2.utils import (
 )
 
 from .downsampler import calculate_cumulative_factors
+
+
+def extract_source_spatial_unit(root_path: str, zarr_format: str) -> str:
+    """
+    Extract the spatial unit from the root OME-NGFF metadata.
+
+    For downsampling, we preserve the source s0 unit to maintain consistency.
+
+    Args:
+        root_path: Path to the zarr root (parent of s0/0 directory)
+        zarr_format: 'zarr3' or 'zarr2'
+
+    Returns:
+        str: Spatial unit string (e.g., 'nanometer', 'micrometer').
+             Defaults to 'nanometer' if not found.
+    """
+    try:
+        if zarr_format == 'zarr3':
+            zarr_json_path = os.path.join(root_path, 'zarr.json')
+            if os.path.exists(zarr_json_path):
+                with open(zarr_json_path, 'r') as f:
+                    metadata = json.load(f)
+                axes = metadata.get('attributes', {}).get('ome', {}).get('multiscales', [{}])[0].get('axes', [])
+                for axis in axes:
+                    if axis.get('type') == 'space' and 'unit' in axis:
+                        return axis['unit']
+        else:  # zarr2
+            zattrs_path = os.path.join(root_path, '.zattrs')
+            if os.path.exists(zattrs_path):
+                with open(zattrs_path, 'r') as f:
+                    metadata = json.load(f)
+                axes = metadata.get('multiscales', [{}])[0].get('axes', [])
+                for axis in axes:
+                    if axis.get('type') == 'space' and 'unit' in axis:
+                        return axis['unit']
+    except Exception as e:
+        print(f"Warning: Could not extract source spatial unit: {e}")
+
+    # Default to nanometer for new data
+    return 'nanometer'
 
 
 def resolve_downsample_method(method: str, input_path: str) -> str:
@@ -253,6 +294,8 @@ class PyramidPlanner:
             with open(zarr_json_path, 'r') as f:
                 self._s0_metadata = json.load(f)
             self._s0_metadata['_format'] = 'zarr3'
+            # Extract source spatial unit from root metadata
+            self._s0_metadata['source_spatial_unit'] = extract_source_spatial_unit(self.root_path, 'zarr3')
             return self._s0_metadata
 
         # Try Zarr2 (.zarray + .zattrs)
@@ -261,21 +304,39 @@ class PyramidPlanner:
             with open(zarray_path, 'r') as f:
                 zarray = json.load(f)
 
-            # Load .zattrs for dimension names
+            # Load .zattrs for dimension names (check level first, then root)
             zattrs = {}
             zattrs_path = os.path.join(self.s0_path, '.zattrs')
             if os.path.exists(zattrs_path):
                 with open(zattrs_path, 'r') as f:
                     zattrs = json.load(f)
 
+            # Also check root .zattrs for OME-NGFF metadata
+            root_zattrs = {}
+            root_zattrs_path = os.path.join(self.root_path, '.zattrs')
+            if os.path.exists(root_zattrs_path):
+                with open(root_zattrs_path, 'r') as f:
+                    root_zattrs = json.load(f)
+
             # Convert Zarr2 format to unified format similar to Zarr3
             shape = zarray.get('shape', [])
             chunks = zarray.get('chunks', shape)
 
-            # Get dimension names from _ARRAY_DIMENSIONS (xarray convention)
+            # Get dimension names - try multiple sources
+            dimension_names = None
+
+            # 1. Try _ARRAY_DIMENSIONS from level .zattrs (xarray convention)
             dimension_names = zattrs.get('_ARRAY_DIMENSIONS')
+
+            # 2. Try OME-NGFF multiscales axes from root .zattrs
             if not dimension_names:
-                # Infer from shape
+                multiscales = root_zattrs.get('multiscales', [])
+                if multiscales and 'axes' in multiscales[0]:
+                    axes = multiscales[0]['axes']
+                    dimension_names = [ax.get('name', f'dim_{i}') for i, ax in enumerate(axes)]
+
+            # 3. Infer from shape as fallback
+            if not dimension_names:
                 if len(shape) == 5:
                     dimension_names = ['t', 'c', 'z', 'y', 'x']
                 elif len(shape) == 4:
@@ -284,6 +345,9 @@ class PyramidPlanner:
                     dimension_names = ['z', 'y', 'x']
                 else:
                     dimension_names = [f'dim_{i}' for i in range(len(shape))]
+
+            # Extract source spatial unit from root metadata
+            source_spatial_unit = extract_source_spatial_unit(self.root_path, 'zarr2')
 
             self._s0_metadata = {
                 '_format': 'zarr2',
@@ -295,6 +359,7 @@ class PyramidPlanner:
                     }
                 },
                 'data_type': zarray.get('dtype', 'uint16'),
+                'source_spatial_unit': source_spatial_unit,
                 # Zarr2 doesn't have sharding, use chunks as both
                 '_zarray': zarray,
                 '_zattrs': zattrs
@@ -386,6 +451,9 @@ class PyramidPlanner:
             }
             enhanced_levels.append(enhanced_level)
 
+        # Get source spatial unit for preservation during downsampling
+        source_spatial_unit = extract_source_spatial_unit(self.root_path, v1_plan['format'])
+
         return {
             'format': v1_plan['format'],
             'shape': v1_plan['shape'],
@@ -399,6 +467,7 @@ class PyramidPlanner:
             'levels': enhanced_levels,
             # Keep original v1 plan for compatibility
             'v1_pyramid_plan': v1_plan['pyramid_plan'],
+            'source_spatial_unit': source_spatial_unit,
         }
 
     def _calculate_plan_with_custom_factors(
@@ -506,6 +575,9 @@ class PyramidPlanner:
             # Update current shape for next iteration (chained mode)
             current_shape = predicted_shape
 
+        # Get source spatial unit for preservation during downsampling
+        source_spatial_unit = s0_metadata.get('source_spatial_unit', 'nanometer')
+
         return {
             'format': zarr_format,
             'shape': list(s0_shape),
@@ -518,6 +590,7 @@ class PyramidPlanner:
             'num_levels': len(per_level_factors),
             'levels': enhanced_levels,
             'custom_factors': True,  # Flag to indicate custom factors were used
+            'source_spatial_unit': source_spatial_unit,
         }
 
     def precreate_all_levels(
@@ -569,15 +642,21 @@ class PyramidPlanner:
             if verbose:
                 print(f"\nPre-creating {level_name}...")
                 print(f"  Shape: {level_info['predicted_shape']}")
-                print(f"  Shard shape: {level_info['shard_shape']}")
-                print(f"  Chunk shape: {level_info['chunk_shape']}")
+                if zarr_format == 'zarr2':
+                    # Zarr2 has no sharding, only chunks
+                    print(f"  Chunk shape: {pyramid_plan['chunk_shape']}")
+                else:
+                    # Zarr3 has both shard and inner chunk
+                    print(f"  Shard shape: {level_info['shard_shape']}")
+                    print(f"  Chunk shape: {level_info['chunk_shape']}")
 
             if zarr_format == 'zarr2':
                 # Pre-create Zarr2 level (directory + .zarray + .zattrs)
+                # Zarr2 has no sharding - use chunk_shape from plan
                 self._precreate_zarr2_level(
                     level=level,
                     shape=level_info['predicted_shape'],
-                    chunk_shape=level_info['chunk_shape'],
+                    chunk_shape=pyramid_plan['chunk_shape'],
                     dtype=dtype,
                     axes_names=pyramid_plan['axes_names'],
                     prefix=prefix,
@@ -586,12 +665,15 @@ class PyramidPlanner:
                 )
             else:
                 # Use Zarr3 precreation with inherited compression
+                # Fall back to plan's top-level shapes if level-specific not set
+                level_shard = level_info.get('shard_shape') or pyramid_plan.get('shard_shape')
+                level_chunk = level_info.get('chunk_shape') or pyramid_plan.get('chunk_shape')
                 precreate_zarr3_output(
                     output_path=self.root_path,
                     level=level,
                     output_shape=level_info['predicted_shape'],
-                    shard_shape=level_info['shard_shape'] if use_shard else level_info['chunk_shape'],
-                    chunk_shape=level_info['chunk_shape'],
+                    shard_shape=level_shard if use_shard else level_chunk,
+                    chunk_shape=level_chunk,
                     dtype=dtype,
                     use_ome_structure=True,
                     use_v2_encoding=False,
@@ -640,13 +722,19 @@ class PyramidPlanner:
         if verbose:
             print(f"  Creating Zarr2 level at: {level_path}")
 
-        # Normalize dtype to Zarr2 format
-        dtype_map = {
-            'uint8': '|u1', 'uint16': '<u2', 'uint32': '<u4', 'uint64': '<u8',
-            'int8': '|i1', 'int16': '<i2', 'int32': '<i4', 'int64': '<i8',
-            'float32': '<f4', 'float64': '<f8',
-        }
-        zarr_dtype = dtype_map.get(str(dtype).replace('<', '').replace('>', '').replace('|', ''), '<u2')
+        # Use dtype from source - preserve endianness if already in Zarr2 format
+        dtype_str = str(dtype)
+        if dtype_str.startswith(('<', '>', '|')):
+            # Already in Zarr2 format (e.g., '>u2', '<u2', '|u1'), use as-is
+            zarr_dtype = dtype_str
+        else:
+            # Convert numpy-style dtype to Zarr2 format (default to little-endian)
+            dtype_map = {
+                'uint8': '|u1', 'uint16': '<u2', 'uint32': '<u4', 'uint64': '<u8',
+                'int8': '|i1', 'int16': '<i2', 'int32': '<i4', 'int64': '<i8',
+                'float32': '<f4', 'float64': '<f8',
+            }
+            zarr_dtype = dtype_map.get(dtype_str, '<u2')
 
         # Use compression from level 0, or default
         if compressor is None:
@@ -706,6 +794,12 @@ class PyramidPlanner:
             os.path.dirname(os.path.abspath(__file__)))))
         python_path = sys.executable
 
+        # Quote paths for safe shell usage (handles spaces)
+        q_tensorswitch_dir = shlex.quote(tensorswitch_dir)
+        q_python_path = shlex.quote(python_path)
+        q_root_path = shlex.quote(self.root_path)
+        q_s0_path = shlex.quote(self.s0_path)
+
         script = f"""#!/bin/bash
 set -e
 
@@ -725,16 +819,19 @@ ALL_JOB_IDS=""
         for level_info in pyramid_plan['levels']:
             level = level_info['level']
             cumulative_factors = ",".join(map(str, level_info['cumulative_factor']))
-            shard_shape = ",".join(map(str, level_info['shard_shape'])) if level_info.get('shard_shape') else ""
-            chunk_shape = ",".join(map(str, level_info['chunk_shape'])) if level_info.get('chunk_shape') else ""
+            # Use level-specific shape, or fall back to plan's top-level shape (preserves source dimensions)
+            level_shard = level_info.get('shard_shape') or pyramid_plan.get('shard_shape') or []
+            level_chunk = level_info.get('chunk_shape') or pyramid_plan.get('chunk_shape') or []
+            shard_shape = ",".join(map(str, level_shard)) if level_shard else ""
+            chunk_shape = ",".join(map(str, level_chunk)) if level_chunk else ""
 
             script += f"""
 # Submit s{level} (directly from s0 with cumulative factor {level_info['cumulative_factor']})
 echo "Submitting s{level}..."
-S{level}_OUTPUT=$(cd {tensorswitch_dir} && {python_path} -m tensorswitch_v2 \\
+S{level}_OUTPUT=$(cd {q_tensorswitch_dir} && {q_python_path} -m tensorswitch_v2 \\
     --downsample \\
-    -i "{self.s0_path}" \\
-    -o "{self.root_path}" \\
+    -i {q_s0_path} \\
+    -o {q_root_path} \\
     --target_level {level} \\
     --cumulative_factors "{cumulative_factors}" \\
     --use_shard {1 if use_shard else 0} \\
@@ -780,7 +877,7 @@ fi
 
 echo ""
 echo "All jobs complete. Updating root metadata..."
-{python_path} -c "from tensorswitch_v2.utils import update_ome_metadata_if_needed; update_ome_metadata_if_needed(r'''{self.root_path}''', use_ome_structure=True)"
+{q_python_path} -c "from tensorswitch_v2.utils import update_ome_metadata_if_needed; update_ome_metadata_if_needed({q_root_path}, use_ome_structure=True)"
 
 echo ""
 echo "================================================================"
@@ -837,6 +934,11 @@ echo "================================================================"
         # Write script to shared filesystem (not /tmp which is local)
         script_path = os.path.join(log_dir, f"coordinator_{dataset_name}.sh")
 
+        # Quote paths for safe shell usage (handles spaces)
+        q_tensorswitch_dir = shlex.quote(tensorswitch_dir)
+        q_python_path = shlex.quote(python_path)
+        q_root_path = shlex.quote(self.root_path)
+
         coordinator_script = f"""#!/bin/bash
 set -e
 
@@ -854,8 +956,8 @@ echo ""
 echo "All level jobs completed. Updating root metadata..."
 
 # Update OME-NGFF metadata
-cd {tensorswitch_dir}
-{python_path} -c "from tensorswitch_v2.utils import update_ome_metadata_if_needed; update_ome_metadata_if_needed(r'''{self.root_path}''', use_ome_structure=True)"
+cd {q_tensorswitch_dir}
+{q_python_path} -c "from tensorswitch_v2.utils import update_ome_metadata_if_needed; update_ome_metadata_if_needed({q_root_path}, use_ome_structure=True)"
 
 echo ""
 echo "=========================================="
@@ -868,6 +970,7 @@ echo "=========================================="
         os.chmod(script_path, 0o755)
 
         # Submit coordinator job
+        # Use /bin/bash to run script - handles paths with spaces properly
         bsub_cmd = [
             "bsub",
             "-J", job_name,
@@ -877,7 +980,7 @@ echo "=========================================="
             "-P", project,
             "-o", log_path,
             "-e", error_path,
-            script_path
+            "/bin/bash", script_path
         ]
 
         if verbose:
@@ -991,7 +1094,7 @@ echo "=========================================="
             level = level_info['level']
             source_shape = shapes[level - 1]
             level_shape = level_info['predicted_shape']
-            level_shard_shape = level_info.get('shard_shape') or [1, 1, 1024, 1024, 1024]
+            level_shard_shape = level_info.get('shard_shape') or pyramid_plan.get('shard_shape') or [1, 1, 1024, 1024, 1024]
 
             if wall_time is None:
                 level_wall_time = _calculate_downsample_wall_time(
@@ -1015,6 +1118,9 @@ echo "=========================================="
         log_path = os.path.join(log_dir, f"output__{job_name}_%J.log")
         error_path = os.path.join(log_dir, f"error__{job_name}_%J.log")
 
+        # Use /bin/bash to run script - handles paths with spaces properly
+        # When bsub creates wrapper script, it writes args verbatim; bash properly
+        # handles the quoted script path as an argument
         bsub_cmd = [
             "bsub",
             "-J", job_name,
@@ -1025,7 +1131,7 @@ echo "=========================================="
             "-P", project,
             "-o", log_path,
             "-e", error_path,
-            script_path
+            "/bin/bash", script_path
         ]
 
         if verbose:
@@ -1088,6 +1194,11 @@ echo "=========================================="
             os.path.dirname(os.path.abspath(__file__)))))
         python_path = sys.executable
 
+        # Quote paths for safe shell usage (handles spaces)
+        q_tensorswitch_dir = shlex.quote(tensorswitch_dir)
+        q_python_path = shlex.quote(python_path)
+        q_root_path = shlex.quote(self.root_path)
+
         num_levels = pyramid_plan['num_levels']
         dtype_size = pyramid_plan.get('dtype_size', 2)
 
@@ -1134,10 +1245,10 @@ submit_and_wait() {{
     echo "  Memory: ${{mem}}GB, Wall time: $wtime, Cores: $ncores"
     echo "  Submitting..."
 
-    output=$(cd {tensorswitch_dir} && {python_path} -m tensorswitch_v2 \\
+    output=$(cd {q_tensorswitch_dir} && {q_python_path} -m tensorswitch_v2 \\
         --downsample \\
         -i "$source_path" \\
-        -o "{self.root_path}" \\
+        -o {q_root_path} \\
         --target_level $level \\
         --cumulative_factors "$factor" \\
         --use_shard {1 if use_shard else 0} \\
@@ -1196,8 +1307,9 @@ submit_and_wait() {{
             source_path = os.path.join(self.root_path, source_level_name)
             source_shape = shapes[source_level]  # Shape of source level
 
-            level_shard_shape = level_info.get('shard_shape') or [1024, 1024, 1024]
-            level_chunk_shape = level_info.get('chunk_shape') or [256, 256, 256]
+            # Use level-specific shape, or fall back to plan's top-level shape (preserves source dimensions)
+            level_shard_shape = level_info.get('shard_shape') or pyramid_plan.get('shard_shape') or [1024, 1024, 1024]
+            level_chunk_shape = level_info.get('chunk_shape') or pyramid_plan.get('chunk_shape') or [256, 256, 256]
             level_shape = level_info['predicted_shape']
 
             shard_shape_str = ",".join(map(str, level_shard_shape))
@@ -1239,7 +1351,7 @@ echo "============================================================"
 echo "UPDATING ROOT METADATA"
 echo "============================================================"
 echo "All levels complete, updating root zarr.json..."
-{python_path} -c "from tensorswitch_v2.utils import update_ome_metadata_if_needed; update_ome_metadata_if_needed(r'''{self.root_path}''', use_ome_structure=True)"
+{q_python_path} -c "from tensorswitch_v2.utils import update_ome_metadata_if_needed; update_ome_metadata_if_needed({q_root_path}, use_ome_structure=True)"
 echo "Metadata update complete."
 
 echo ""
@@ -1289,6 +1401,7 @@ echo ""
         print(f"Format: {pyramid_plan['format']}")
         print(f"s0 shape: {pyramid_plan['shape']}")
         print(f"s0 voxel sizes: {pyramid_plan['voxel_sizes']}")
+        print(f"Source spatial unit: {pyramid_plan.get('source_spatial_unit', 'nanometer')} (preserved)")
         print(f"Dimension names: {pyramid_plan['axes_names']}")
         print(f"Shard shape: {pyramid_plan.get('shard_shape')}")
         print(f"Chunk shape: {pyramid_plan['chunk_shape']}")
