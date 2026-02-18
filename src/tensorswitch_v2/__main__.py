@@ -694,8 +694,8 @@ def create_writer(args, data_type: str = 'image'):
     if level_path == "s0" and fmt == "zarr2":
         level_path = "0"  # Default to numeric paths for OME-NGFF viewer compatibility
 
-    # Determine if we should use nested structure
-    use_nested = getattr(args, 'use_nested_structure', True) and fmt == "zarr3"
+    # Determine if we should use nested structure (enabled by default for zarr3 and zarr2)
+    use_nested = getattr(args, 'use_nested_structure', True) and fmt in ["zarr3", "zarr2"]
     image_key = getattr(args, 'image_key', 'raw')
     label_key = getattr(args, 'label_key', 'segmentation')
 
@@ -719,6 +719,10 @@ def create_writer(args, data_type: str = 'image'):
             compression_level=args.compression_level,
             level_path=level_path,
             include_omero=getattr(args, 'omero', False),
+            use_nested_structure=use_nested,
+            data_type=data_type,
+            image_key=image_key,
+            label_key=label_key,
         )
     elif fmt == "n5":
         return Writers.n5(

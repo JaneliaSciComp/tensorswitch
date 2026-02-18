@@ -630,3 +630,246 @@ class OMEStructure:
         # Write back
         with open(metadata_path, 'w') as f:
             json.dump(metadata, f, indent=2)
+
+
+# ============================================================================
+# Zarr2 OME Structure
+# ============================================================================
+
+@dataclass
+class OMEStructureZarr2Config:
+    """Configuration for Zarr2 OME-NGFF structure."""
+    image_key: str = 'raw'  # Name for image group
+    labels_container: str = 'labels'  # Name for labels container
+    label_name: str = 'segmentation'  # Name for the label image
+    ome_version: str = '0.4'  # OME-NGFF version for Zarr2
+
+
+class OMEStructureZarr2:
+    """
+    Manages OME-NGFF compliant directory structure and metadata for Zarr2 format.
+
+    Zarr2 uses .zgroup and .zattrs files instead of zarr.json.
+    OME metadata is at top level of .zattrs (not nested under attributes.ome).
+
+    Structure:
+        output.zarr/
+        ├── .zgroup                   # {"zarr_format": 2}
+        ├── .zattrs                   # multiscales + labels list
+        ├── raw/
+        │   ├── .zgroup
+        │   ├── .zattrs               # image multiscales
+        │   └── 0/, 1/...             # Pyramid levels (numeric for Zarr2)
+        └── labels/
+            ├── .zgroup
+            ├── .zattrs               # {"labels": ["segmentation"]}
+            └── segmentation/
+                ├── .zgroup
+                ├── .zattrs           # multiscales + image-label
+                └── 0/, 1/...         # Pyramid levels
+    """
+
+    def __init__(
+        self,
+        output_path: str,
+        config: Optional[OMEStructureZarr2Config] = None
+    ):
+        self.output_path = os.path.abspath(output_path)
+        self.config = config or OMEStructureZarr2Config()
+
+    # ========================================================================
+    # Path Methods
+    # ========================================================================
+
+    def get_image_data_path(self) -> str:
+        """Get path where image data should be written."""
+        return os.path.join(self.output_path, self.config.image_key)
+
+    def get_label_data_path(self, label_name: Optional[str] = None) -> str:
+        """Get path where label data should be written."""
+        name = label_name or self.config.label_name
+        return os.path.join(
+            self.output_path,
+            self.config.labels_container,
+            name
+        )
+
+    def get_labels_container_path(self) -> str:
+        """Get path to labels container directory."""
+        return os.path.join(self.output_path, self.config.labels_container)
+
+    # ========================================================================
+    # Metadata Creation (Zarr2 format)
+    # ========================================================================
+
+    def _write_zgroup(self, path: str) -> None:
+        """Write .zgroup file."""
+        zgroup_path = os.path.join(path, '.zgroup')
+        os.makedirs(path, exist_ok=True)
+        with open(zgroup_path, 'w') as f:
+            json.dump({"zarr_format": 2}, f, indent=2)
+
+    def _write_zattrs(self, path: str, attrs: Dict) -> None:
+        """Write .zattrs file."""
+        zattrs_path = os.path.join(path, '.zattrs')
+        os.makedirs(path, exist_ok=True)
+        with open(zattrs_path, 'w') as f:
+            json.dump(attrs, f, indent=2)
+
+    def create_image_multiscales_metadata(
+        self,
+        axes: List[Dict],
+        datasets: List[Dict],
+        name: str = 'image'
+    ) -> Dict:
+        """Create multiscales metadata for image data (Zarr2 format)."""
+        return {
+            "multiscales": [{
+                "version": self.config.ome_version,
+                "name": name,
+                "axes": axes,
+                "datasets": datasets
+            }]
+        }
+
+    def create_labels_container_metadata(
+        self,
+        label_names: Optional[List[str]] = None
+    ) -> Dict:
+        """Create metadata for labels container directory."""
+        names = label_names or [self.config.label_name]
+        return {"labels": names}
+
+    def create_label_image_metadata(
+        self,
+        axes: List[Dict],
+        datasets: List[Dict],
+        name: str = 'segmentation',
+        colors: Optional[List[Dict]] = None,
+        source_image_path: Optional[str] = None,
+        num_default_colors: int = 256
+    ) -> Dict:
+        """Create metadata for label image with image-label section."""
+        metadata = {
+            "multiscales": [{
+                "version": self.config.ome_version,
+                "name": name,
+                "axes": axes,
+                "datasets": datasets
+            }]
+        }
+
+        # Generate colors if not provided
+        if colors is None:
+            from .metadata_utils import generate_default_label_colors
+            colors = generate_default_label_colors(num_default_colors)
+
+        # Add image-label section
+        image_label = {
+            'version': self.config.ome_version,
+            'colors': colors
+        }
+
+        if source_image_path:
+            image_label['source'] = {'image': source_image_path}
+
+        metadata['image-label'] = image_label
+
+        return metadata
+
+    def create_root_metadata(
+        self,
+        image_multiscales: Optional[Dict] = None,
+        has_labels: bool = False,
+        image_name: str = 'image'
+    ) -> Dict:
+        """Create root .zattrs metadata."""
+        metadata = {}
+
+        if image_multiscales:
+            # Adjust paths to include image_key prefix
+            adjusted_datasets = []
+            for ds in image_multiscales.get('datasets', []):
+                new_ds = ds.copy()
+                original_path = ds.get('path', '0')
+                new_ds['path'] = f"{self.config.image_key}/{original_path}"
+                adjusted_datasets.append(new_ds)
+
+            metadata['multiscales'] = [{
+                'version': self.config.ome_version,
+                'name': image_name,
+                'axes': image_multiscales.get('axes', []),
+                'datasets': adjusted_datasets
+            }]
+
+        if has_labels:
+            metadata['labels'] = [self.config.labels_container]
+
+        return metadata
+
+    # ========================================================================
+    # Metadata Writing
+    # ========================================================================
+
+    def write_image_metadata(
+        self,
+        multiscales: Dict,
+        name: str = 'image'
+    ) -> None:
+        """Write image metadata to image group .zattrs."""
+        path = self.get_image_data_path()
+        self._write_zgroup(path)
+        metadata = self.create_image_multiscales_metadata(
+            axes=multiscales.get('axes', []),
+            datasets=multiscales.get('datasets', []),
+            name=name
+        )
+        self._write_zattrs(path, metadata)
+
+    def write_labels_container_metadata(
+        self,
+        label_names: Optional[List[str]] = None
+    ) -> None:
+        """Write labels container metadata."""
+        path = self.get_labels_container_path()
+        self._write_zgroup(path)
+        metadata = self.create_labels_container_metadata(label_names)
+        self._write_zattrs(path, metadata)
+
+    def write_label_image_metadata(
+        self,
+        multiscales: Dict,
+        name: str = 'segmentation',
+        colors: Optional[List[Dict]] = None,
+        source_image_path: Optional[str] = None,
+        label_name: Optional[str] = None
+    ) -> None:
+        """Write label image metadata."""
+        if source_image_path is None:
+            source_image_path = f"../../{self.config.image_key}"
+
+        path = self.get_label_data_path(label_name)
+        self._write_zgroup(path)
+        metadata = self.create_label_image_metadata(
+            axes=multiscales.get('axes', []),
+            datasets=multiscales.get('datasets', []),
+            name=name,
+            colors=colors,
+            source_image_path=source_image_path
+        )
+        self._write_zattrs(path, metadata)
+
+    def write_root_metadata(
+        self,
+        image_multiscales: Optional[Dict] = None,
+        has_labels: bool = False,
+        image_name: str = 'image'
+    ) -> None:
+        """Write root .zattrs metadata."""
+        self._write_zgroup(self.output_path)
+        metadata = self.create_root_metadata(
+            image_multiscales=image_multiscales,
+            has_labels=has_labels,
+            image_name=image_name
+        )
+        self._write_zattrs(self.output_path, metadata)

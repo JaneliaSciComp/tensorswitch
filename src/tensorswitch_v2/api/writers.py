@@ -123,6 +123,10 @@ class Writers:
         compression_level: int = 5,
         level_path: str = "0",
         include_omero: bool = False,
+        use_nested_structure: bool = True,
+        data_type: str = 'image',
+        image_key: str = 'raw',
+        label_key: str = 'segmentation',
         **kwargs
     ) -> BaseWriter:
         """
@@ -139,6 +143,10 @@ class Writers:
             compression: Compression codec ('blosc', 'gzip', 'zstd', 'none')
             compression_level: Compression level (1-9, default: 5)
             level_path: Level subdirectory name (default: "0" for OME-NGFF compatibility)
+            use_nested_structure: Use OME-NGFF nested directory structure (default: True)
+            data_type: Type of data ('image' or 'labels')
+            image_key: Name for image group in nested structure (default: 'raw')
+            label_key: Name for label image in nested structure (default: 'segmentation')
             **kwargs: Additional format-specific options
 
         Returns:
@@ -166,7 +174,11 @@ class Writers:
             compression=compression,
             compression_level=compression_level,
             level_path=level_path,
-            include_omero=include_omero
+            include_omero=include_omero,
+            use_nested_structure=use_nested_structure,
+            data_type=data_type,
+            image_key=image_key,
+            label_key=label_key
         )
 
     @staticmethod

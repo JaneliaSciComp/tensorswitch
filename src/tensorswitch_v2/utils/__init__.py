@@ -44,6 +44,7 @@ from .metadata_utils import (
     precreate_shard_directories,
     precreate_zarr3_metadata_safely,
     extract_omero_channels,
+    generate_default_label_colors,
 )
 
 from .pyramid_utils import (
@@ -66,6 +67,8 @@ from .format_loaders import (
 from .ome_structure import (
     OMEStructure,
     OMEStructureConfig,
+    OMEStructureZarr2,
+    OMEStructureZarr2Config,
 )
 
 from .folder_discovery import (
@@ -103,6 +106,7 @@ __all__ = [
     'precreate_shard_directories',
     'precreate_zarr3_metadata_safely',
     'extract_omero_channels',
+    'generate_default_label_colors',
     # Pyramid utilities
     'calculate_pyramid_plan',
     'calculate_anisotropic_downsample_factors',
@@ -119,6 +123,8 @@ __all__ = [
     # OME-NGFF structure
     'OMEStructure',
     'OMEStructureConfig',
+    'OMEStructureZarr2',
+    'OMEStructureZarr2Config',
     # Folder discovery
     'discover_datasets',
     'is_neuroglancer_precomputed',

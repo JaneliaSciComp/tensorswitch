@@ -877,7 +877,7 @@ fi
 
 echo ""
 echo "All jobs complete. Updating root metadata..."
-{q_python_path} -c "from tensorswitch_v2.utils import update_ome_metadata_if_needed; update_ome_metadata_if_needed({q_root_path}, use_ome_structure=True)"
+{q_python_path} -c "from tensorswitch_v2.utils import update_ome_metadata_if_needed; update_ome_metadata_if_needed({repr(self.root_path)}, use_ome_structure=True)"
 
 echo ""
 echo "================================================================"
@@ -957,7 +957,7 @@ echo "All level jobs completed. Updating root metadata..."
 
 # Update OME-NGFF metadata
 cd {q_tensorswitch_dir}
-{q_python_path} -c "from tensorswitch_v2.utils import update_ome_metadata_if_needed; update_ome_metadata_if_needed({q_root_path}, use_ome_structure=True)"
+{q_python_path} -c "from tensorswitch_v2.utils import update_ome_metadata_if_needed; update_ome_metadata_if_needed({repr(self.root_path)}, use_ome_structure=True)"
 
 echo ""
 echo "=========================================="
@@ -1351,7 +1351,7 @@ echo "============================================================"
 echo "UPDATING ROOT METADATA"
 echo "============================================================"
 echo "All levels complete, updating root zarr.json..."
-{q_python_path} -c "from tensorswitch_v2.utils import update_ome_metadata_if_needed; update_ome_metadata_if_needed({q_root_path}, use_ome_structure=True)"
+{q_python_path} -c "from tensorswitch_v2.utils import update_ome_metadata_if_needed; update_ome_metadata_if_needed({repr(self.root_path)}, use_ome_structure=True)"
 echo "Metadata update complete."
 
 echo ""

@@ -20,6 +20,7 @@ from ..utils import (
     zarr2_store_spec,
     get_tensorstore_context,
     extract_omero_channels,
+    generate_default_label_colors,
 )
 
 
@@ -56,7 +57,11 @@ class Zarr2Writer(BaseWriter):
         compression: str = "zstd",
         compression_level: int = 5,
         level_path: str = "0",
-        include_omero: bool = False
+        include_omero: bool = False,
+        use_nested_structure: bool = False,
+        data_type: str = 'image',
+        image_key: str = 'raw',
+        label_key: str = 'segmentation'
     ):
         """
         Initialize Zarr2 writer.
@@ -67,6 +72,10 @@ class Zarr2Writer(BaseWriter):
             compression_level: Compression level (1-9, default 5)
             level_path: Level subdirectory name (default "0" for OME-NGFF compatibility)
             include_omero: Extract and include structured omero channel metadata
+            use_nested_structure: Use OME-NGFF nested directory structure (raw/, labels/)
+            data_type: Type of data being written ('image' or 'labels')
+            image_key: Name for image group in nested structure
+            label_key: Name for label image in nested structure
         """
         super().__init__(output_path)
         self.compression = compression
@@ -80,6 +89,19 @@ class Zarr2Writer(BaseWriter):
         self._expanded_axes = None  # Store expanded 5D axes
         # Axis reordering (for precomputed XYZC -> CXYZ)
         self._transpose_order = None
+        # OME-NGFF nested structure support
+        self.use_nested_structure = use_nested_structure
+        self.data_type = data_type
+        self.image_key = image_key
+        self.label_key = label_key
+        self._ome_structure = None
+        if use_nested_structure:
+            from ..utils.ome_structure import OMEStructureZarr2, OMEStructureZarr2Config
+            config = OMEStructureZarr2Config(
+                image_key=image_key,
+                label_name=label_key
+            )
+            self._ome_structure = OMEStructureZarr2(output_path, config)
 
     def supports_sharding(self) -> bool:
         """Zarr2 does NOT support sharding."""
@@ -580,6 +602,7 @@ class Zarr2Writer(BaseWriter):
         array_shape: Optional[Tuple[int, ...]] = None,
         axes_order: Optional[List[str]] = None,
         ome_xml: Optional[str] = None,
+        is_label: bool = False,
         **kwargs
     ) -> None:
         """
@@ -594,6 +617,7 @@ class Zarr2Writer(BaseWriter):
             array_shape: Array shape (ignored - uses 5D expanded shape)
             axes_order: Axis names (ignored - always uses 5D TCZYX)
             ome_xml: Raw OME-XML string (stored in attributes if provided)
+            is_label: If True, add OME-NGFF image-label metadata for segmentation data
             **kwargs: Additional arguments (ignored for compatibility)
         """
         # ALWAYS use 5D expanded shape and axes for metadata
@@ -613,13 +637,37 @@ class Zarr2Writer(BaseWriter):
         axes_order = self._expanded_axes or ['t', 'c', 'z', 'y', 'x']
         print(f"Zarr2 metadata: using 5D expanded axes: {axes_order}")
 
-        # Always rebuild metadata for 5D format
+        # Handle nested structure metadata (like Zarr3Writer)
+        if self.use_nested_structure and self._ome_structure:
+            self._write_nested_metadata(
+                array_shape=array_shape,
+                axes_order=axes_order,
+                voxel_sizes=voxel_sizes,
+                image_name=image_name,
+                ome_xml=ome_xml,
+                is_label=is_label
+            )
+            return
+
+        # Legacy: write single metadata file at output_path
         ome_metadata = self._build_zarr2_ome_metadata(
             array_shape=array_shape,
             voxel_sizes=voxel_sizes,
             image_name=image_name,
             axes_order=axes_order
         )
+
+        # Add image-label metadata for segmentation data
+        if is_label:
+            label_colors = generate_default_label_colors(256)
+            ome_metadata['image-label'] = {
+                'version': '0.4',
+                'colors': label_colors,
+                'source': {
+                    'image': '../../raw'  # Standard relative path to source image
+                }
+            }
+            print(f"Zarr2 metadata: added image-label with 256 colors")
 
         # Add omero channel metadata if requested
         if self.include_omero and ome_xml:
@@ -645,6 +693,94 @@ class Zarr2Writer(BaseWriter):
             json.dump(ome_metadata, f, indent=2)
 
         print(f"Zarr2 metadata written to {self.output_path}")
+
+    def _write_nested_metadata(
+        self,
+        array_shape: Tuple[int, ...],
+        axes_order: List[str],
+        voxel_sizes: Optional[Dict[str, float]],
+        image_name: str,
+        ome_xml: Optional[str],
+        is_label: bool
+    ) -> None:
+        """
+        Write metadata for OME-NGFF nested structure (Zarr2 format).
+
+        Creates metadata at all required levels:
+        - Data group (raw/.zattrs or labels/segmentation/.zattrs)
+        - Labels container (labels/.zattrs) if writing labels
+        - Root (.zattrs)
+        """
+        # Build axes list for metadata
+        axes = []
+        for axis_name in axes_order:
+            axis_lower = axis_name.lower()
+            if axis_lower in ['x', 'y', 'z']:
+                axes.append({'name': axis_lower, 'type': 'space', 'unit': 'nanometer'})
+            elif axis_lower in ['c', 'channel']:
+                axes.append({'name': 'c', 'type': 'channel'})
+            elif axis_lower in ['t', 'v']:
+                axes.append({'name': 't', 'type': 'time', 'unit': 'millisecond'})
+            else:
+                axes.append({'name': axis_lower, 'type': 'space'})
+
+        # Build scale factors from voxel sizes
+        scale_factors = []
+        for axis_name in axes_order:
+            axis_lower = axis_name.lower()
+            if voxel_sizes and axis_lower in voxel_sizes:
+                scale_factors.append(voxel_sizes[axis_lower])
+            elif voxel_sizes and axis_lower in ['c', 'channel', 't', 'v']:
+                scale_factors.append(1.0)
+            else:
+                scale_factors.append(1.0)
+
+        # Build datasets list (just level 0 for now, downsampling adds more)
+        datasets = [{
+            'path': self.level_path,
+            'coordinateTransformations': [{'type': 'scale', 'scale': scale_factors}]
+        }]
+
+        multiscales = {'axes': axes, 'datasets': datasets}
+
+        if self.data_type == 'labels' or is_label:
+            # Writing labels
+            label_colors = generate_default_label_colors(256)
+
+            # Write label image metadata (includes image-label)
+            self._ome_structure.write_label_image_metadata(
+                multiscales=multiscales,
+                name=image_name,
+                colors=label_colors,
+                source_image_path=f"../../{self.image_key}"
+            )
+
+            # Write labels container metadata
+            self._ome_structure.write_labels_container_metadata()
+
+            # Write root metadata (labels only)
+            self._ome_structure.write_root_metadata(
+                image_multiscales=None,
+                has_labels=True,
+                image_name=image_name
+            )
+
+            print(f"Wrote nested labels metadata to {self.output_path}")
+        else:
+            # Writing image
+            self._ome_structure.write_image_metadata(
+                multiscales=multiscales,
+                name=image_name
+            )
+
+            # Write root metadata (image only)
+            self._ome_structure.write_root_metadata(
+                image_multiscales=multiscales,
+                has_labels=False,
+                image_name=image_name
+            )
+
+            print(f"Wrote nested image metadata to {self.output_path}")
 
     def _build_zarr2_ome_metadata(
         self,

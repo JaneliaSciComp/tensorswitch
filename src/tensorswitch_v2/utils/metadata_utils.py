@@ -526,6 +526,116 @@ def update_ome_multiscale_metadata_zarr2(zarr_path, max_level=4, prefix=None):
 
     print(f"Updated Zarr2 OME metadata with {len(datasets)} levels")
 
+    # Create parent group metadata for nested OME-NGFF structure
+    _create_zarr2_parent_metadata(zarr_path, metadata)
+
+
+def _create_zarr2_parent_metadata(zarr_path, child_metadata):
+    """
+    Create parent .zgroup and .zattrs files for Zarr2 nested OME-NGFF structure.
+
+    When updating metadata at a nested path like 'labels/segmentation', this creates:
+    - labels/.zgroup and labels/.zattrs (with labels list)
+    - root/.zgroup and root/.zattrs (with multiscales pointing to raw + labels list)
+
+    Args:
+        zarr_path: Path to the zarr directory being updated (e.g., .../labels/segmentation)
+        child_metadata: The metadata dict of the child (used to extract info)
+    """
+    import os
+
+    # Get absolute path and check parent structure
+    abs_path = os.path.abspath(zarr_path)
+    parent_dir = os.path.dirname(abs_path)
+    grandparent_dir = os.path.dirname(parent_dir)
+    child_name = os.path.basename(abs_path)
+    parent_name = os.path.basename(parent_dir)
+
+    # Check if this is a labels path (parent named 'labels')
+    if parent_name == 'labels':
+        # Create labels container metadata
+        labels_zgroup = os.path.join(parent_dir, '.zgroup')
+        labels_zattrs = os.path.join(parent_dir, '.zattrs')
+
+        if not os.path.exists(labels_zgroup):
+            with open(labels_zgroup, 'w') as f:
+                json.dump({"zarr_format": 2}, f, indent=2)
+            print(f"Created labels/.zgroup")
+
+        # Create or update labels/.zattrs with labels list
+        labels_list = [child_name]
+        if os.path.exists(labels_zattrs):
+            with open(labels_zattrs, 'r') as f:
+                existing = json.load(f)
+            existing_labels = existing.get('labels', [])
+            if child_name not in existing_labels:
+                labels_list = existing_labels + [child_name]
+            else:
+                labels_list = existing_labels
+        with open(labels_zattrs, 'w') as f:
+            json.dump({"labels": labels_list}, f, indent=2)
+        print(f"Updated labels/.zattrs with labels: {labels_list}")
+
+        # Create root metadata
+        root_zgroup = os.path.join(grandparent_dir, '.zgroup')
+        root_zattrs = os.path.join(grandparent_dir, '.zattrs')
+
+        if not os.path.exists(root_zgroup):
+            with open(root_zgroup, 'w') as f:
+                json.dump({"zarr_format": 2}, f, indent=2)
+            print(f"Created root .zgroup")
+
+        # Update root .zattrs to include labels list
+        if os.path.exists(root_zattrs):
+            with open(root_zattrs, 'r') as f:
+                root_attrs = json.load(f)
+        else:
+            root_attrs = {}
+
+        if 'labels' not in root_attrs:
+            root_attrs['labels'] = [parent_name]  # "labels"
+            with open(root_zattrs, 'w') as f:
+                json.dump(root_attrs, f, indent=2)
+            print(f"Updated root .zattrs with labels reference")
+
+    # Check if this is an image path (named 'raw' or sibling to 'labels')
+    elif child_name == 'raw' or os.path.exists(os.path.join(parent_dir, 'labels')):
+        # Create root metadata
+        root_zgroup = os.path.join(parent_dir, '.zgroup')
+        root_zattrs = os.path.join(parent_dir, '.zattrs')
+
+        if not os.path.exists(root_zgroup):
+            with open(root_zgroup, 'w') as f:
+                json.dump({"zarr_format": 2}, f, indent=2)
+            print(f"Created root .zgroup")
+
+        # Update root .zattrs with image multiscales
+        if os.path.exists(root_zattrs):
+            with open(root_zattrs, 'r') as f:
+                root_attrs = json.load(f)
+        else:
+            root_attrs = {}
+
+        # If we have multiscales in child, create root multiscales with adjusted paths
+        if 'multiscales' in child_metadata:
+            ms = child_metadata['multiscales'][0].copy()
+            # Adjust dataset paths to include the image directory name
+            adjusted_datasets = []
+            for ds in ms.get('datasets', []):
+                new_ds = ds.copy()
+                new_ds['path'] = f"{child_name}/{ds['path']}"
+                adjusted_datasets.append(new_ds)
+            ms['datasets'] = adjusted_datasets
+            root_attrs['multiscales'] = [ms]
+
+        # Check if labels directory exists
+        if os.path.exists(os.path.join(parent_dir, 'labels')):
+            root_attrs['labels'] = ['labels']
+
+        with open(root_zattrs, 'w') as f:
+            json.dump(root_attrs, f, indent=2)
+        print(f"Updated root .zattrs")
+
 
 def update_ome_metadata_if_needed(output_path, use_ome_structure):
     """
