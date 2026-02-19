@@ -30,6 +30,8 @@ from dataclasses import dataclass, field
 from typing import List, Tuple, Optional, Dict
 from pathlib import Path
 
+from ..utils.resource_utils import calculate_job_resources
+
 # Set team permissions: rwxrwxr-x (files get rw-rw-r--)
 os.umask(0o0002)
 
@@ -932,9 +934,9 @@ def submit_discovered_folder_lsf(
     shard_shape: Optional[str] = None,
     compression: str = "zstd",
     compression_level: int = 5,
-    memory_gb: int = 30,
-    wall_time: str = "2:00",
-    cores: int = 4,
+    memory_gb: Optional[int] = None,  # None = auto-calculate per dataset
+    wall_time: Optional[str] = None,  # None = auto-calculate per dataset
+    cores: Optional[int] = None,  # None = auto-calculate per dataset
     job_group: str = "/scicompsoft/chend/tensorstore",
     dry_run: bool = False,
 ) -> Dict:
@@ -999,6 +1001,8 @@ def submit_discovered_folder_lsf(
             'input_path': image_ds.path,
             'data_type': 'image',
             'name': image_ds.name,
+            'shape': image_ds.shape,
+            'dtype': image_ds.dtype,
         })
 
     # Prepare segmentation job
@@ -1007,6 +1011,8 @@ def submit_discovered_folder_lsf(
             'input_path': seg_ds.path,
             'data_type': 'labels',
             'name': seg_ds.name,
+            'shape': seg_ds.shape,
+            'dtype': seg_ds.dtype,
         })
 
     # Submit jobs
@@ -1016,6 +1022,24 @@ def submit_discovered_folder_lsf(
 
         log_path = os.path.join(log_dir, f"output__{job_name}_%J.log")
         error_path = os.path.join(log_dir, f"error__{job_name}_%J.log")
+
+        # Calculate resources per-dataset if not explicitly provided
+        if memory_gb is None or wall_time is None or cores is None:
+            job_memory, job_wall_time, job_cores = calculate_job_resources(
+                shape=job_info['shape'],
+                dtype=job_info['dtype'],
+                output_format=output_format,
+                chunk_shape_str=chunk_shape,
+                shard_shape_str=shard_shape,
+            )
+            # Use calculated values unless user provided overrides
+            job_memory = memory_gb if memory_gb is not None else job_memory
+            job_wall_time = wall_time if wall_time is not None else job_wall_time
+            job_cores = cores if cores is not None else job_cores
+        else:
+            job_memory = memory_gb
+            job_wall_time = wall_time
+            job_cores = cores
 
         # Build worker command
         worker_cmd = [
@@ -1048,10 +1072,10 @@ def submit_discovered_folder_lsf(
         bsub_cmd = [
             "bsub",
             "-J", job_name,
-            "-n", str(cores),
-            "-W", wall_time,
-            "-M", f"{memory_gb}GB",
-            "-R", f"rusage[mem={memory_gb * 1024}]",
+            "-n", str(job_cores),
+            "-W", job_wall_time,
+            "-M", f"{job_memory}GB",
+            "-R", f"rusage[mem={job_memory * 1024}]",
             "-P", project,
             "-g", job_group,
             "-o", log_path,
@@ -1066,7 +1090,7 @@ def submit_discovered_folder_lsf(
         print(f"  Input:     {job_info['input_path']}")
         print(f"  Output:    {output_path}")
         print(f"  Data type: {job_info['data_type']}")
-        print(f"  Resources: {cores} cores, {memory_gb} GB, {wall_time}")
+        print(f"  Resources: {job_cores} cores, {job_memory} GB, {job_wall_time}")
 
         if dry_run:
             print(f"\n[DRY RUN] Would submit:")

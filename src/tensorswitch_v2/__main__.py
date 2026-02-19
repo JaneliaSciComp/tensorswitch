@@ -818,88 +818,9 @@ def _estimate_shard_info(args, volume_shape, dtype_str, axes_order=None):
     return shard_shape, total_shards
 
 
-def _calculate_memory(volume_shape, dtype_str, shard_shape, total_shards, use_bioio=False):
-    """Calculate memory in GB using v1 formula.
-
-    Formula: base (file loading) + shard buffers + task overhead, then x1.5 safety.
-
-    Args:
-        use_bioio: If True, applies 3x multiplier for BioIO's higher memory usage
-                   due to Dask caching and intermediate data structures.
-    """
-    dtype_bytes = np.dtype(dtype_str).itemsize
-    dataset_size_gb = (np.prod(volume_shape) * dtype_bytes) / (1024 ** 3)
-    shard_size_gb = (np.prod(shard_shape) * dtype_bytes) / (1024 ** 3)
-
-    # Base memory for file loading
-    if dataset_size_gb < 10:
-        base_mem = 2
-    elif dataset_size_gb < 100:
-        base_mem = min(dataset_size_gb * 0.02, 10)
-    else:
-        base_mem = min(dataset_size_gb * 0.005, 20)
-
-    # Shard processing buffers (up to 3 concurrent shards, 2x for read+write+compress)
-    concurrent_shards = min(total_shards, 3)
-    shard_buffer_mem = shard_size_gb * 2.0 * concurrent_shards
-
-    # Task overhead (conversion)
-    task_overhead = 4  # GB for Python, TensorStore, etc.
-
-    # Total with 1.5x safety margin, rounded to nearest 5 GB
-    total_mem = base_mem + shard_buffer_mem + task_overhead
-    recommended = int(math.ceil(total_mem * 1.5 / 5) * 5)
-
-    # BioIO uses ~3x more memory due to Dask caching and intermediate structures
-    if use_bioio:
-        recommended = int(recommended * 3)
-
-    return max(5, min(recommended, 500))
-
-
-def _calculate_wall_time(volume_shape, dtype_str, shard_shape, total_shards, use_bioio=False):
-    """Calculate wall time string (H:MM) using v1 formula.
-
-    Formula: (per-shard time x total_shards + overhead) x 2 safety, rounded to 30 min.
-
-    Args:
-        use_bioio: If True, applies 10x multiplier for BioIO's slower Dask-based
-                   processing compared to native TensorStore readers.
-    """
-    dtype_bytes = np.dtype(dtype_str).itemsize
-    dataset_size_gb = (np.prod(volume_shape) * dtype_bytes) / (1024 ** 3)
-    shard_size_gb = (np.prod(shard_shape) * dtype_bytes) / (1024 ** 3)
-
-    # Per-shard time estimate (empirical)
-    if shard_size_gb < 0.1:
-        minutes_per_shard = 0.5
-    elif shard_size_gb < 1.0:
-        minutes_per_shard = 2
-    else:
-        minutes_per_shard = 3
-
-    base_minutes = minutes_per_shard * total_shards
-
-    # Overhead for file loading
-    if dataset_size_gb > 1000:
-        overhead = 10
-    elif dataset_size_gb > 100:
-        overhead = 5
-    else:
-        overhead = 2
-
-    # 2x safety, round to nearest 30 min
-    safe_minutes = int(math.ceil((base_minutes + overhead) * 2 / 30) * 30)
-
-    # BioIO is ~10-50x slower due to Dask overhead, apply 10x multiplier
-    if use_bioio:
-        safe_minutes = int(safe_minutes * 10)
-
-    # Cap at 96 hours (4 days)
-    safe_minutes = max(30, min(safe_minutes, 96 * 60))
-    hours = safe_minutes // 60
-    minutes = safe_minutes % 60
-    return f"{hours}:{minutes:02d}"
+# Import resource calculation functions from utils (shared with batch.py)
+from .utils.resource_utils import calculate_memory as _calculate_memory
+from .utils.resource_utils import calculate_wall_time as _calculate_wall_time
 
 
 def submit_job(args, return_job_id=False):
@@ -1428,9 +1349,9 @@ def main(argv=None):
                     shard_shape=args.shard_shape,
                     compression=args.compression,
                     compression_level=args.compression_level,
-                    memory_gb=args.memory or 30,
-                    wall_time=args.wall_time or "2:00",
-                    cores=args.cores or 4,
+                    memory_gb=args.memory,  # None = auto-calculate per dataset
+                    wall_time=args.wall_time,  # None = auto-calculate per dataset
+                    cores=args.cores,  # None = auto-calculate per dataset
                     job_group=args.job_group,
                     dry_run=args.dry_run,
                 )

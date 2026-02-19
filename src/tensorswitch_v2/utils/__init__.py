@@ -80,6 +80,13 @@ from .folder_discovery import (
     DiscoveryResult,
 )
 
+from .resource_utils import (
+    calculate_memory,
+    calculate_wall_time,
+    estimate_shard_info,
+    calculate_job_resources,
+)
+
 __all__ = [
     # TensorStore utilities
     'get_tensorstore_context',
@@ -132,4 +139,9 @@ __all__ = [
     'validate_discovery_for_conversion',
     'DiscoveredDataset',
     'DiscoveryResult',
+    # Resource utilities
+    'calculate_memory',
+    'calculate_wall_time',
+    'estimate_shard_info',
+    'calculate_job_resources',
 ]

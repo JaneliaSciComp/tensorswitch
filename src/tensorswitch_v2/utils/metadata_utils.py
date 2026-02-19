@@ -513,6 +513,11 @@ def update_ome_multiscale_metadata_zarr2(zarr_path, max_level=4, prefix=None):
 
         coordinate_transformations = [{"type": "scale", "scale": level_scale}]
 
+        # Add translation transform for Neuroglancer compatibility (same as Zarr3)
+        translation = [0.5 * (scale - level0_scale_factors[i]) for i, scale in enumerate(level_scale)]
+        if any(t != 0 for t in translation):
+            coordinate_transformations.append({"type": "translation", "translation": translation})
+
         datasets.append({
             "path": level_name,
             "coordinateTransformations": coordinate_transformations
