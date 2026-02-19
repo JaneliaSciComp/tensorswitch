@@ -459,19 +459,47 @@ class OMEStructure:
         image_name: str = 'image'
     ) -> None:
         """
-        Write root zarr.json metadata.
+        Write root zarr.json metadata, merging with existing if present.
 
         Args:
             image_multiscales: Dict with 'axes' and 'datasets' for image
             has_labels: Whether labels directory exists
             image_name: Name for image multiscales
         """
+        path = os.path.join(self.output_path, 'zarr.json')
+
+        # Read existing metadata if present (to preserve image multiscales when adding labels)
+        existing_metadata = {}
+        if os.path.exists(path):
+            try:
+                with open(path, 'r') as f:
+                    existing_metadata = json.load(f)
+            except (json.JSONDecodeError, IOError):
+                existing_metadata = {}
+
+        # Create new metadata
         metadata = self.create_root_metadata(
             image_multiscales=image_multiscales,
             has_labels=has_labels,
             image_name=image_name
         )
-        path = os.path.join(self.output_path, 'zarr.json')
+
+        # Merge: preserve existing multiscales if we're not providing new ones
+        existing_ome = existing_metadata.get('attributes', {}).get('ome', {})
+        new_ome = metadata.get('attributes', {}).get('ome', {})
+
+        if image_multiscales is None and 'multiscales' in existing_ome:
+            new_ome['multiscales'] = existing_ome['multiscales']
+
+        # Merge: preserve existing labels if present and we're adding more
+        if 'labels' in existing_ome and 'labels' in new_ome:
+            existing_labels = set(existing_ome.get('labels', []))
+            new_labels = set(new_ome.get('labels', []))
+            new_ome['labels'] = list(existing_labels | new_labels)
+        elif 'labels' in existing_ome and 'labels' not in new_ome:
+            new_ome['labels'] = existing_ome['labels']
+
+        metadata['attributes']['ome'] = new_ome
         self.write_metadata(path, metadata)
 
     def write_all_metadata(
@@ -865,11 +893,37 @@ class OMEStructureZarr2:
         has_labels: bool = False,
         image_name: str = 'image'
     ) -> None:
-        """Write root .zattrs metadata."""
+        """Write root .zattrs metadata, merging with existing if present."""
         self._write_zgroup(self.output_path)
+
+        # Read existing metadata if present (to preserve image multiscales when adding labels)
+        existing_metadata = {}
+        zattrs_path = os.path.join(self.output_path, '.zattrs')
+        if os.path.exists(zattrs_path):
+            try:
+                with open(zattrs_path, 'r') as f:
+                    existing_metadata = json.load(f)
+            except (json.JSONDecodeError, IOError):
+                existing_metadata = {}
+
+        # Create new metadata
         metadata = self.create_root_metadata(
             image_multiscales=image_multiscales,
             has_labels=has_labels,
             image_name=image_name
         )
+
+        # Merge: preserve existing multiscales if we're not providing new ones
+        if image_multiscales is None and 'multiscales' in existing_metadata:
+            metadata['multiscales'] = existing_metadata['multiscales']
+
+        # Merge: preserve existing labels if present and we're adding more
+        if 'labels' in existing_metadata and 'labels' in metadata:
+            # Combine labels lists without duplicates
+            existing_labels = set(existing_metadata.get('labels', []))
+            new_labels = set(metadata.get('labels', []))
+            metadata['labels'] = list(existing_labels | new_labels)
+        elif 'labels' in existing_metadata and 'labels' not in metadata:
+            metadata['labels'] = existing_metadata['labels']
+
         self._write_zattrs(self.output_path, metadata)

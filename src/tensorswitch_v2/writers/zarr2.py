@@ -177,8 +177,18 @@ class Zarr2Writer(BaseWriter):
             expanded_axes = reordered_axes
             chunks_list = reordered_chunk
 
+        # Determine the actual data path based on nested structure settings
+        if self.use_nested_structure and self._ome_structure:
+            if self.data_type == 'labels':
+                data_path = self._ome_structure.get_label_data_path()
+            else:
+                data_path = self._ome_structure.get_image_data_path()
+            print(f"Zarr2 nested structure: data_type={self.data_type}, path={data_path}")
+        else:
+            data_path = self.output_path
+
         # Compute array path (with level subdirectory)
-        array_path = os.path.join(self.output_path, self.level_path)
+        array_path = os.path.join(data_path, self.level_path)
 
         # Create spec using utility function with smart chunking
         spec = zarr2_store_spec(
@@ -188,10 +198,7 @@ class Zarr2Writer(BaseWriter):
             use_fortran_order=use_fortran_order,
             axes_order=self._expanded_axes,
             dtype=self._normalize_dtype(dtype),
-            compressor={
-                'id': self.compression,
-                'level': self.compression_level
-            }
+            compressor=self._get_compressor_config()
         )
 
         # Add context for concurrency control
@@ -395,6 +402,35 @@ class Zarr2Writer(BaseWriter):
             'float64': '<f8',
         }
         return dtype_map.get(dtype, dtype)
+
+    def _get_compressor_config(self) -> Dict:
+        """
+        Build compressor configuration based on compression type.
+
+        Different compressors have different parameter names:
+        - zstd: uses 'level'
+        - blosc: uses 'clevel', 'cname', 'shuffle', 'blocksize'
+        - gzip: uses 'level'
+
+        Returns:
+            dict: Compressor configuration for TensorStore
+        """
+        if self.compression == 'blosc':
+            # Blosc uses different parameter names
+            # Default to lz4 codec with shuffle enabled (standard for OME-NGFF)
+            return {
+                'id': 'blosc',
+                'cname': 'lz4',
+                'clevel': self.compression_level,
+                'shuffle': 1,
+                'blocksize': 0
+            }
+        else:
+            # zstd, gzip, and others use 'level'
+            return {
+                'id': self.compression,
+                'level': self.compression_level
+            }
 
     def open_store(
         self,

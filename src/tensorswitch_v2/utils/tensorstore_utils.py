@@ -570,6 +570,7 @@ def zarr2_store_spec(zarr_level_path, shape, chunks=None, use_fortran_order=Fals
             'dtype': dtype,
             'compressor': compressor,
             'order': 'F' if use_fortran_order else 'C',  # Preserve source order
-            'dimension_separator': "/"
+            'dimension_separator': "/",
+            'fill_value': 0  # Required for Neuroglancer compatibility (null causes display issues)
         }
     }
