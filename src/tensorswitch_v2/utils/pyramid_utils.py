@@ -365,3 +365,34 @@ def calculate_pyramid_plan(s0_path, min_array_nbytes=None, min_array_shape=None)
         'num_levels': num_levels,
         'pyramid_plan': pyramid_plan
     }
+
+
+def resolve_downsample_method(method: str, input_path: str) -> str:
+    """
+    Resolve 'auto' downsample method to actual method based on input path.
+
+    Args:
+        method: Downsample method ('auto', 'mean', 'mode', etc.)
+        input_path: Path to input data for heuristic detection
+
+    Returns:
+        str: Resolved method ('mean' or 'mode' if input was 'auto')
+    """
+    if method != 'auto':
+        return method
+
+    # Use filename heuristics to detect label/segmentation data
+    label_keywords = ['label', 'mask', 'seg', 'annotation', 'roi', 'binary', 'instance']
+
+    # Check multiple levels of the path (handles /data/labels/dataset.zarr/s0)
+    # Normalize and split path into components
+    path_parts = input_path.lower().replace('\\', '/').split('/')
+    # Check last 4 components (covers most directory structures)
+    check_parts = ' '.join(path_parts[-4:]) if len(path_parts) >= 4 else ' '.join(path_parts)
+
+    for keyword in label_keywords:
+        if keyword in check_parts:
+            return 'mode'
+
+    # Default to 'mean' for intensity images
+    return 'mean'
