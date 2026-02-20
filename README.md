@@ -574,7 +574,7 @@ Chained Downsampling:
 - Deep levels (4, 5) complete in minutes
 - Automatic anisotropic factor calculation
 - OME-NGFF compliant metadata with translation transforms (Neuroglancer compatible)
-- **Numeric level naming** (0/1/2) aligns with OME-NGFF specification
+- **S-prefixed level naming** (s0/s1/s2) follows Janelia house style (OME-NGFF compatible)
 - **Compression inheritance** from level 0 (consistent settings across pyramid)
 
 ### Generate Pyramid
@@ -597,7 +597,7 @@ pixi run python -m tensorswitch_v2 --auto_multiscale \
 2. Check OME-NGFF metadata (`multiscales[0].datasets[0].path`)
 3. Fallback to common subdirectories: `0`, `s0`
 
-**Level naming**: New conversions use numeric format (`0/1/2`). When downsampling, the source format is auto-detected and followed:
+**Level naming**: New conversions use s-prefixed format (`s0/s1/s2`) following Janelia house style. When downsampling existing data, the source format is auto-detected and followed:
 - Source has `s0/` → creates `s1/`, `s2/`, `s3/`...
 - Source has `0/` → creates `1/`, `2/`, `3/`...
 

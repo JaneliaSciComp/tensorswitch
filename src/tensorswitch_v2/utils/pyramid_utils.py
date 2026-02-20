@@ -336,7 +336,9 @@ def calculate_pyramid_plan(s0_path, min_array_nbytes=None, min_array_shape=None)
         predicted_voxel_sizes = [v * f for v, f in zip(current_voxel_sizes, factor)]
         predicted_shape = [max(1, s // f) for s, f in zip(current_shape, factor)]
 
-        scaled_chunk = original_inner_chunk_shape.copy() if original_inner_chunk_shape else None
+        # For Zarr3 with sharding: use inner_chunk_shape
+        # For Zarr2 (no sharding): fall back to chunk_shape from source
+        scaled_chunk = original_inner_chunk_shape.copy() if original_inner_chunk_shape else (chunk_shape.copy() if chunk_shape else None)
         scaled_shard = original_shard_shape.copy() if original_shard_shape else None
 
         pyramid_plan.append({

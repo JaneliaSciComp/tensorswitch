@@ -276,9 +276,17 @@ class BatchConverter:
     def _is_completed(self, file_info: BatchFileInfo) -> bool:
         """Check if output file exists and is valid."""
         output_path = file_info.output_path
-        # Check for zarr.json in s0 subdirectory (indicates successful conversion)
-        marker_file = os.path.join(output_path, "s0", "zarr.json")
-        return os.path.exists(marker_file)
+        # Check for zarr.json in level 0 subdirectory (indicates successful conversion)
+        # Support both "s0" (Janelia convention) and "0" (numeric) naming formats
+        for level_name in ["s0", "0"]:
+            marker_file = os.path.join(output_path, level_name, "zarr.json")
+            if os.path.exists(marker_file):
+                return True
+            # Also check for Zarr2 .zarray marker
+            zarr2_marker = os.path.join(output_path, level_name, ".zarray")
+            if os.path.exists(zarr2_marker):
+                return True
+        return False
 
     def _create_index_file(self, files: List[BatchFileInfo]) -> str:
         """

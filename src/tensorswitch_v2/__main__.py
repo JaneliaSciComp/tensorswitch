@@ -250,8 +250,8 @@ Supported output formats:
         help="Path within input container (e.g., 's0' for N5)",
     )
     parser.add_argument(
-        "--level_path", default="0",
-        help="Level subdirectory name in output (default: 0)",
+        "--level_path", default="s0",
+        help="Level subdirectory name in output (default: s0 for Janelia convention)",
     )
 
     # Chunk/shard configuration
@@ -689,10 +689,9 @@ def create_writer(args, data_type: str = 'image'):
 
     fmt = args.output_format
 
-    # Determine level_path: use "0" for zarr2 by default, "s0" for others
+    # Use level_path as provided (default is "s0" for Janelia convention)
+    # All formats (zarr3, zarr2, n5) now use "s0" as default
     level_path = args.level_path
-    if level_path == "s0" and fmt == "zarr2":
-        level_path = "0"  # Default to numeric paths for OME-NGFF viewer compatibility
 
     # Determine if we should use nested structure (enabled by default for zarr3 and zarr2)
     use_nested = getattr(args, 'use_nested_structure', True) and fmt in ["zarr3", "zarr2"]

@@ -186,7 +186,7 @@ def get_zarr_store_spec(path):
     return zarr_store_spec
 
 
-def zarr3_store_spec(path, shape, dtype, use_shard=True, level_path="0", use_ome_structure=True,
+def zarr3_store_spec(path, shape, dtype, use_shard=True, level_path="s0", use_ome_structure=True,
                      custom_shard_shape=None, custom_chunk_shape=None, use_v2_encoding=False,
                      use_fortran_order=False, axes_order=None, compression=None):
     """
@@ -196,6 +196,7 @@ def zarr3_store_spec(path, shape, dtype, use_shard=True, level_path="0", use_ome
     Spatial axes (z, y, x) get default 256 inner chunk, 1024 shard.
 
     Args:
+        level_path: Level subdirectory name (default "s0" for Janelia convention)
         compression: Optional compression codec dict from source metadata.
                     Format: {'name': 'zstd', 'configuration': {'level': N}}
                     If None, defaults to zstd level 5 (sharded) or level 1 (non-sharded).

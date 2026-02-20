@@ -55,7 +55,7 @@ class Zarr3Writer(BaseWriter):
         compression: str = "zstd",
         compression_level: int = 5,
         use_ome_structure: bool = True,
-        level_path: str = "0",
+        level_path: str = "s0",
         include_omero: bool = False,
         use_nested_structure: bool = True,
         data_type: str = "image",
@@ -71,7 +71,7 @@ class Zarr3Writer(BaseWriter):
             compression: Compression codec ("zstd", "blosc", "gzip")
             compression_level: Compression level (1-9, default 5)
             use_ome_structure: Use OME-ZARR directory structure (s0/, s1/, etc.)
-            level_path: Level subdirectory name (default "0")
+            level_path: Level subdirectory name (default "s0" for Janelia convention)
             include_omero: Extract and include structured omero channel metadata
             use_nested_structure: Use OME-NGFF nested structure (raw/, labels/)
             data_type: 'image' or 'labels' - determines output subdirectory

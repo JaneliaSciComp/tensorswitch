@@ -187,6 +187,8 @@ def validate_zarr3_output(output_path: str) -> dict:
     """
     Validate Zarr3 output structure.
 
+    Supports both nested (raw/s0/) and flat (s0/) structures.
+
     Returns dict with validation results.
     """
     results = {
@@ -213,10 +215,17 @@ def validate_zarr3_output(output_path: str) -> dict:
         if 'attributes' not in metadata or 'ome' not in metadata.get('attributes', {}):
             results['warnings'].append("Missing OME metadata")
 
-    # Check s0 array exists
-    s0_path = os.path.join(output_path, "s0", "zarr.json")
-    if not os.path.exists(s0_path):
-        results['errors'].append("Missing s0/zarr.json")
+    # Check level 0 array exists - support both nested and flat structures
+    # Also support both s0 and 0 naming conventions
+    possible_paths = [
+        os.path.join(output_path, "s0", "zarr.json"),           # Flat s0/
+        os.path.join(output_path, "0", "zarr.json"),            # Flat 0/
+        os.path.join(output_path, "raw", "s0", "zarr.json"),    # Nested raw/s0/
+        os.path.join(output_path, "raw", "0", "zarr.json"),     # Nested raw/0/
+    ]
+    found_level0 = any(os.path.exists(p) for p in possible_paths)
+    if not found_level0:
+        results['errors'].append("Missing level 0 zarr.json (checked s0/, 0/, raw/s0/, raw/0/)")
         results['valid'] = False
 
     return results
@@ -225,6 +234,8 @@ def validate_zarr3_output(output_path: str) -> dict:
 def validate_zarr2_output(output_path: str) -> dict:
     """
     Validate Zarr2 output structure.
+
+    Supports both nested (raw/s0/) and flat (s0/) structures.
 
     Returns dict with validation results.
     """
@@ -245,10 +256,17 @@ def validate_zarr2_output(output_path: str) -> dict:
     if not os.path.exists(zattrs_path):
         results['warnings'].append("Missing .zattrs at root")
 
-    # Check s0 array exists
-    s0_zarray = os.path.join(output_path, "s0", ".zarray")
-    if not os.path.exists(s0_zarray):
-        results['errors'].append("Missing s0/.zarray")
+    # Check level 0 array exists - support both nested and flat structures
+    # Also support both s0 and 0 naming conventions
+    possible_paths = [
+        os.path.join(output_path, "s0", ".zarray"),           # Flat s0/
+        os.path.join(output_path, "0", ".zarray"),            # Flat 0/
+        os.path.join(output_path, "raw", "s0", ".zarray"),    # Nested raw/s0/
+        os.path.join(output_path, "raw", "0", ".zarray"),     # Nested raw/0/
+    ]
+    found_level0 = any(os.path.exists(p) for p in possible_paths)
+    if not found_level0:
+        results['errors'].append("Missing level 0 .zarray (checked s0/, 0/, raw/s0/, raw/0/)")
         results['valid'] = False
 
     return results
@@ -271,10 +289,14 @@ def validate_n5_output(output_path: str) -> dict:
     if not os.path.exists(attrs_path):
         results['warnings'].append("Missing attributes.json at root")
 
-    # Check s0 dataset exists
-    s0_attrs = os.path.join(output_path, "s0", "attributes.json")
-    if not os.path.exists(s0_attrs):
-        results['errors'].append("Missing s0/attributes.json")
+    # Check level 0 dataset exists - support both s0 and 0 naming conventions
+    possible_paths = [
+        os.path.join(output_path, "s0", "attributes.json"),  # s0/
+        os.path.join(output_path, "0", "attributes.json"),   # 0/
+    ]
+    found_level0 = any(os.path.exists(p) for p in possible_paths)
+    if not found_level0:
+        results['errors'].append("Missing level 0 attributes.json (checked s0/, 0/)")
         results['valid'] = False
 
     return results

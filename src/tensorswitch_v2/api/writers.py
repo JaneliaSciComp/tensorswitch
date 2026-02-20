@@ -58,7 +58,7 @@ class Writers:
         compression: str = "zstd",
         compression_level: int = 5,
         use_ome_structure: bool = True,
-        level_path: str = "0",
+        level_path: str = "s0",
         include_omero: bool = False,
         use_nested_structure: bool = True,
         data_type: str = "image",
@@ -121,7 +121,7 @@ class Writers:
         output_path: str,
         compression: str = "zstd",
         compression_level: int = 5,
-        level_path: str = "0",
+        level_path: str = "s0",
         include_omero: bool = False,
         use_nested_structure: bool = True,
         data_type: str = 'image',
@@ -142,7 +142,7 @@ class Writers:
             output_path: Path to output Zarr2 dataset
             compression: Compression codec ('blosc', 'gzip', 'zstd', 'none')
             compression_level: Compression level (1-9, default: 5)
-            level_path: Level subdirectory name (default: "0" for OME-NGFF compatibility)
+            level_path: Level subdirectory name (default: "s0" for Janelia convention)
             use_nested_structure: Use OME-NGFF nested directory structure (default: True)
             data_type: Type of data ('image' or 'labels')
             image_key: Name for image group in nested structure (default: 'raw')
@@ -186,7 +186,7 @@ class Writers:
         output_path: str,
         compression: str = "gzip",
         compression_level: int = 5,
-        dataset_path: str = "0",
+        dataset_path: str = "s0",
         **kwargs
     ) -> BaseWriter:
         """
@@ -201,7 +201,7 @@ class Writers:
             output_path: Path to output N5 dataset
             compression: Compression type ('gzip', 'bzip2', 'xz', 'raw')
             compression_level: Compression level (1-9, default: 5)
-            dataset_path: Dataset path within N5 (default: "s0")
+            dataset_path: Dataset path within N5 (default: "s0" for Janelia convention)
             **kwargs: Additional format-specific options
 
         Returns:

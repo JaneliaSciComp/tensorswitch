@@ -64,7 +64,8 @@ class TestTiffToZarr3:
         output_path = os.path.join(temp_dir, "out.zarr")
 
         reader = Readers.tiff(sample_tiff_path)
-        writer = Writers.zarr3(output_path, use_sharding=False)
+        # Disable nested structure for simpler testing
+        writer = Writers.zarr3(output_path, use_sharding=False, use_nested_structure=False)
 
         converter = DistributedConverter(reader, writer)
         stats = converter.convert(chunk_shape=(16, 32, 32), verbose=False)
@@ -92,7 +93,8 @@ class TestTiffToZarr3:
         output_path = os.path.join(temp_dir, "out.zarr")
 
         reader = Readers.tiff(sample_tiff_path)
-        writer = Writers.zarr3(output_path, use_sharding=False)
+        # Disable nested structure for simpler testing
+        writer = Writers.zarr3(output_path, use_sharding=False, use_nested_structure=False)
 
         converter = DistributedConverter(reader, writer)
         converter.convert(chunk_shape=(16, 32, 32), write_metadata=True, verbose=False)
@@ -116,7 +118,8 @@ class TestZarr3ToZarr3:
         output_path = os.path.join(temp_dir, "out_rechunked.zarr")
 
         reader = Readers.zarr3(sample_zarr3_path, dataset_path="s0")
-        writer = Writers.zarr3(output_path, use_sharding=False)
+        # Disable nested structure for simpler testing
+        writer = Writers.zarr3(output_path, use_sharding=False, use_nested_structure=False)
 
         converter = DistributedConverter(reader, writer)
         # Use different chunk shape than input

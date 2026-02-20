@@ -28,21 +28,24 @@ def detect_level_format(root_path: str) -> str:
     Checks whether the dataset uses "s0/s1/s2" (s-prefixed) or "0/1/2" (numeric)
     naming convention for multiscale levels.
 
+    For EXISTING datasets: Returns the format of the existing level 0
+    For NEW datasets (no existing levels): Returns "s" (Janelia convention)
+
     Args:
         root_path: Root path of the zarr dataset
 
     Returns:
-        "s" if using s0/s1/s2 format (s-prefixed)
-        "" if using 0/1/2 format (numeric)
+        "s" if using s0/s1/s2 format (s-prefixed) or for new datasets
+        "" if using 0/1/2 format (numeric) and level 0 already exists
     """
-    # Check for s0 first (legacy format)
+    # Check for s-prefixed format first (s0)
     if os.path.exists(os.path.join(root_path, 's0')):
         return "s"
-    # Check for numeric 0
+    # Check for numeric format (0)
     if os.path.exists(os.path.join(root_path, '0')):
         return ""
-    # Default to numeric for new datasets
-    return ""
+    # Default to s-prefix for new datasets (Janelia house style convention)
+    return "s"
 
 
 def get_level_name(level: int, prefix: str = "") -> str:
@@ -178,7 +181,7 @@ def extract_omero_channels(ome_xml: str) -> list:
     return channels if channels else None
 
 
-def create_zarr3_ome_metadata(ome_xml, array_shape, image_name, pixel_sizes=None, axes_order=None, include_omero=False, is_label=False, label_colors=None):
+def create_zarr3_ome_metadata(ome_xml, array_shape, image_name, pixel_sizes=None, axes_order=None, include_omero=False, is_label=False, label_colors=None, level_path="s0"):
     """
     Create OME-ZARR metadata structure for zarr3 format.
 
@@ -192,6 +195,7 @@ def create_zarr3_ome_metadata(ome_xml, array_shape, image_name, pixel_sizes=None
         is_label: If True, add image-label metadata for segmentation data
         label_colors: Optional list of color dicts for labels. If None and is_label=True,
                       generates default colors.
+        level_path: Path for level 0 dataset (default "s0" for Janelia convention)
     """
     def get_axis_type(axis_name):
         axis_lower = axis_name.lower()
@@ -279,7 +283,7 @@ def create_zarr3_ome_metadata(ome_xml, array_shape, image_name, pixel_sizes=None
     multiscales = [{
         "axes": axes,
         "datasets": [{
-            "path": "0",
+            "path": level_path,
             "coordinateTransformations": coordinate_transformations
         }],
         "name": image_name,
@@ -679,14 +683,23 @@ def update_ome_metadata_if_needed(output_path, use_ome_structure):
         print(f"Warning: Failed to update OME metadata: {e}")
 
 
-def precreate_shard_directories(output_path, level, output_shape, shard_shape, use_ome_structure=True):
+def precreate_shard_directories(output_path, level, output_shape, shard_shape, use_ome_structure=True, level_prefix=None):
     """
     Pre-create all shard directory structures to avoid race conditions with parallel workers.
+
+    Args:
+        level_prefix: Prefix for level naming ("s" for s0/s1 or "" for 0/1).
+                     If None, auto-detects from existing levels or defaults to "s".
     """
     import time
 
+    # Detect or use provided prefix
+    if level_prefix is None:
+        level_prefix = detect_level_format(output_path)
+    level_name = get_level_name(level, level_prefix)
+
     print("\n" + "="*80)
-    print(f"PRE-CREATING SHARD DIRECTORIES FOR s{level}")
+    print(f"PRE-CREATING SHARD DIRECTORIES FOR {level_name}")
     print("="*80)
 
     if not isinstance(output_shape, list):
@@ -719,7 +732,7 @@ def precreate_shard_directories(output_path, level, output_shape, shard_shape, u
     print(f"Total directories to create: {total_dirs}")
 
     if use_ome_structure:
-        base_shard_path = os.path.join(output_path, f"s{level}", "c")
+        base_shard_path = os.path.join(output_path, level_name, "c")
     else:
         base_shard_path = os.path.join(output_path, "c")
 
@@ -767,7 +780,8 @@ def precreate_shard_directories(output_path, level, output_shape, shard_shape, u
 def precreate_zarr3_metadata_safely(output_path, level, shape, dtype, use_shard,
                                     shard_shape, chunk_shape, use_ome_structure=True,
                                     use_fortran_order=False, use_v2_encoding=False,
-                                    force_precreate=False, axes_order=None, compression=None):
+                                    force_precreate=False, axes_order=None, compression=None,
+                                    level_prefix=None):
     """
     Pre-create zarr.json metadata to avoid worker race conditions.
 
@@ -775,6 +789,8 @@ def precreate_zarr3_metadata_safely(output_path, level, shape, dtype, use_shard,
         compression: Optional compression codec dict from level 0.
                     Format: {'name': 'zstd', 'configuration': {'level': N}}
                     If None, defaults to zstd level 5.
+        level_prefix: Prefix for level naming ("s" for s0/s1 or "" for 0/1).
+                     If None, auto-detects from existing levels or defaults to "s".
     """
     import tensorstore as ts
     from .tensorstore_utils import zarr3_store_spec
@@ -782,14 +798,19 @@ def precreate_zarr3_metadata_safely(output_path, level, shape, dtype, use_shard,
     if not (use_fortran_order or force_precreate):
         return False
 
-    level_path = f"s{level}" if use_ome_structure else None
+    # Detect or use provided prefix
+    if level_prefix is None:
+        level_prefix = detect_level_format(output_path)
+    level_name = get_level_name(level, level_prefix)
+
+    level_path = level_name if use_ome_structure else None
 
     store_spec = zarr3_store_spec(
         path=output_path,
         shape=shape,
         dtype=dtype,
         use_shard=use_shard,
-        level_path=level_path or f"s{level}",
+        level_path=level_path or level_name,
         use_ome_structure=use_ome_structure,
         custom_shard_shape=shard_shape,
         custom_chunk_shape=chunk_shape,
@@ -802,7 +823,7 @@ def precreate_zarr3_metadata_safely(output_path, level, shape, dtype, use_shard,
     store = ts.open(store_spec, create=True, delete_existing=True).result()
     store = None
 
-    metadata_path = os.path.join(output_path, level_path or f"s{level}", "zarr.json")
+    metadata_path = os.path.join(output_path, level_path or level_name, "zarr.json")
     print(f"Pre-created Zarr3 metadata at: {metadata_path}")
     print(f"  Reason: {'F-order codec' if use_fortran_order else 'Forced pre-creation'}")
 
@@ -812,7 +833,7 @@ def precreate_zarr3_metadata_safely(output_path, level, shape, dtype, use_shard,
 def precreate_zarr3_output(output_path, level, output_shape, shard_shape, chunk_shape,
                            dtype, use_ome_structure=True, use_v2_encoding=False,
                            axes_order=None, check_exists=False, create_metadata=True,
-                           compression=None):
+                           compression=None, level_prefix=None):
     """
     UNIFIED function to pre-create both shard directories AND zarr.json metadata.
 
@@ -820,23 +841,30 @@ def precreate_zarr3_output(output_path, level, output_shape, shard_shape, chunk_
         compression: Optional compression codec dict from level 0.
                     Format: {'name': 'zstd', 'configuration': {'level': N}}
                     If None, defaults to zstd level 5.
+        level_prefix: Prefix for level naming ("s" for s0/s1 or "" for 0/1).
+                     If None, auto-detects from existing levels or defaults to "s".
     """
     result = {'dirs_created': False, 'metadata_created': False}
 
+    # Detect or use provided prefix
+    if level_prefix is None:
+        level_prefix = detect_level_format(output_path)
+    level_name = get_level_name(level, level_prefix)
+
     print("\n" + "="*80)
-    print(f"PRE-CREATING ZARR3 OUTPUT FOR s{level}")
+    print(f"PRE-CREATING ZARR3 OUTPUT FOR {level_name}")
     print("="*80)
 
     if check_exists:
         if use_ome_structure:
-            base_check_path = os.path.join(output_path, f"s{level}", "c", "0")
+            base_check_path = os.path.join(output_path, level_name, "c", "0")
         else:
             base_check_path = os.path.join(output_path, "c", "0")
 
         if os.path.exists(base_check_path):
-            print(f"Shard directories already exist for s{level}, skipping redundant creation")
+            print(f"Shard directories already exist for {level_name}, skipping redundant creation")
 
-            metadata_path = os.path.join(output_path, f"s{level}" if use_ome_structure else "", "zarr.json")
+            metadata_path = os.path.join(output_path, level_name if use_ome_structure else "", "zarr.json")
             if os.path.exists(metadata_path):
                 print(f"Metadata also exists, all pre-creation complete")
                 return result
@@ -849,7 +877,8 @@ def precreate_zarr3_output(output_path, level, output_shape, shard_shape, chunk_
         level=level,
         output_shape=output_shape,
         shard_shape=shard_shape,
-        use_ome_structure=use_ome_structure
+        use_ome_structure=use_ome_structure,
+        level_prefix=level_prefix
     )
     result['dirs_created'] = True
 
@@ -868,7 +897,8 @@ def precreate_zarr3_output(output_path, level, output_shape, shard_shape, chunk_
             use_v2_encoding=use_v2_encoding,
             force_precreate=True,
             axes_order=axes_order,
-            compression=compression
+            compression=compression,
+            level_prefix=level_prefix
         )
         result['metadata_created'] = metadata_created
 
