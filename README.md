@@ -42,9 +42,9 @@ A high-performance microscopy data conversion tool with TensorStore as the unifi
 
 ## Architecture
 
-<video src="PPT_v2/TensorSwitch_v2_Data_Translator_compressed.mp4" controls="controls" style="max-width: 100%;">
-  Your browser does not support the video tag.
-</video>
+<p align="center">
+  <video src="PPT_v2/TensorSwitch_v2_ultra_compressed.mp4" width="100%" controls></video>
+</p>
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
