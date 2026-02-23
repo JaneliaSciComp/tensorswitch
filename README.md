@@ -27,6 +27,16 @@ A high-performance microscopy data conversion tool with TensorStore as the unifi
 
 ---
 
+<p align="center">
+  <a href="https://drive.google.com/file/d/1HWX7P-EZfj_NOKsv0YdbXXnlL8DXirSW/view?usp=sharing">
+    <img src="PPT_v2/video_thumbnail.png" width="100%" alt="TensorSwitch v2 Demo Video">
+  </a>
+  <br>
+  <em>Click the image to watch the Data Translator demo video on Google Drive</em>
+</p>
+
+---
+
 ## Features
 
 - **Universal Format Support**: Read 200+ microscopy formats via three-tier reader strategy
@@ -41,14 +51,6 @@ A high-performance microscopy data conversion tool with TensorStore as the unifi
 ---
 
 ## Architecture
-
-<p align="center">
-  <a href="https://drive.google.com/file/d/1HWX7P-EZfj_NOKsv0YdbXXnlL8DXirSW/view?usp=sharing">
-    <img src="PPT_v2/video_thumbnail.png" width="100%" alt="TensorSwitch v2 Demo Video">
-  </a>
-  <br>
-  <em>Click the image to watch the Data Translator demo video on Google Drive</em>
-</p>
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
