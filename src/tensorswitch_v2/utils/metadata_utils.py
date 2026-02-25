@@ -435,7 +435,12 @@ def update_ome_multiscale_metadata(zarr_path, max_level=4, prefix=None):
             level_meta = json.load(f)
         level_shape = level_meta.get('shape')
 
-        if use_factors:
+        # Preferred: use cumulative_factor stored in the level's zarr.json during downsampling
+        level_cumulative_factor = level_meta.get('attributes', {}).get('custom', {}).get('cumulative_factor')
+
+        if level_cumulative_factor:
+            level_scale = [s0 * f for s0, f in zip(level0_scale_factors, level_cumulative_factor)]
+        elif use_factors:
             prev_level_name = get_level_name(level - 1, prefix)
             factor_key = f"{prev_level_name}_to_{level_name}"
             level_factors = downsampling_factors.get(factor_key)
@@ -513,7 +518,18 @@ def update_ome_multiscale_metadata_zarr2(zarr_path, max_level=4, prefix=None):
             level_meta = json.load(f)
         level_shape = level_meta.get('shape')
 
-        level_scale = [level0_scale_factors[i] * (level0_shape[i] / level_shape[i]) for i in range(len(level0_shape))]
+        # Preferred: use cumulative_factor stored in the level's .zattrs during downsampling
+        level_zattrs_path = os.path.join(zarr_path, level_name, '.zattrs')
+        level_cumulative_factor = None
+        if os.path.exists(level_zattrs_path):
+            with open(level_zattrs_path, 'r') as f:
+                level_zattrs = json.load(f)
+            level_cumulative_factor = level_zattrs.get('custom', {}).get('cumulative_factor')
+
+        if level_cumulative_factor:
+            level_scale = [s0 * f for s0, f in zip(level0_scale_factors, level_cumulative_factor)]
+        else:
+            level_scale = [level0_scale_factors[i] * (level0_shape[i] / level_shape[i]) for i in range(len(level0_shape))]
 
         coordinate_transformations = [{"type": "scale", "scale": level_scale}]
 

@@ -452,6 +452,11 @@ class Downsampler:
             print(f"  Time: {elapsed_time:.1f}s")
             print(f"  Rate: {chunks_processed/elapsed_time:.1f} chunks/s")
 
+        # Store cumulative_factor in level metadata so update_ome_multiscale_metadata
+        # can compute exact nominal voxel sizes (s0_voxel * factor) instead of the
+        # shape-ratio fallback which gives non-power-of-2 results due to ceiling rounding.
+        self._store_cumulative_factor(output_level_path, output_format, cumulative_factors)
+
         return {
             'target_level': self.target_level,
             'chunks_processed': chunks_processed,
@@ -460,6 +465,35 @@ class Downsampler:
             'cumulative_factors': cumulative_factors,
             'output_shape': downsampled_shape,
         }
+
+    def _store_cumulative_factor(self, level_path: str, output_format: str, cumulative_factors: List[int]) -> None:
+        """Store cumulative downsampling factor in the level's metadata.
+
+        For zarr3: written to level/zarr.json at attributes.custom.cumulative_factor
+        For zarr2: written to level/.zattrs at custom.cumulative_factor
+
+        This allows update_ome_multiscale_metadata to compute exact nominal voxel sizes
+        (s0_voxel * factor) rather than the shape-ratio fallback, which produces
+        non-power-of-2 results when shapes are ceiling-rounded during downsampling.
+        """
+        if output_format == 'zarr2':
+            zattrs_path = os.path.join(level_path, '.zattrs')
+            zattrs = {}
+            if os.path.exists(zattrs_path):
+                with open(zattrs_path, 'r') as f:
+                    zattrs = json.load(f)
+            zattrs.setdefault('custom', {})['cumulative_factor'] = cumulative_factors
+            with open(zattrs_path, 'w') as f:
+                json.dump(zattrs, f, indent=2)
+        else:  # zarr3
+            zarr_json_path = os.path.join(level_path, 'zarr.json')
+            if not os.path.exists(zarr_json_path):
+                return
+            with open(zarr_json_path, 'r') as f:
+                metadata = json.load(f)
+            metadata.setdefault('attributes', {}).setdefault('custom', {})['cumulative_factor'] = cumulative_factors
+            with open(zarr_json_path, 'w') as f:
+                json.dump(metadata, f, indent=2)
 
     def _get_shard_chunk_indices(
         self,
