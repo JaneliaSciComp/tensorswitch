@@ -456,7 +456,8 @@ class OMEStructure:
         self,
         image_multiscales: Optional[Dict] = None,
         has_labels: bool = False,
-        image_name: str = 'image'
+        image_name: str = 'image',
+        ome_xml: Optional[str] = None
     ) -> None:
         """
         Write root zarr.json metadata, merging with existing if present.
@@ -465,6 +466,7 @@ class OMEStructure:
             image_multiscales: Dict with 'axes' and 'datasets' for image
             has_labels: Whether labels directory exists
             image_name: Name for image multiscales
+            ome_xml: Raw OME-XML string from source data (stored at attributes.ome_xml)
         """
         path = os.path.join(self.output_path, 'zarr.json')
 
@@ -500,6 +502,12 @@ class OMEStructure:
             new_ome['labels'] = existing_ome['labels']
 
         metadata['attributes']['ome'] = new_ome
+
+        # Preserve or set ome_xml at attributes level (consistent with legacy non-nested mode)
+        final_ome_xml = ome_xml or existing_metadata.get('attributes', {}).get('ome_xml')
+        if final_ome_xml:
+            metadata['attributes']['ome_xml'] = final_ome_xml
+
         self.write_metadata(path, metadata)
 
     def write_all_metadata(
@@ -891,7 +899,8 @@ class OMEStructureZarr2:
         self,
         image_multiscales: Optional[Dict] = None,
         has_labels: bool = False,
-        image_name: str = 'image'
+        image_name: str = 'image',
+        ome_xml: Optional[str] = None
     ) -> None:
         """Write root .zattrs metadata, merging with existing if present."""
         self._write_zgroup(self.output_path)
@@ -925,5 +934,10 @@ class OMEStructureZarr2:
             metadata['labels'] = list(existing_labels | new_labels)
         elif 'labels' in existing_metadata and 'labels' not in metadata:
             metadata['labels'] = existing_metadata['labels']
+
+        # Preserve or set ome_xml (consistent with non-nested Zarr2 mode)
+        final_ome_xml = ome_xml or existing_metadata.get('ome_xml')
+        if final_ome_xml:
+            metadata['ome_xml'] = final_ome_xml
 
         self._write_zattrs(self.output_path, metadata)

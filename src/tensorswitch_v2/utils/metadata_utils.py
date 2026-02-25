@@ -646,10 +646,119 @@ def _create_zarr2_parent_metadata(zarr_path, child_metadata):
         print(f"Updated root .zattrs")
 
 
+def _update_parent_zarr3_json(inner_path, parent_path, image_key):
+    """
+    Update parent zarr.json to reflect inner path's multiscale levels with image_key prefix.
+
+    After pyramid generation updates raw/zarr.json with s0, s1, s2..., this propagates
+    those levels to the outer <name>.zarr/zarr.json as raw/s0, raw/s1, raw/s2...
+
+    Args:
+        inner_path: Path to the inner group (e.g., <name>.zarr/raw/)
+        parent_path: Path to the parent zarr root (e.g., <name>.zarr/)
+        image_key: Name of the image group (e.g., 'raw')
+    """
+    inner_zarr_json = os.path.join(inner_path, 'zarr.json')
+    parent_zarr_json = os.path.join(parent_path, 'zarr.json')
+
+    with open(inner_zarr_json, 'r') as f:
+        inner_metadata = json.load(f)
+
+    inner_ms_list = inner_metadata.get('attributes', {}).get('ome', {}).get('multiscales', [])
+    if not inner_ms_list:
+        return
+
+    inner_ms = inner_ms_list[0]
+
+    # Build prefixed dataset paths (e.g., s0 -> raw/s0)
+    adjusted_datasets = []
+    for ds in inner_ms.get('datasets', []):
+        new_ds = ds.copy()
+        new_ds['path'] = f"{image_key}/{ds['path']}"
+        adjusted_datasets.append(new_ds)
+
+    with open(parent_zarr_json, 'r') as f:
+        parent_metadata = json.load(f)
+
+    parent_ome = parent_metadata.get('attributes', {}).get('ome', {})
+    parent_ms_list = parent_ome.get('multiscales', [])
+
+    if parent_ms_list:
+        parent_ms_list[0]['datasets'] = adjusted_datasets
+        parent_ms_list[0]['axes'] = inner_ms.get('axes', parent_ms_list[0].get('axes', []))
+    else:
+        parent_ome['multiscales'] = [{
+            'axes': inner_ms.get('axes', []),
+            'datasets': adjusted_datasets,
+            'name': inner_ms.get('name', 'image'),
+            'type': inner_ms.get('type', 'image')
+        }]
+
+    parent_metadata['attributes']['ome'] = parent_ome
+
+    with open(parent_zarr_json, 'w') as f:
+        json.dump(parent_metadata, f, indent=2)
+
+    print(f"Updated parent zarr3 metadata with {len(adjusted_datasets)} levels ({image_key}/s0 ... {image_key}/{adjusted_datasets[-1]['path'].split('/')[-1]})")
+
+
+def _update_parent_zarr2_zattrs(inner_path, parent_path, image_key):
+    """
+    Update parent .zattrs to reflect inner path's multiscale levels with image_key prefix.
+
+    Args:
+        inner_path: Path to the inner group (e.g., <name>.zarr/raw/)
+        parent_path: Path to the parent zarr root (e.g., <name>.zarr/)
+        image_key: Name of the image group (e.g., 'raw')
+    """
+    inner_zattrs = os.path.join(inner_path, '.zattrs')
+    parent_zattrs = os.path.join(parent_path, '.zattrs')
+
+    with open(inner_zattrs, 'r') as f:
+        inner_metadata = json.load(f)
+
+    inner_ms_list = inner_metadata.get('multiscales', [])
+    if not inner_ms_list:
+        return
+
+    inner_ms = inner_ms_list[0]
+
+    # Build prefixed dataset paths
+    adjusted_datasets = []
+    for ds in inner_ms.get('datasets', []):
+        new_ds = ds.copy()
+        new_ds['path'] = f"{image_key}/{ds['path']}"
+        adjusted_datasets.append(new_ds)
+
+    with open(parent_zattrs, 'r') as f:
+        parent_metadata = json.load(f)
+
+    parent_ms_list = parent_metadata.get('multiscales', [])
+
+    if parent_ms_list:
+        parent_ms_list[0]['datasets'] = adjusted_datasets
+        parent_ms_list[0]['axes'] = inner_ms.get('axes', parent_ms_list[0].get('axes', []))
+    else:
+        parent_metadata['multiscales'] = [{
+            'axes': inner_ms.get('axes', []),
+            'datasets': adjusted_datasets,
+            'name': inner_ms.get('name', 'image'),
+        }]
+
+    with open(parent_zattrs, 'w') as f:
+        json.dump(parent_metadata, f, indent=2)
+
+    print(f"Updated parent zarr2 metadata with {len(adjusted_datasets)} levels")
+
+
 def update_ome_metadata_if_needed(output_path, use_ome_structure):
     """
     Update OME-Zarr metadata if OME structure is used and multiscale levels exist.
     Supports both zarr2 (.zattrs) and zarr3 (zarr.json) formats.
+
+    Also updates the parent zarr.json/zattrs if this path is a nested image group
+    (e.g., raw/ inside <name>.zarr/), propagating all pyramid levels with the
+    image_key prefix (e.g., raw/s0, raw/s1, ...).
     """
     if not use_ome_structure:
         return
@@ -673,10 +782,34 @@ def update_ome_metadata_if_needed(output_path, use_ome_structure):
             print(f"Updating zarr3 OME metadata for {output_path} with levels {level0_name}-{max_level_name}")
             update_ome_multiscale_metadata(output_path, max_level=max_level, prefix=prefix)
             print("OME metadata updated successfully!")
+
+            # Also update parent zarr.json if this is a nested image group (e.g., raw/)
+            parent_path = os.path.dirname(output_path)
+            image_key = os.path.basename(output_path)
+            parent_zarr3 = os.path.join(parent_path, 'zarr.json')
+            if os.path.exists(parent_zarr3):
+                try:
+                    print(f"Updating parent zarr3 metadata at {parent_zarr3}")
+                    _update_parent_zarr3_json(output_path, parent_path, image_key)
+                except Exception as e:
+                    print(f"Warning: Failed to update parent zarr3 metadata: {e}")
+
         elif os.path.exists(zarr2_metadata):
             print(f"Updating zarr2 OME metadata for {output_path} with levels {level0_name}-{max_level_name}")
             update_ome_multiscale_metadata_zarr2(output_path, max_level=max_level, prefix=prefix)
             print("OME metadata updated successfully!")
+
+            # Also update parent .zattrs if this is a nested image group (e.g., raw/)
+            parent_path = os.path.dirname(output_path)
+            image_key = os.path.basename(output_path)
+            parent_zarr2 = os.path.join(parent_path, '.zattrs')
+            if os.path.exists(parent_zarr2):
+                try:
+                    print(f"Updating parent zarr2 metadata at {parent_zarr2}")
+                    _update_parent_zarr2_zattrs(output_path, parent_path, image_key)
+                except Exception as e:
+                    print(f"Warning: Failed to update parent zarr2 metadata: {e}")
+
         else:
             print("Warning: No zarr metadata file found (.zattrs or zarr.json) - skipping metadata update")
     except Exception as e:

@@ -68,8 +68,8 @@ A high-performance microscopy data conversion tool with TensorStore as the unifi
               ▼                  ▼                  ▼
 ┌─────────────────────┐  ┌─────────────┐  ┌─────────────────────┐
 │      Readers        │  │ TensorStore │  │      Writers        │
-│  (12 formats)       │◀─│   Array     │─▶│  (3 formats)        │
-│  Tier 1/2/3         │  │ (Unified)   │  │  Zarr3/Zarr2/N5     │
+│  (120+ formats)     │◀─│   Array     │─▶│  (3 formats)        │
+│  Tier 1/2/3/4       │  │ (Unified)   │  │  Zarr3/Zarr2/N5     │
 └─────────────────────┘  └─────────────┘  └─────────────────────┘
 ```
 

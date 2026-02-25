@@ -798,7 +798,8 @@ class Zarr2Writer(BaseWriter):
             self._ome_structure.write_root_metadata(
                 image_multiscales=None,
                 has_labels=True,
-                image_name=image_name
+                image_name=image_name,
+                ome_xml=ome_xml
             )
 
             print(f"Wrote nested labels metadata to {self.output_path}")
@@ -813,7 +814,8 @@ class Zarr2Writer(BaseWriter):
             self._ome_structure.write_root_metadata(
                 image_multiscales=multiscales,
                 has_labels=False,
-                image_name=image_name
+                image_name=image_name,
+                ome_xml=ome_xml
             )
 
             print(f"Wrote nested image metadata to {self.output_path}")
