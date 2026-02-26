@@ -501,7 +501,7 @@ def zarr2_store_spec(zarr_level_path, shape, chunks=None, use_fortran_order=Fals
     Create Zarr2 store specification with smart chunking based on axes.
 
     Non-spatial axes (c, t, v) get chunk size 1 for per-channel/per-timepoint access.
-    Spatial axes (z, y, x) get default 1024 chunk size for efficient tiled access.
+    Spatial axes (z, y, x) get default 64 chunk size (matching Zarr3 non-sharded).
 
     Args:
         zarr_level_path: Path to zarr level
@@ -514,8 +514,9 @@ def zarr2_store_spec(zarr_level_path, shape, chunks=None, use_fortran_order=Fals
     """
     # Non-spatial axes that should have chunk size 1 for efficient per-slice access
     NON_SPATIAL_AXES = ['c', 't', 'v', 'channel']
-    # Default spatial chunk size (1024 for good tile-based access)
-    DEFAULT_SPATIAL_CHUNK = 1024
+    # Default spatial chunk size for Zarr2 (no sharding, so each chunk = one file)
+    # Matches Zarr3 non-sharded default. 64^3 × 2 bytes = 512 KB per chunk for uint16.
+    DEFAULT_SPATIAL_CHUNK = 64
 
     def build_smart_chunks(shape, axes_order):
         """Build chunk shape respecting axis types - same logic as zarr3."""
@@ -528,7 +529,7 @@ def zarr2_store_spec(zarr_level_path, shape, chunks=None, use_fortran_order=Fals
             if axis.lower() in NON_SPATIAL_AXES:
                 result.append(1)  # Non-spatial: 1 for per-channel access
             else:
-                # Spatial: use 1024 or array size if smaller
+                # Spatial: use 64 or array size if smaller
                 result.append(min(DEFAULT_SPATIAL_CHUNK, shape[i]))
         return result
 

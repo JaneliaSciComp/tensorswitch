@@ -33,6 +33,13 @@ from typing import Optional, Tuple
 
 import numpy as np
 
+# Force line-buffered stdout/stderr so progress output appears immediately
+# (Python fully buffers stdout when not connected to a terminal, e.g. pixi run, bsub)
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(line_buffering=True)
+if hasattr(sys.stderr, 'reconfigure'):
+    sys.stderr.reconfigure(line_buffering=True)
+
 os.umask(0o0002)  # Team permissions: rwxrwxr-x
 
 __version__ = "2.0.0-beta"
