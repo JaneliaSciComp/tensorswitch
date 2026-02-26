@@ -824,26 +824,40 @@ def submit_job(args, return_job_id=False):
     # Auto-calculate resources from source data when not explicitly provided
     memory_gb = args.memory
     wall_time = args.wall_time
+    needs_auto = memory_gb is None or wall_time is None or args.cores is None
 
-    if memory_gb is None or wall_time is None:
+    dataset_size_gb = None
+    if needs_auto:
         print("Reading input metadata for resource estimation...")
         volume_shape, dtype_str, axes_order = _get_input_metadata(args)
         shard_shape, total_shards = _estimate_shard_info(args, volume_shape, dtype_str, axes_order)
         # Both BIOIO and BioFormats use Dask and have similar overhead
         use_bioio = getattr(args, 'use_bioio', False) or getattr(args, 'use_bioformats', False)
+        dtype_bytes = np.dtype(dtype_str).itemsize
+        dataset_size_gb = (np.prod(volume_shape) * dtype_bytes) / (1024 ** 3)
         print(f"  Shape: {volume_shape}, dtype: {dtype_str}")
-        print(f"  Shard shape: {shard_shape}, total shards: {total_shards}")
+        if args.output_format == 'zarr2':
+            print(f"  Chunk shape: {shard_shape}, total chunks: {total_shards}")
+        else:
+            print(f"  Shard shape: {shard_shape}, total shards: {total_shards}")
         if use_bioio:
             mode_name = "Bio-Formats" if getattr(args, 'use_bioformats', False) else "BioIO"
             print(f"  {mode_name} mode: applying 10x wall time and 3x memory multipliers")
 
         if memory_gb is None:
-            memory_gb = _calculate_memory(volume_shape, dtype_str, shard_shape, total_shards, use_bioio=use_bioio)
+            memory_gb = _calculate_memory(volume_shape, dtype_str, shard_shape, total_shards, use_bioio=use_bioio, output_format=args.output_format)
         if wall_time is None:
-            wall_time = _calculate_wall_time(volume_shape, dtype_str, shard_shape, total_shards, use_bioio=use_bioio)
+            wall_time = _calculate_wall_time(volume_shape, dtype_str, shard_shape, total_shards, use_bioio=use_bioio, output_format=args.output_format)
 
-    # Cores: based on memory but capped at 8 (I/O-bound, more cores don't help much)
-    cores = args.cores if args.cores is not None else min(8, max(1, int(math.ceil(memory_gb / 15)) * 2))
+    # Cores: capped at 8 (I/O-bound)
+    # Zarr3: based on memory (large shards = large buffers = need more cores)
+    # Zarr2: based on dataset size (many small chunks = more compression parallelism)
+    if args.cores is not None:
+        cores = args.cores
+    elif args.output_format == 'zarr2' and dataset_size_gb is not None:
+        cores = min(8, max(2, int(math.ceil(dataset_size_gb / 25))))
+    else:
+        cores = min(8, max(1, int(math.ceil(memory_gb / 15)) * 2))
 
     # Enforce cluster policy: 15 GB per core minimum
     memory_gb = max(memory_gb, cores * 15)
