@@ -100,8 +100,9 @@ def calculate_wall_time(volume_shape, dtype_str, shard_shape, total_shards, use_
 
     if output_format == 'zarr2':
         # Zarr2: many small chunks, estimate from dataset throughput
-        # Empirical: ~50-200 MB/s for compressed Zarr2 writes on cluster storage
-        throughput_mb_s = 100  # Conservative estimate
+        # Empirical: ~10 MB/s for ND2/dask source over network filesystem
+        # Bottleneck is source reader I/O, not write speed
+        throughput_mb_s = 10
         base_minutes = (dataset_size_gb * 1024) / throughput_mb_s / 60
 
         # Overhead for file loading (ND2/TIFF opening)
