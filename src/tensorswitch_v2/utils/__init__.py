@@ -74,10 +74,14 @@ from .ome_structure import (
 from .folder_discovery import (
     discover_datasets,
     is_neuroglancer_precomputed,
+    is_zarr_dataset,
+    is_n5_dataset,
     classify_dataset,
+    classify_dataset_generic,
     validate_discovery_for_conversion,
     DiscoveredDataset,
     DiscoveryResult,
+    SEGMENTATION_KEYWORDS,
 )
 
 from .resource_utils import (

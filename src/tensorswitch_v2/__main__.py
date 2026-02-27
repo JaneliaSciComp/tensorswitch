@@ -289,14 +289,6 @@ Supported output formats:
         help="Disable nested structure (write directly to output path).",
     )
     parser.add_argument(
-        "--image", type=str, default=None,
-        help="Explicit path to image data for combined conversion.",
-    )
-    parser.add_argument(
-        "--labels", type=str, default=None,
-        help="Explicit path to labels/segmentation data for combined conversion.",
-    )
-    parser.add_argument(
         "--image-only", action="store_true",
         help="Only convert image data (skip labels) when both are found in source folder.",
     )
