@@ -25,8 +25,6 @@ from .tensorstore_utils import (
     downsample_spec,
     detect_source_order,
     n5_store_spec,
-    adaptive_spatial_chunk,
-    build_default_shape,
 )
 
 from .chunk_utils import (
@@ -104,8 +102,6 @@ __all__ = [
     'downsample_spec',
     'detect_source_order',
     'n5_store_spec',
-    'adaptive_spatial_chunk',
-    'build_default_shape',
     # Chunk utilities
     'get_chunk_domains',
     'get_total_chunks_from_store',

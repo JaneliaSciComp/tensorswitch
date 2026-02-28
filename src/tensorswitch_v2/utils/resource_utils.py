@@ -15,9 +15,40 @@ import math
 import numpy as np
 from typing import Tuple, List, Optional
 
-from .tensorstore_utils import adaptive_spatial_chunk, build_default_shape
+# Writer defaults — must stay in sync with tensorstore_utils.py
+_NON_SPATIAL_AXES = {'c', 't', 'v', 'channel'}
+_ZARR3_SHARD_SPATIAL = 1024    # tensorstore_utils.py line 295
 
-_ZARR3_SHARD_SPATIAL = 1024    # tensorstore_utils.py zarr3_store_spec default
+
+def _adaptive_spatial_chunk(volume_shape, dtype_str):
+    """Choose default spatial chunk size based on dataset size.
+
+    Must match tensorstore_utils.adaptive_spatial_chunk().
+    Used for Zarr2 and Zarr3 non-sharded (Zarr3 sharded always uses 1024).
+    """
+    dtype_bytes = np.dtype(dtype_str).itemsize
+    dataset_size_gb = (np.prod(volume_shape) * dtype_bytes) / (1024 ** 3)
+    if dataset_size_gb < 20:
+        return 64
+    elif dataset_size_gb < 100:
+        return 128
+    else:
+        return 256
+
+
+def _build_default_shape(volume_shape, axes_order, spatial_size):
+    """Build default chunk/shard shape matching actual writer defaults.
+
+    Non-spatial axes (c, t, v, channel) get size 1.
+    Spatial axes get spatial_size.
+    """
+    if axes_order and len(axes_order) == len(volume_shape):
+        return tuple(
+            1 if ax.lower() in _NON_SPATIAL_AXES else spatial_size
+            for i, ax in enumerate(axes_order)
+        )
+    # Fallback: assume all dimensions are spatial
+    return tuple(spatial_size for _ in volume_shape)
 
 
 def calculate_memory(volume_shape, dtype_str, shard_shape, total_shards, use_bioio=False, output_format='zarr3'):
@@ -239,14 +270,14 @@ def estimate_shard_info(
         if shard_shape is not None:
             shape = shard_shape
         else:
-            shape = build_default_shape(volume_shape, axes_order, _ZARR3_SHARD_SPATIAL)
+            shape = _build_default_shape(volume_shape, axes_order, _ZARR3_SHARD_SPATIAL)
     else:
         # Zarr2 or Zarr3 non-sharded: adaptive chunk based on dataset size
         if chunk_shape is not None:
             shape = chunk_shape
         else:
-            spatial = adaptive_spatial_chunk(volume_shape, dtype_str)
-            shape = build_default_shape(volume_shape, axes_order, spatial)
+            spatial = _adaptive_spatial_chunk(volume_shape, dtype_str)
+            shape = _build_default_shape(volume_shape, axes_order, spatial)
 
     # Calculate total shards/chunks
     total = 1
