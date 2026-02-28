@@ -262,7 +262,7 @@ def zarr3_store_spec(path, shape, dtype, use_shard=True, level_path="s0", use_om
         if custom_chunk_shape is not None:
             inner_chunk_shape = custom_chunk_shape
         else:
-            inner_chunk_shape = build_default_shape(shape, axes_order, 256)
+            inner_chunk_shape = build_default_shape(shape, axes_order, 64)
 
         # Adjust inner chunk shape for different array dimensions
         if len(shape) == 3 and len(inner_chunk_shape) == 3:

@@ -152,10 +152,31 @@ def extract_tiff_ome_metadata(tiff_file):
                     # Convert to nanometers using helper
                     z_spacing_nm = convert_to_nanometers(z_spacing, unit)
 
-                    # Default XY resolution if not in tags (1.0 nm as placeholder)
+                    # Read XY resolution from TIFF tags (pixels per unit)
+                    xy_nm_x = 1.0
+                    xy_nm_y = 1.0
+                    page = tif.pages[0]
+                    x_res_tag = page.tags.get('XResolution')
+                    y_res_tag = page.tags.get('YResolution')
+                    if x_res_tag and y_res_tag:
+                        x_res = x_res_tag.value  # (numerator, denominator) rational
+                        y_res = y_res_tag.value
+                        if isinstance(x_res, tuple) and len(x_res) == 2 and x_res[1] != 0:
+                            pixels_per_unit_x = x_res[0] / x_res[1]
+                        else:
+                            pixels_per_unit_x = float(x_res) if x_res else 0
+                        if isinstance(y_res, tuple) and len(y_res) == 2 and y_res[1] != 0:
+                            pixels_per_unit_y = y_res[0] / y_res[1]
+                        else:
+                            pixels_per_unit_y = float(y_res) if y_res else 0
+                        if pixels_per_unit_x > 0 and pixels_per_unit_y > 0:
+                            # voxel size = 1 / (pixels per unit), in the ImageJ unit
+                            xy_nm_x = convert_to_nanometers(1.0 / pixels_per_unit_x, unit)
+                            xy_nm_y = convert_to_nanometers(1.0 / pixels_per_unit_y, unit)
+
                     voxel_sizes = {
-                        'x': 1.0,
-                        'y': 1.0,
+                        'x': xy_nm_x,
+                        'y': xy_nm_y,
                         'z': z_spacing_nm
                     }
 
