@@ -896,7 +896,7 @@ info         → Precomputed
 ### Chunk Shape Auto-Calculation
 
 - Non-spatial axes (t, c): chunk = 1 (per-channel access)
-- **Zarr3 sharded** (default): inner chunk = 256, shard = 1024
+- **Zarr3 sharded** (default): inner chunk = 64, shard = 1024
 - **Zarr3 non-sharded / Zarr2**: adaptive spatial chunk based on dataset size:
   - < 20 GB → 64, 20–100 GB → 128, > 100 GB → 256
 
