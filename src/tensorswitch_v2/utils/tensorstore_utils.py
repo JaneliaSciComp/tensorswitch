@@ -15,6 +15,9 @@ import os
 from urllib.parse import urlparse, unquote
 
 
+NON_SPATIAL_AXES = {'c', 't', 'v', 'channel'}
+
+
 def adaptive_spatial_chunk(shape, dtype_str):
     """Choose default spatial chunk size based on uncompressed dataset size.
 
@@ -40,6 +43,28 @@ def adaptive_spatial_chunk(shape, dtype_str):
         return 128
     else:
         return 256
+
+
+def build_default_shape(shape, axes_order, spatial_size):
+    """Build default chunk/shard shape respecting axis types.
+
+    Non-spatial axes (c, t, v, channel) get size 1.
+    Spatial axes get spatial_size.
+
+    Args:
+        shape: Volume shape tuple
+        axes_order: List of axis names (e.g., ['z','y','x']) or None
+        spatial_size: Size for spatial dimensions
+
+    Returns:
+        list: Shape with spatial_size for spatial dims, 1 for non-spatial
+    """
+    if axes_order and len(axes_order) == len(shape):
+        return [
+            1 if ax.lower() in NON_SPATIAL_AXES else spatial_size
+            for ax in axes_order
+        ]
+    return [spatial_size] * len(shape)
 
 
 def get_tensorstore_context(num_cores=None):
@@ -228,24 +253,9 @@ def zarr3_store_spec(path, shape, dtype, use_shard=True, level_path="s0", use_om
                     Format: {'name': 'zstd', 'configuration': {'level': N}}
                     If None, defaults to zstd level 5 (sharded) or level 1 (non-sharded).
     """
-    NON_SPATIAL_AXES = ['c', 't', 'v', 'channel']
-
     # Default compression codecs
     DEFAULT_SHARDED_COMPRESSION = {'name': 'zstd', 'configuration': {'level': 5}}
     DEFAULT_NONSHARDED_COMPRESSION = {'name': 'zstd', 'configuration': {'level': 1}}
-
-    def build_default_shape(shape, axes_order, spatial_size):
-        """Build default chunk/shard shape respecting axis types."""
-        if axes_order is None:
-            return [spatial_size] * len(shape)
-
-        result = []
-        for i, axis in enumerate(axes_order):
-            if axis.lower() in NON_SPATIAL_AXES:
-                result.append(1)
-            else:
-                result.append(spatial_size)
-        return result
 
     if use_shard:
         # Use custom chunk shape if provided, otherwise build based on axes
