@@ -15,6 +15,33 @@ import os
 from urllib.parse import urlparse, unquote
 
 
+def adaptive_spatial_chunk(shape, dtype_str):
+    """Choose default spatial chunk size based on uncompressed dataset size.
+
+    Balances viewer random-access performance vs conversion time / file count:
+      < 20 GB:   64  — fine-grained access, ~19K chunks per 9 GB (manageable)
+      20-100 GB: 128 — 8x fewer files than 64, still good for viewers
+      > 100 GB:  256 — 64x fewer files than 64, acceptable viewer access
+
+    Used by Zarr2 and Zarr3 non-sharded (Zarr3 sharded always uses 1024).
+
+    Args:
+        shape: Volume shape tuple
+        dtype_str: Numpy dtype string (e.g., 'uint16', '<u2')
+
+    Returns:
+        int: Spatial chunk size (64, 128, or 256)
+    """
+    dtype_bytes = np.dtype(dtype_str).itemsize
+    dataset_size_gb = (np.prod(shape) * dtype_bytes) / (1024 ** 3)
+    if dataset_size_gb < 20:
+        return 64
+    elif dataset_size_gb < 100:
+        return 128
+    else:
+        return 256
+
+
 def get_tensorstore_context(num_cores=None):
     """
     Create TensorStore context with concurrency limits based on LSF allocation.
@@ -315,17 +342,18 @@ def zarr3_store_spec(path, shape, dtype, use_shard=True, level_path="s0", use_om
                 chunk_shape = list(custom_chunk_shape)
             print(f"Using custom chunk shape for non-sharded: {chunk_shape}")
         else:
-            # Default chunk shapes
+            # Default chunk shapes — adaptive based on dataset size
+            sc = adaptive_spatial_chunk(shape, dtype)
             if len(shape) == 5:
-                chunk_shape = [1, 1, 64, 64, 64]
+                chunk_shape = [1, 1, sc, sc, sc]
             elif len(shape) == 4:
-                chunk_shape = [1, 64, 64, 64]
+                chunk_shape = [1, sc, sc, sc]
             elif len(shape) == 3:
-                chunk_shape = [64, 64, 64]
+                chunk_shape = [sc, sc, sc]
             elif len(shape) == 2:
-                chunk_shape = [64, 64]
+                chunk_shape = [sc, sc]
             elif len(shape) == 1:
-                chunk_shape = [64]
+                chunk_shape = [sc]
 
     # Create path based on whether OME-ZARR structure is needed
     if use_ome_structure:
@@ -514,9 +542,8 @@ def zarr2_store_spec(zarr_level_path, shape, chunks=None, use_fortran_order=Fals
     """
     # Non-spatial axes that should have chunk size 1 for efficient per-slice access
     NON_SPATIAL_AXES = ['c', 't', 'v', 'channel']
-    # Default spatial chunk size for Zarr2 (no sharding, so each chunk = one file)
-    # Matches Zarr3 non-sharded default. 64^3 × 2 bytes = 512 KB per chunk for uint16.
-    DEFAULT_SPATIAL_CHUNK = 64
+    # Adaptive spatial chunk size based on dataset size (see adaptive_spatial_chunk())
+    spatial_chunk = adaptive_spatial_chunk(shape, dtype)
 
     def build_smart_chunks(shape, axes_order):
         """Build chunk shape respecting axis types - same logic as zarr3."""
@@ -529,8 +556,7 @@ def zarr2_store_spec(zarr_level_path, shape, chunks=None, use_fortran_order=Fals
             if axis.lower() in NON_SPATIAL_AXES:
                 result.append(1)  # Non-spatial: 1 for per-channel access
             else:
-                # Spatial: use 64 or array size if smaller
-                result.append(min(DEFAULT_SPATIAL_CHUNK, shape[i]))
+                result.append(min(spatial_chunk, shape[i]))
         return result
 
     def infer_axes_from_shape(shape):

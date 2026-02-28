@@ -735,8 +735,47 @@ def _get_input_metadata(args):
         return tuple(store.shape), store.dtype.name, axes_order
 
 
+def _adaptive_spatial_chunk(volume_shape, dtype_str):
+    """Choose default spatial chunk size based on dataset size.
+
+    Must match tensorstore_utils.adaptive_spatial_chunk().
+    Used for Zarr2 and Zarr3 non-sharded (Zarr3 sharded always uses 1024).
+    """
+    dtype_bytes = np.dtype(dtype_str).itemsize
+    dataset_size_gb = (np.prod(volume_shape) * dtype_bytes) / (1024 ** 3)
+    if dataset_size_gb < 20:
+        return 64
+    elif dataset_size_gb < 100:
+        return 128
+    else:
+        return 256
+
+
+def _build_default_shape(volume_shape, axes_order, spatial_size):
+    """Build default chunk/shard shape matching actual writer defaults.
+
+    Non-spatial axes (c, t, v, channel) get size 1.
+    Spatial axes get spatial_size.
+    Must match: tensorstore_utils.py build_default_shape() and build_smart_chunks().
+    """
+    NON_SPATIAL = {'c', 't', 'v', 'channel'}
+    if axes_order and len(axes_order) == len(volume_shape):
+        return tuple(
+            1 if ax.lower() in NON_SPATIAL else spatial_size
+            for i, ax in enumerate(axes_order)
+        )
+    # Fallback: assume all dimensions are spatial
+    return tuple(spatial_size for _ in volume_shape)
+
+
 def _estimate_shard_info(args, volume_shape, dtype_str, axes_order=None):
-    """Estimate shard shape and total shards for resource calculation.
+    """Estimate shard/chunk shape and count for resource calculation.
+
+    Uses the same defaults as the actual writers in tensorstore_utils.py:
+      - Zarr3 sharded:     shard=1024 spatial
+      - Zarr3 non-sharded: adaptive chunk (64/128/256 based on dataset size)
+      - Zarr2:             adaptive chunk (64/128/256 based on dataset size)
+    Non-spatial axes (c, t, v) always get size 1.
 
     Args:
         args: Parsed command-line arguments
@@ -745,46 +784,33 @@ def _estimate_shard_info(args, volume_shape, dtype_str, axes_order=None):
         axes_order: Axis names (e.g., ['x','y','z','c'] for precomputed)
 
     Returns:
-        (shard_shape, total_shards) tuple. If no sharding, shard_shape is the
-        chunk_shape and total_shards is the total number of chunks.
+        (shard_or_chunk_shape, total_count) tuple.
+        For Zarr3 sharded: shard shape and total shards.
+        For Zarr2 / Zarr3 non-sharded: chunk shape and total chunks.
     """
-    dtype_bytes = np.dtype(dtype_str).itemsize
-    writer = create_writer(args)
-
-    # Determine chunk shape
-    if args.chunk_shape:
-        chunk_shape = parse_shape(args.chunk_shape, "chunk_shape")
-    else:
-        chunk_shape = writer.get_default_chunk_shape(volume_shape, dtype_size=dtype_bytes)
-
-    # Determine shard shape
     use_sharding = args.output_format == "zarr3" and not args.no_sharding
+
     if use_sharding:
+        # Zarr3 sharded: resource needs driven by shard size (always 1024)
         if args.shard_shape:
-            shard_shape = parse_shape(args.shard_shape, "shard_shape")
+            shape = parse_shape(args.shard_shape, "shard_shape")
         else:
-            shard_shape = writer.get_default_shard_shape(chunk_shape, volume_shape)
-            if shard_shape is None:
-                shard_shape = chunk_shape
+            shape = _build_default_shape(volume_shape, axes_order, 1024)
     else:
-        shard_shape = chunk_shape
-
-    # Expand both shapes to 5D for compatible division
-    # Use writer's expansion methods if available (Zarr3Writer has _expand_to_5d)
-    if hasattr(writer, '_expand_to_5d') and hasattr(writer, '_expand_shard_shape'):
-        expanded_shape, _, _ = writer._expand_to_5d(list(volume_shape), axes_order, None)
-        expanded_shard = writer._expand_shard_shape(list(shard_shape), axes_order if axes_order else ['z', 'y', 'x'])
-        total_shards = int(np.prod(np.ceil(np.array(expanded_shape) / np.array(expanded_shard)).astype(int)))
-    else:
-        # Fallback: pad shard_shape to match volume_shape dimensions
-        if len(shard_shape) < len(volume_shape):
-            extra_dims = len(volume_shape) - len(shard_shape)
-            shard_shape_padded = [1] * extra_dims + list(shard_shape)
+        # Zarr2 or Zarr3 non-sharded: adaptive chunk based on dataset size
+        if args.chunk_shape:
+            shape = parse_shape(args.chunk_shape, "chunk_shape")
         else:
-            shard_shape_padded = shard_shape
-        total_shards = int(np.prod(np.ceil(np.array(volume_shape) / np.array(shard_shape_padded)).astype(int)))
+            spatial = _adaptive_spatial_chunk(volume_shape, dtype_str)
+            shape = _build_default_shape(volume_shape, axes_order, spatial)
 
-    return shard_shape, total_shards
+    # Calculate total shards/chunks by dividing volume by shape
+    total = 1
+    for i, dim in enumerate(volume_shape):
+        s = shape[i] if i < len(shape) else shape[-1]
+        total *= math.ceil(dim / s)
+
+    return shape, total
 
 
 # Import resource calculation functions from utils (shared with batch.py)
@@ -828,28 +854,34 @@ def submit_job(args, return_job_id=False):
         dtype_bytes = np.dtype(dtype_str).itemsize
         dataset_size_gb = (np.prod(volume_shape) * dtype_bytes) / (1024 ** 3)
         print(f"  Shape: {volume_shape}, dtype: {dtype_str}")
-        if args.output_format == 'zarr2':
-            print(f"  Chunk shape: {shard_shape}, total chunks: {total_shards}")
-        else:
+        use_sharding = args.output_format == "zarr3" and not args.no_sharding
+        if use_sharding:
             print(f"  Shard shape: {shard_shape}, total shards: {total_shards}")
+        else:
+            print(f"  Chunk shape: {shard_shape}, total chunks: {total_shards}")
         if use_bioio:
             mode_name = "Bio-Formats" if getattr(args, 'use_bioformats', False) else "BioIO"
             print(f"  {mode_name} mode: applying 10x wall time and 3x memory multipliers")
 
         if memory_gb is None:
             memory_gb = _calculate_memory(volume_shape, dtype_str, shard_shape, total_shards, use_bioio=use_bioio, output_format=args.output_format)
-        if wall_time is None:
-            wall_time = _calculate_wall_time(volume_shape, dtype_str, shard_shape, total_shards, use_bioio=use_bioio, output_format=args.output_format)
 
-    # Cores: capped at 8 (I/O-bound)
-    # Zarr3: based on memory (large shards = large buffers = need more cores)
-    # Zarr2: based on dataset size (many small chunks = more compression parallelism)
+    # Cores first (wall time scales with core count for non-sharded)
+    # Non-sharded (Zarr2 / Zarr3 --no_sharding): min 4 cores — many small chunk files
+    #   benefit from I/O parallelism + compression threads
+    # Zarr3 sharded: based on memory (large shard buffers need more cores)
     if args.cores is not None:
         cores = args.cores
-    elif args.output_format == 'zarr2' and dataset_size_gb is not None:
-        cores = min(8, max(2, int(math.ceil(dataset_size_gb / 25))))
+    elif not use_sharding and dataset_size_gb is not None:
+        cores = min(8, max(4, int(math.ceil(dataset_size_gb / 25)) * 2))
     else:
         cores = min(8, max(1, int(math.ceil(memory_gb / 15)) * 2))
+
+    # Wall time: pass cores so non-sharded estimates scale with parallelism
+    if needs_auto and wall_time is None:
+        wall_time = _calculate_wall_time(volume_shape, dtype_str, shard_shape, total_shards, use_bioio=use_bioio,
+                                         output_format=args.output_format, no_sharding=args.no_sharding,
+                                         cores=cores)
 
     # Enforce cluster policy: 15 GB per core minimum
     memory_gb = max(memory_gb, cores * 15)
