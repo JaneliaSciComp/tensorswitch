@@ -896,7 +896,21 @@ info         → Precomputed
 ### Chunk Shape Auto-Calculation
 
 - Non-spatial axes (t, c): chunk = 1 (per-channel access)
-- Spatial axes (z, y, x): chunk = 256 (inner), shard = 1024
+- **Zarr3 sharded** (default): inner chunk = 256, shard = 1024
+- **Zarr3 non-sharded / Zarr2**: adaptive spatial chunk based on dataset size:
+  - < 20 GB → 64, 20–100 GB → 128, > 100 GB → 256
+
+### LSF Resource Auto-Calculation
+
+When using `--submit`, memory, wall time, and cores are auto-calculated per format:
+
+| | Zarr3 Sharded | Zarr3 No-Shard / Zarr2 |
+|---|---|---|
+| **Cores** | ceil(mem/15) × 2, cap 8 | min 4, ceil(size_gb/25) × 2, cap 8 |
+| **Memory** | shard buffers + base | reader overhead + base (then max with cores × 15 GB) |
+| **Wall time** | per-shard / (cores × 0.85) | max(throughput, per-chunk) / (cores × 0.7) |
+
+Override with `--memory`, `--wall_time`, `--cores`. See [docs/RESOURCE_AUTO_CALCULATION.md](docs/RESOURCE_AUTO_CALCULATION.md) for details.
 
 ---
 
