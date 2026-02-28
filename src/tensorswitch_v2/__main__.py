@@ -735,82 +735,24 @@ def _get_input_metadata(args):
         return tuple(store.shape), store.dtype.name, axes_order
 
 
-def _adaptive_spatial_chunk(volume_shape, dtype_str):
-    """Choose default spatial chunk size based on dataset size.
-
-    Must match tensorstore_utils.adaptive_spatial_chunk().
-    Used for Zarr2 and Zarr3 non-sharded (Zarr3 sharded always uses 1024).
-    """
-    dtype_bytes = np.dtype(dtype_str).itemsize
-    dataset_size_gb = (np.prod(volume_shape) * dtype_bytes) / (1024 ** 3)
-    if dataset_size_gb < 20:
-        return 64
-    elif dataset_size_gb < 100:
-        return 128
-    else:
-        return 256
-
-
-def _build_default_shape(volume_shape, axes_order, spatial_size):
-    """Build default chunk/shard shape matching actual writer defaults.
-
-    Non-spatial axes (c, t, v, channel) get size 1.
-    Spatial axes get spatial_size.
-    Must match: tensorstore_utils.py build_default_shape() and build_smart_chunks().
-    """
-    NON_SPATIAL = {'c', 't', 'v', 'channel'}
-    if axes_order and len(axes_order) == len(volume_shape):
-        return tuple(
-            1 if ax.lower() in NON_SPATIAL else spatial_size
-            for i, ax in enumerate(axes_order)
-        )
-    # Fallback: assume all dimensions are spatial
-    return tuple(spatial_size for _ in volume_shape)
-
-
 def _estimate_shard_info(args, volume_shape, dtype_str, axes_order=None):
     """Estimate shard/chunk shape and count for resource calculation.
 
-    Uses the same defaults as the actual writers in tensorstore_utils.py:
-      - Zarr3 sharded:     shard=1024 spatial
-      - Zarr3 non-sharded: adaptive chunk (64/128/256 based on dataset size)
-      - Zarr2:             adaptive chunk (64/128/256 based on dataset size)
-    Non-spatial axes (c, t, v) always get size 1.
-
-    Args:
-        args: Parsed command-line arguments
-        volume_shape: Input volume shape (may be 3D, 4D, or 5D)
-        dtype_str: Data type string
-        axes_order: Axis names (e.g., ['x','y','z','c'] for precomputed)
-
-    Returns:
-        (shard_or_chunk_shape, total_count) tuple.
-        For Zarr3 sharded: shard shape and total shards.
-        For Zarr2 / Zarr3 non-sharded: chunk shape and total chunks.
+    Thin CLI wrapper around resource_utils.estimate_shard_info() — parses
+    args.shard_shape / args.chunk_shape strings, then delegates to the
+    shared implementation.
     """
-    use_sharding = args.output_format == "zarr3" and not args.no_sharding
-
-    if use_sharding:
-        # Zarr3 sharded: resource needs driven by shard size (always 1024)
-        if args.shard_shape:
-            shape = parse_shape(args.shard_shape, "shard_shape")
-        else:
-            shape = _build_default_shape(volume_shape, axes_order, 1024)
-    else:
-        # Zarr2 or Zarr3 non-sharded: adaptive chunk based on dataset size
-        if args.chunk_shape:
-            shape = parse_shape(args.chunk_shape, "chunk_shape")
-        else:
-            spatial = _adaptive_spatial_chunk(volume_shape, dtype_str)
-            shape = _build_default_shape(volume_shape, axes_order, spatial)
-
-    # Calculate total shards/chunks by dividing volume by shape
-    total = 1
-    for i, dim in enumerate(volume_shape):
-        s = shape[i] if i < len(shape) else shape[-1]
-        total *= math.ceil(dim / s)
-
-    return shape, total
+    from .utils.resource_utils import estimate_shard_info
+    shard_shape = parse_shape(args.shard_shape, "shard_shape") if args.shard_shape else None
+    chunk_shape = parse_shape(args.chunk_shape, "chunk_shape") if args.chunk_shape else None
+    return estimate_shard_info(
+        volume_shape, dtype_str,
+        output_format=args.output_format,
+        chunk_shape=chunk_shape,
+        shard_shape=shard_shape,
+        axes_order=axes_order,
+        no_sharding=args.no_sharding,
+    )
 
 
 # Import resource calculation functions from utils (shared with batch.py)
