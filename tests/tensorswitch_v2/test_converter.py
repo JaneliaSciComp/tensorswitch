@@ -153,10 +153,10 @@ class TestN5ToZarr3:
 
         assert stats['chunks_processed'] > 0
 
-        # Verify data
+        # Verify data (nested structure: raw/s0/)
         output_spec = {
             'driver': 'zarr3',
-            'kvstore': {'driver': 'file', 'path': os.path.join(output_path, 's0')}
+            'kvstore': {'driver': 'file', 'path': os.path.join(output_path, 'raw', 's0')}
         }
         output_store = ts.open(output_spec, read=True).result()
         output_data = output_store[...].read().result()
@@ -183,10 +183,10 @@ class TestTiffToZarr2:
         validation = validate_zarr2_output(output_path)
         assert validation['valid'], f"Validation failed: {validation['errors']}"
 
-        # Verify data
+        # Verify data (nested structure: raw/s0/)
         output_spec = {
             'driver': 'zarr',
-            'kvstore': {'driver': 'file', 'path': os.path.join(output_path, 's0')}
+            'kvstore': {'driver': 'file', 'path': os.path.join(output_path, 'raw', 's0')}
         }
         output_store = ts.open(output_spec, read=True).result()
         output_data = output_store[...].read().result()
@@ -234,10 +234,10 @@ class TestChunkRangeProcessing:
         # Total processed should equal total chunks
         assert stats1['chunks_processed'] + stats2['chunks_processed'] == total
 
-        # Verify complete data
+        # Verify complete data (nested structure: raw/s0/)
         output_spec = {
             'driver': 'zarr3',
-            'kvstore': {'driver': 'file', 'path': os.path.join(output_path, 's0')}
+            'kvstore': {'driver': 'file', 'path': os.path.join(output_path, 'raw', 's0')}
         }
         output_store = ts.open(output_spec, read=True).result()
         output_data = output_store[...].read().result()
