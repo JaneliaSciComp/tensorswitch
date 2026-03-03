@@ -6,10 +6,10 @@ Tier 2 reader - new implementation for HDF5 format.
 
 from typing import Dict, Optional, List
 import dask.array as da
-from .base import BaseReader
+from .base import DaskReader
 
 
-class HDF5Reader(BaseReader):
+class HDF5Reader(DaskReader):
     """
     Reader for generic HDF5 files.
 
@@ -167,49 +167,13 @@ class HDF5Reader(BaseReader):
         find_all(h5file)
         return datasets
 
-    def get_tensorstore_spec(self) -> Dict:
-        """
-        Return TensorStore spec wrapping Dask array from HDF5 dataset.
-
-        Opens the HDF5 file, creates a Dask array for lazy access,
-        and wraps it in TensorStore's 'array' driver.
-
-        Returns:
-            dict: TensorStore spec with 'array' driver wrapping Dask array
-
-        Example:
-            >>> reader = HDF5Reader("/data.h5", dataset_path="/volume")
-            >>> spec = reader.get_tensorstore_spec()
-            >>> print(spec['driver'])
-            'array'
-        """
-        if self._dask_array is None:
-            dataset = self._open_dataset()
-
-            # Determine chunk shape
-            if self._chunk_shape:
-                chunks = self._chunk_shape
-            elif dataset.chunks:
-                chunks = dataset.chunks
-            else:
-                # Default chunking for non-chunked datasets
-                chunks = 'auto'
-
-            # Create dask array from HDF5 dataset
-            self._dask_array = da.from_array(dataset, chunks=chunks)
-
-        # Wrap Dask array in TensorStore 'array' driver
-        spec = {
-            'driver': 'array',
-            'array': self._dask_array,
-            'schema': {
-                'dtype': str(self._dask_array.dtype),
-                'shape': list(self._dask_array.shape),
-                'dimension_names': self._infer_dimension_names(self._dask_array.shape)
-            }
-        }
-
-        return spec
+    def _load(self):
+        """Open the HDF5 dataset and create a dask array for lazy access."""
+        if self._dask_array is not None:
+            return
+        dataset = self._open_dataset()
+        chunks = self._chunk_shape or dataset.chunks or 'auto'
+        self._dask_array = da.from_array(dataset, chunks=chunks)
 
     def get_metadata(self) -> Dict:
         """
@@ -304,20 +268,6 @@ class HDF5Reader(BaseReader):
             'y': convert_to_nanometers(metadata.get('voxel_size_y', 1.0), unit),
             'z': convert_to_nanometers(metadata.get('voxel_size_z', 1.0), unit)
         }
-
-    def _infer_dimension_names(self, shape):
-        """Infer dimension names from array shape."""
-        ndim = len(shape)
-        if ndim == 2:
-            return ['y', 'x']
-        elif ndim == 3:
-            return ['z', 'y', 'x']
-        elif ndim == 4:
-            return ['c', 'z', 'y', 'x']
-        elif ndim == 5:
-            return ['t', 'c', 'z', 'y', 'x']
-        else:
-            return [f'dim_{i}' for i in range(ndim)]
 
     def __del__(self):
         """Close HDF5 file on cleanup."""

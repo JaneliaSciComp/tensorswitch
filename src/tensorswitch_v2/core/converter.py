@@ -20,7 +20,6 @@ from ..writers.base import BaseWriter
 from ..utils import (
     get_chunk_domains,
     get_total_chunks_from_store,
-    get_tensorstore_context,
     detect_source_order,
     update_ome_metadata_if_needed,
 )
@@ -142,24 +141,9 @@ class DistributedConverter:
         # 1. Open input store from reader
         if verbose:
             print(f"Opening input: {self.reader}")
-        input_spec = self.reader.get_tensorstore_spec()
-
-        # Handle Tier 2 readers (dask arrays) vs Tier 1 (native TensorStore)
-        if input_spec.get('driver') == 'array' and 'array' in input_spec:
-            # Tier 2: Reader returns a dask array wrapped in 'array' driver
-            self._dask_array = input_spec['array']
-            self._input_store = None  # Will use dask array directly
-            input_shape = tuple(self._dask_array.shape)
-            input_dtype = _get_dtype_name(self._dask_array.dtype)
-            self._is_tier2 = True
-        else:
-            # Tier 1: Native TensorStore driver
-            input_spec['context'] = get_tensorstore_context()
-            self._input_store = ts.open(input_spec, read=True).result()
-            input_shape = tuple(self._input_store.shape)
-            input_dtype = _get_dtype_name(self._input_store.dtype)
-            self._is_tier2 = False
-            self._dask_array = None
+        self._input_store = self.reader.get_tensorstore()
+        input_shape = tuple(self._input_store.shape)
+        input_dtype = _get_dtype_name(self._input_store.dtype)
 
         if verbose:
             print(f"  Shape: {input_shape}, dtype: {input_dtype}")
@@ -168,8 +152,8 @@ class DistributedConverter:
         use_fortran_order = False
         axes_order = None
 
-        # First try to get actual domain labels from TensorStore (most accurate)
-        if not self._is_tier2 and self._input_store is not None:
+        # Get domain labels from TensorStore (works for both Tier 1 and virtual_chunked)
+        if self._input_store is not None:
             try:
                 domain_labels = list(self._input_store.domain.labels)
                 if domain_labels and all(isinstance(l, str) and l for l in domain_labels):
@@ -178,14 +162,6 @@ class DistributedConverter:
                         print(f"  Axes from TensorStore domain: {axes_order}")
             except Exception:
                 pass
-
-        # Fallback: try dimension_names from reader spec (CZI, etc.)
-        if axes_order is None:
-            reader_axes = input_spec.get('schema', {}).get('dimension_names')
-            if reader_axes and all(isinstance(a, str) for a in reader_axes):
-                axes_order = list(reader_axes)
-                if verbose:
-                    print(f"  Axes from reader: {axes_order}")
 
         # Handle order: force_order overrides auto-detection
         if force_order is not None:
@@ -197,8 +173,7 @@ class DistributedConverter:
         elif preserve_order:
             # Auto-detect from source
             try:
-                source_for_order = self._dask_array if self._is_tier2 else self._input_store
-                order_info = detect_source_order(source_for_order)
+                order_info = detect_source_order(self._input_store)
                 use_fortran_order = order_info.get('is_fortran_order', False)
                 # Only use detected axes if reader didn't provide them
                 if axes_order is None:
@@ -339,20 +314,9 @@ class DistributedConverter:
                     read_domain.insert(self._squeeze_axis, slice(0, 1))
                     read_domain = tuple(read_domain)
 
-                # Read from input (handle both Tier 1 and Tier 2 readers)
-                if self._is_tier2:
-                    # Tier 2: Read from dask array, need to convert domain to slices
-                    # read_domain may already be a tuple of slices
-                    if isinstance(read_domain, tuple) and all(isinstance(s, slice) for s in read_domain):
-                        slices = read_domain
-                    else:
-                        slices = self._domain_to_slices(read_domain)
-                    data = self._dask_array[slices].compute()
-                else:
-                    # Tier 1: Read from TensorStore directly
-                    # Pass order parameter to preserve source memory layout (F-order vs C-order)
-                    read_order = 'F' if getattr(self, '_use_fortran_order', False) else 'C'
-                    data = self._input_store[read_domain].read(order=read_order).result()
+                # Read from TensorStore (works uniformly for all reader tiers)
+                read_order = 'F' if getattr(self, '_use_fortran_order', False) else 'C'
+                data = self._input_store[read_domain].read(order=read_order).result()
 
                 # Squeeze singleton channel if we detected one
                 if self._squeeze_channel and self._squeeze_axis is not None:
@@ -453,20 +417,9 @@ class DistributedConverter:
         if self._total_chunks is not None:
             return self._total_chunks
 
-        # Get input shape (handle both Tier 1 and Tier 2 readers)
-        input_spec = self.reader.get_tensorstore_spec()
-
-        if input_spec.get('driver') == 'array' and 'array' in input_spec:
-            # Tier 2: Get shape from dask array
-            dask_array = input_spec['array']
-            input_shape = tuple(dask_array.shape)
-            input_dtype = _get_dtype_name(dask_array.dtype)
-        else:
-            # Tier 1: Open TensorStore to get shape
-            input_spec['context'] = get_tensorstore_context()
-            input_store = ts.open(input_spec, read=True).result()
-            input_shape = tuple(input_store.shape)
-            input_dtype = _get_dtype_name(input_store.dtype)
+        input_store = self.reader.get_tensorstore()
+        input_shape = tuple(input_store.shape)
+        input_dtype = _get_dtype_name(input_store.dtype)
 
         # Create temp output spec to get chunk layout
         output_spec = self.writer.create_output_spec(
@@ -518,23 +471,6 @@ class DistributedConverter:
             start = stop
 
         return ranges
-
-    def _domain_to_slices(self, domain) -> tuple:
-        """
-        Convert TensorStore IndexDomain to Python slice tuple for dask array indexing.
-
-        Args:
-            domain: TensorStore IndexDomain
-
-        Returns:
-            tuple: Tuple of slices for array indexing
-        """
-        slices = []
-        for i in range(domain.ndim):
-            start = int(domain.origin[i])
-            stop = start + int(domain.shape[i])
-            slices.append(slice(start, stop))
-        return tuple(slices)
 
     def __repr__(self) -> str:
         return f"DistributedConverter(reader={self.reader}, writer={self.writer})"

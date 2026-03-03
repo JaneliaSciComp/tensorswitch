@@ -11,6 +11,7 @@ from urllib.parse import urlparse
 import os
 import json
 import numpy as np
+import tensorstore as ts
 
 
 # ============================================================================
@@ -139,7 +140,7 @@ class BaseReader(ABC):
     Example Usage:
         >>> from tensorswitch_v2.readers import TiffReader
         >>> reader = TiffReader("/path/to/data.tif")
-        >>> ts_spec = reader.get_tensorstore_spec()
+        >>> store = reader.get_tensorstore()
         >>> metadata = reader.get_metadata()
         >>> voxel_sizes = reader.get_voxel_sizes()
 
@@ -158,43 +159,28 @@ class BaseReader(ABC):
         self.path = path
 
     @abstractmethod
-    def get_tensorstore_spec(self) -> Dict:
+    def get_tensorstore(self) -> ts.TensorStore:
         """
-        Return TensorStore specification for this data source.
+        Return an opened TensorStore for this data source.
 
-        This is the core conversion method - converts format-specific data
-        into a TensorStore spec (virtual or open).
+        This is the core access method - converts format-specific data
+        into an opened ts.TensorStore ready for reading.
 
         Returns:
-            dict: TensorStore spec with keys like:
-                - 'driver': TensorStore driver name (e.g., 'zarr3', 'n5', 'array')
-                - 'kvstore': Key-value store specification
-                - 'schema': Array schema (dtype, shape, dimension_names)
-                - 'open': True if opening existing data
+            ts.TensorStore: Opened store with shape, dtype, and domain labels set.
 
         Example (N5 - native TensorStore):
-            {
-                'driver': 'n5',
-                'kvstore': {'driver': 'file', 'path': '/data.n5'},
-                'open': True,
-                'schema': {'dimension_names': ['z', 'y', 'x']}
-            }
+            Opens via ts.open({'driver': 'n5', 'kvstore': ..., 'open': True})
+            and returns the result.
 
-        Example (TIFF - wrapped Dask array):
-            {
-                'driver': 'array',
-                'array': dask_array,  # Lazy Dask array
-                'schema': {
-                    'dtype': 'uint16',
-                    'shape': [100, 1024, 1024],
-                    'dimension_names': ['z', 'y', 'x']
-                }
-            }
+        Example (TIFF/ND2/IMS - DaskReader subclass):
+            Returns ts.virtual_chunked(self._read_fn, ...) backed by a dask array.
 
         Notes:
-            - Prefer virtual/lazy specs when possible (avoid loading data)
-            - For non-TensorStore formats, wrap in Dask then use 'array' driver
-            - Include dimension_names for dimension-aware processing
+            - Tier 1 readers (N5, Zarr, Precomputed) call ts.open() on a spec dict.
+            - Tier 2+ readers (DaskReader subclasses) use ts.virtual_chunked().
+            - The returned store is always already opened; callers need not call
+              ts.open() again.
         """
         pass
 
@@ -306,13 +292,12 @@ class BaseReader(ABC):
             - Subclasses should override to extract format-specific info
             - Missing fields will be None or have sensible defaults
         """
-        # Get basic info from spec
-        spec = self.get_tensorstore_spec()
-        schema = spec.get('schema', {})
+        # Get basic info from the opened store
+        store = self.get_tensorstore()
 
-        shape = tuple(schema.get('shape', []))
-        dtype = schema.get('dtype', 'unknown')
-        dimension_names = schema.get('dimension_names', [])
+        shape = tuple(store.shape)
+        dtype = str(store.dtype)
+        dimension_names = list(store.domain.labels)
 
         # Get voxel sizes
         try:
@@ -435,10 +420,10 @@ class BaseReader(ABC):
         Returns:
             dict: Basic OME-NGFF metadata structure
         """
-        # Get array shape from TensorStore spec
-        spec = self.get_tensorstore_spec()
-        shape = spec.get('schema', {}).get('shape', [])
-        dimension_names = spec.get('schema', {}).get('dimension_names', [])
+        # Get array shape from the opened store
+        store = self.get_tensorstore()
+        shape = list(store.shape)
+        dimension_names = list(store.domain.labels)
 
         # Infer dimension names if not provided
         if not dimension_names:
@@ -547,3 +532,98 @@ class BaseReader(ABC):
     def __repr__(self) -> str:
         """String representation of reader."""
         return f"{self.__class__.__name__}(path='{self.path}')"
+
+
+class DaskReader(BaseReader, ABC):
+    """
+    Intermediate base class for dask-backed readers (Tier 2+).
+
+    Subclasses implement _load() to populate self._dask_array with a lazy
+    dask array sourced from their native library (tifffile, nd2, h5py, etc.).
+    This class implements get_tensorstore() using ts.virtual_chunked, which
+    wraps the dask array in a real ts.TensorStore backed by a synchronous
+    _read_fn callback. TensorStore automatically dispatches _read_fn on its
+    thread pool — no async handling required.
+
+    The virtual_chunked chunk shape is set to match the dask array's native
+    chunk shape, so reads align with native chunking and avoid cross-chunk I/O.
+
+    Architecture Layer: 1 (Foundation - No Dependencies)
+    Tier: 2+ (Dask-backed)
+
+    Subclass Requirements:
+        Must implement _load() to set self._dask_array.
+        Optionally override _get_dimension_names() for format-specific axes.
+    """
+
+    def __init__(self, path: str):
+        super().__init__(path)
+        self._dask_array = None  # populated by _load()
+
+    @abstractmethod
+    def _load(self):
+        """
+        Populate self._dask_array with the format's data as a dask array.
+
+        Must be idempotent: guard the body with ``if self._dask_array is not None: return``.
+        Called automatically by get_tensorstore() before creating the virtual store.
+        """
+        pass
+
+    def _read_fn(self, domain, array, read_params):
+        """
+        Synchronous read callback for ts.virtual_chunked.
+
+        Slices self._dask_array to fill the pre-allocated output buffer.
+        TensorStore dispatches this on a thread pool, so blocking dask
+        compute() calls are safe here.
+        """
+        slices = tuple(
+            slice(int(domain.origin[i]), int(domain.origin[i]) + int(domain.shape[i]))
+            for i in range(domain.ndim)
+        )
+        array[...] = self._dask_array[slices].compute()
+
+    def _get_dimension_names(self):
+        """
+        Return axis labels for the array domain.
+
+        Default implementation infers names from shape (ZYX/CZYX/TCZYX).
+        Override in subclasses to use format-specific metadata instead
+        (e.g., tifffile axes string, ND2 dimension order).
+        """
+        return self._infer_dimension_names(self._dask_array.shape)
+
+    def _infer_dimension_names(self, shape):
+        """Infer standard dimension names from array shape."""
+        ndim = len(shape)
+        defaults = {
+            2: ['y', 'x'],
+            3: ['z', 'y', 'x'],
+            4: ['c', 'z', 'y', 'x'],
+            5: ['t', 'c', 'z', 'y', 'x'],
+        }
+        return defaults.get(ndim, [f'dim_{i}' for i in range(ndim)])
+
+    def get_tensorstore(self) -> ts.TensorStore:
+        """
+        Return a ts.TensorStore backed by the dask array via virtual_chunked.
+
+        Calls _load() to ensure self._dask_array is populated, then creates
+        a virtual_chunked store whose read chunk shape matches the dask array's
+        native chunk shape.
+
+        Returns:
+            ts.TensorStore: Opened virtual store with correct shape, dtype, and
+                domain labels.
+        """
+        self._load()
+        shape = list(self._dask_array.shape)
+        dtype = self._dask_array.dtype
+        native_chunk_shape = [int(c[0]) for c in self._dask_array.chunks]
+        return ts.virtual_chunked(
+            self._read_fn,
+            dtype=ts.dtype(dtype),
+            domain=ts.IndexDomain(shape=shape, labels=self._get_dimension_names()),
+            chunk_layout=ts.ChunkLayout(read_chunk_shape=native_chunk_shape),
+        )

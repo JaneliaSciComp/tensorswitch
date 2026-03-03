@@ -6,10 +6,10 @@ Converts BIOIO's dask arrays to TensorStore intermediate format.
 """
 
 from typing import Dict, Optional, List, Any
-from .base import BaseReader
+from .base import DaskReader
 
 
-class BIOIOReader(BaseReader):
+class BIOIOReader(DaskReader):
     """
     Reader adapter for BIOIO library, supporting 20+ microscopy formats.
 
@@ -226,44 +226,11 @@ class BIOIOReader(BaseReader):
         self._dask_array = dask_data
         return self._dask_array
 
-    def get_tensorstore_spec(self) -> Dict:
-        """
-        Return TensorStore spec wrapping BIOIO's dask array.
-
-        Converts BIOIO's dask array to TensorStore's 'array' driver format,
-        which serves as the intermediate representation.
-
-        Returns:
-            dict: TensorStore spec with 'array' driver wrapping dask array
-
-        Example:
-            >>> reader = BIOIOReader("/data.czi")
-            >>> spec = reader.get_tensorstore_spec()
-            >>> print(spec['driver'])
-            'array'
-
-        Notes:
-            - BIOIO returns dask arrays in TCZYX order
-            - Singleton T/C dimensions are squeezed
-            - Final order is typically ZYX (3D) or CZYX (4D) or TCZYX (5D)
-        """
-        dask_array = self._get_dask_array()
-
-        # Infer dimension names based on final shape
-        dimension_names = self._infer_dimension_names(dask_array.shape)
-
-        # Wrap dask array in TensorStore 'array' driver
-        spec = {
-            'driver': 'array',
-            'array': dask_array,
-            'schema': {
-                'dtype': str(dask_array.dtype),
-                'shape': list(dask_array.shape),
-                'dimension_names': dimension_names
-            }
-        }
-
-        return spec
+    def _load(self):
+        """Load BIOIO dask array into self._dask_array."""
+        if self._dask_array is not None:
+            return
+        self._dask_array = self._get_dask_array()
 
     def get_metadata(self) -> Dict:
         """
