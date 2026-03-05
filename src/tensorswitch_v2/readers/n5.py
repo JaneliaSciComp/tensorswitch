@@ -12,6 +12,7 @@ from urllib.parse import urlparse
 import tensorstore as ts
 from .base import BaseReader
 from ..utils.format_loaders import convert_to_nanometers
+from ..utils import get_tensorstore_context
 
 
 def _parse_remote_url(url: str) -> Tuple[str, dict]:
@@ -119,42 +120,24 @@ class N5Reader(BaseReader):
         self._metadata_cache = None
         self._full_path = os.path.join(path, dataset_path) if dataset_path else path
 
-    def get_tensorstore_spec(self) -> Dict:
+    def get_tensorstore(self) -> ts.TensorStore:
         """
-        Return TensorStore spec using native N5 driver.
+        Return an opened TensorStore using the native N5 driver.
 
         This is a Tier 1 reader - uses TensorStore's native N5 driver
         with zero conversion overhead.
 
         Returns:
-            dict: TensorStore spec for N5 dataset with keys:
-                - 'driver': 'n5'
-                - 'kvstore': Path to N5 container
-                - 'path': Dataset path within container (if multi-scale)
-                - 'open': True (opening existing data)
-                - 'schema': Dimension names if available
+            ts.TensorStore: Opened store for the N5 dataset.
 
         Example:
-            >>> reader = N5Reader("/data.n5")
-            >>> spec = reader.get_tensorstore_spec()
-            >>> print(spec)
-            {
-                'driver': 'n5',
-                'kvstore': {'driver': 'file', 'path': '/data.n5'},
-                'open': True,
-                'schema': {'dimension_names': ['z', 'y', 'x']}
-            }
-
-        Example (multi-scale):
             >>> reader = N5Reader("/data.n5", dataset_path="s0")
-            >>> spec = reader.get_tensorstore_spec()
-            >>> print(spec['path'])
-            's0'
+            >>> store = reader.get_tensorstore()
+            >>> print(store.shape)
 
         Notes:
             - Native N5 driver = maximum performance
             - Supports remote kvstores (http, gcs, s3)
-            - Lazy evaluation (doesn't read data)
             - Compression handled by TensorStore automatically
         """
         # Detect URL scheme and use appropriate kvstore driver
@@ -163,17 +146,15 @@ class N5Reader(BaseReader):
         spec = {
             'driver': 'n5',
             'kvstore': kvstore_spec,
-            'open': True
+            'open': True,
+            'context': get_tensorstore_context(),
         }
 
         # Add dataset path if specified (for multi-scale N5)
         if self.dataset_path:
             spec['path'] = self.dataset_path
 
-        # Note: N5 driver doesn't support dimension_names in schema
-        # Dimension names are stored separately in metadata for reference
-
-        return spec
+        return ts.open(spec, read=True).result()
 
     def get_metadata(self) -> Dict:
         """

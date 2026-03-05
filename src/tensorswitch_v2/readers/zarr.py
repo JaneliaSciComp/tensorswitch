@@ -8,7 +8,9 @@ Contains both Zarr3Reader and Zarr2Reader.
 from typing import Dict, Optional, List
 import os
 import json
+import tensorstore as ts
 from .base import BaseReader
+from ..utils import get_tensorstore_context
 
 
 class Zarr3Reader(BaseReader):
@@ -66,36 +68,29 @@ class Zarr3Reader(BaseReader):
         self._dataset_path = dataset_path
         self._metadata_cache = None
 
-    def get_tensorstore_spec(self) -> Dict:
+    def get_tensorstore(self) -> ts.TensorStore:
         """
-        Return native TensorStore spec for Zarr3.
-
-        Creates a TensorStore spec using the 'zarr3' driver for
-        direct, high-performance access to Zarr3 data.
+        Return an opened TensorStore using the native Zarr3 driver.
 
         Returns:
-            dict: TensorStore spec with 'zarr3' driver
+            ts.TensorStore: Opened store for the Zarr3 dataset.
 
         Example:
             >>> reader = Zarr3Reader("/data.zarr", dataset_path="s0")
-            >>> spec = reader.get_tensorstore_spec()
-            >>> print(spec['driver'])
-            'zarr3'
+            >>> store = reader.get_tensorstore()
+            >>> print(store.shape)
 
         Notes:
             - Tier 1: Direct TensorStore driver, zero conversion overhead
             - Supports local files, GCS, S3, and HTTP
         """
-        # Build kvstore based on path type
-        kvstore = self._build_kvstore()
-
         spec = {
             'driver': 'zarr3',
-            'kvstore': kvstore,
+            'kvstore': self._build_kvstore(),
             'open': True,
+            'context': get_tensorstore_context(),
         }
-
-        return spec
+        return ts.open(spec, read=True).result()
 
     def _build_kvstore(self) -> Dict:
         """
@@ -291,32 +286,25 @@ class Zarr2Reader(BaseReader):
         self._dataset_path = dataset_path
         self._metadata_cache = None
 
-    def get_tensorstore_spec(self) -> Dict:
+    def get_tensorstore(self) -> ts.TensorStore:
         """
-        Return native TensorStore spec for Zarr2.
-
-        Creates a TensorStore spec using the 'zarr' driver for
-        direct, high-performance access to Zarr2 data.
+        Return an opened TensorStore using the native Zarr2 driver.
 
         Returns:
-            dict: TensorStore spec with 'zarr' driver
+            ts.TensorStore: Opened store for the Zarr2 dataset.
 
         Example:
             >>> reader = Zarr2Reader("/data.zarr")
-            >>> spec = reader.get_tensorstore_spec()
-            >>> print(spec['driver'])
-            'zarr'
+            >>> store = reader.get_tensorstore()
+            >>> print(store.shape)
         """
-        # Build kvstore based on path type
-        kvstore = self._build_kvstore()
-
         spec = {
             'driver': 'zarr',  # TensorStore uses 'zarr' for v2
-            'kvstore': kvstore,
+            'kvstore': self._build_kvstore(),
             'open': True,
+            'context': get_tensorstore_context(),
         }
-
-        return spec
+        return ts.open(spec, read=True).result()
 
     def _build_kvstore(self) -> Dict:
         """Build kvstore spec based on path type."""
