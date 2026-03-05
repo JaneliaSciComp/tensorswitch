@@ -1,4 +1,6 @@
-# TensorSwitch
+# TensorSwitch v1 (Legacy)
+
+> **Note:** This is the legacy v1 branch. For the latest version, see the [main branch](https://github.com/JaneliaSciComp/tensorswitch/tree/main) (TensorSwitch v2.0.0).
 
 This package provides a unified entry point for managing N5/Zarr dataset conversions and downsampling with both command-line and web GUI interfaces. It centralizes your workflow into a single pipeline to reduce manual work and errors.
 
