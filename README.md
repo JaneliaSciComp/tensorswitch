@@ -1,6 +1,6 @@
 # TensorSwitch v2
 
-**Version**: 2.0.0-beta
+**Version**: 2.0.0
 **Status**: Production Ready
 **Branch**: `unified`
 
@@ -110,7 +110,7 @@ pip install git+https://github.com/JaneliaSciComp/tensorswitch.git@unified
 ```bash
 # Using pixi
 pixi run tensorswitch-v2 --version
-# Output: tensorswitch_v2 2.0.0-beta
+# Output: tensorswitch_v2 2.0.0
 
 # Or using module syntax
 pixi run python -m tensorswitch_v2 --version
@@ -123,7 +123,7 @@ tensorswitch-v2 --version
 
 ```python
 from tensorswitch_v2 import __version__, TensorSwitchDataset, Readers, Writers
-print(__version__)  # 2.0.0-beta
+print(__version__)  # 2.0.0
 ```
 
 ---
