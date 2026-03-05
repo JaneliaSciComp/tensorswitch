@@ -2,11 +2,11 @@
 
 **Version**: 2.0.0
 **Status**: Production Ready
-**Branch**: `unified`
+**Branch**: `main`
 
 A high-performance microscopy data conversion tool with TensorStore as the unified intermediate format. Supports 200+ input formats, automatic multi-scale pyramid generation, and distributed processing on LSF clusters.
 
-> **Looking for v1?** The original task-based TensorSwitch (v1) is on the [`develop` branch](https://github.com/JaneliaSciComp/tensorswitch/tree/develop). Use `git checkout develop` to access it.
+> **Looking for v1?** The original task-based TensorSwitch (v1) is on the [`v1` branch](https://github.com/JaneliaSciComp/tensorswitch/tree/v1). Use `git checkout v1` to access it.
 
 ---
 
@@ -102,7 +102,7 @@ pixi install
 pip install -e /path/to/tensorswitch
 
 # From GitHub
-pip install git+https://github.com/JaneliaSciComp/tensorswitch.git@unified
+pip install git+https://github.com/JaneliaSciComp/tensorswitch.git
 ```
 
 ### Verify Installation
