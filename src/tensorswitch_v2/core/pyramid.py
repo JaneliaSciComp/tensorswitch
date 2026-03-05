@@ -1269,6 +1269,7 @@ submit_and_wait() {{
         for i, level_info in enumerate(pyramid_plan['levels']):
             level = level_info['level']
             per_level_factor = level_info['per_level_factor']
+            cumulative_factor = level_info['cumulative_factor']
             factor_str = ",".join(map(str, per_level_factor))
 
             # Source is previous level (0 for 1, 1 for 2, etc. - or s0 for s1 if using s-prefix)
@@ -1309,8 +1310,13 @@ submit_and_wait() {{
             level_memory = max(level_memory, level_cores * 15)
 
             level_name = get_level_name(level, prefix)
-            script += f"""# {level_name}: reads from {source_level_name}, factor {per_level_factor}
+            cumulative_factor_str = ",".join(map(str, cumulative_factor))
+            level_path = os.path.join(self.root_path, level_name)
+            script += f"""# {level_name}: reads from {source_level_name}, factor {per_level_factor}, cumulative {cumulative_factor}
 submit_and_wait {level} "{source_path}" "{factor_str}" {level_memory} "{level_wall_time}" {level_cores} "{shard_shape_str}" "{chunk_shape_str}"
+# Fix cumulative_factor in metadata (chained mode passes per-level factor to downsampler,
+# but metadata needs the true cumulative factor from s0 for correct scale computation)
+{q_python_path} -c "import json,os; p='{level_path}'; f=os.path.join(p,'.zattrs') if os.path.exists(os.path.join(p,'.zattrs')) else os.path.join(p,'zarr.json'); d=json.load(open(f)); d.setdefault('custom',{{}})['cumulative_factor']=[{cumulative_factor_str}]; json.dump(d,open(f,'w'),indent=2); print(f'  Fixed {level_name} cumulative_factor to [{cumulative_factor_str}]')"
 
 """
 
