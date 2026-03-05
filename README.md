@@ -6,6 +6,8 @@
 
 A high-performance microscopy data conversion tool with TensorStore as the unified intermediate format. Supports 200+ input formats, automatic multi-scale pyramid generation, and distributed processing on LSF clusters.
 
+> **Active development** happens on the [`unified` branch](https://github.com/JaneliaSciComp/tensorswitch/tree/unified). The `main` branch receives periodic merges from `unified`.
+
 > **Looking for v1?** The original task-based TensorSwitch (v1) is on the [`v1` branch](https://github.com/JaneliaSciComp/tensorswitch/tree/v1). Use `git checkout v1` to access it.
 
 ---
