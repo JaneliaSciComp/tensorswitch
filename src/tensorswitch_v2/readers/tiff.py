@@ -72,14 +72,18 @@ class TiffReader(BaseReader):
         # Load dask array
         self._dask_array = load_tiff_stack(self.path)
 
-        # Extract actual dimension names from TIFF file
+        # Extract actual dimension names from TIFF file.
+        # tifffile uses 'Q' for unrecognized dimensions; only accept well-defined axes.
+        _KNOWN_TIFF_AXES = frozenset('ZYXTCSIzyxtcsi')
         try:
             if os.path.isfile(self.path):
                 with tifffile.TiffFile(self.path) as tif:
                     if tif.series:
                         # axes is a string like 'ZYX', 'CZYX', 'TZCYX'
                         axes_str = tif.series[0].axes
-                        self._dimension_names = [c.lower() for c in axes_str]
+                        if all(c in _KNOWN_TIFF_AXES for c in axes_str):
+                            self._dimension_names = [c.lower() for c in axes_str]
+                        # else: unknown codes (e.g. 'Q') → leave None, infer from shape
         except Exception as e:
             print(f"Warning: Could not extract TIFF dimension names: {e}")
             self._dimension_names = None
