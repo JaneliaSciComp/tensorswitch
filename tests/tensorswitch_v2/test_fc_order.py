@@ -24,7 +24,7 @@ from tensorswitch_v2.readers.ims import IMSReader
 from tensorswitch_v2.utils import get_tensorstore_context, zarr3_store_spec
 
 
-def test_c_order_real_data(test_data, output_path):
+def _run_c_order_real_data(test_data, output_path):
     """Test C-order (default) with real IMS data subset."""
     print("\n" + "=" * 60)
     print("TEST 1: C-ORDER (REAL DATA)")
@@ -93,7 +93,7 @@ def test_c_order_real_data(test_data, output_path):
         return False, None
 
 
-def test_f_order_real_data(test_data, output_path):
+def _run_f_order_real_data(test_data, output_path):
     """Test F-order (Fortran) with real IMS data subset."""
     print("\n" + "=" * 60)
     print("TEST 2: F-ORDER (REAL DATA)")
@@ -170,7 +170,7 @@ def test_f_order_real_data(test_data, output_path):
         return False, None
 
 
-def test_f_order_with_sharding(test_data, output_path):
+def _run_f_order_with_sharding(test_data, output_path):
     """Test F-order (Fortran) WITH sharding - previously broken, now fixed."""
     print("\n" + "=" * 60)
     print("TEST 2b: F-ORDER WITH SHARDING (REAL DATA)")
@@ -255,7 +255,7 @@ def test_f_order_with_sharding(test_data, output_path):
         return False, None
 
 
-def test_data_equality(c_data, f_data):
+def _run_data_equality(c_data, f_data):
     """Test that C-order and F-order produce identical data when read back."""
     print("\n" + "=" * 60)
     print("TEST 3: DATA EQUALITY CHECK")
@@ -316,32 +316,32 @@ def main():
     results = []
 
     # Test 1: C-order with real data
-    c_pass, c_read_data = test_c_order_real_data(
+    c_pass, c_read_data = _run_c_order_real_data(
         test_data,
         os.path.join(output_base, "c_order_real.zarr")
     )
     results.append(("C-order (real data)", c_pass))
 
     # Test 2: F-order with real data (no sharding)
-    f_pass, f_read_data = test_f_order_real_data(
+    f_pass, f_read_data = _run_f_order_real_data(
         test_data,
         os.path.join(output_base, "f_order_real.zarr")
     )
     results.append(("F-order (real data)", f_pass))
 
     # Test 2b: F-order WITH sharding (new test after fix)
-    f_shard_pass, f_shard_read_data = test_f_order_with_sharding(
+    f_shard_pass, f_shard_read_data = _run_f_order_with_sharding(
         test_data,
         os.path.join(output_base, "f_order_sharding_real.zarr")
     )
     results.append(("F-order + sharding (real data)", f_shard_pass))
 
     # Test 3: Data equality - verify both orders read back identical data
-    equality_pass = test_data_equality(c_read_data, f_read_data)
+    equality_pass = _run_data_equality(c_read_data, f_read_data)
     results.append(("Data equality", equality_pass))
 
     # Test 3b: Data equality - verify F-order with sharding also matches
-    equality_shard_pass = test_data_equality(c_read_data, f_shard_read_data)
+    equality_shard_pass = _run_data_equality(c_read_data, f_shard_read_data)
     results.append(("Data equality (C vs F+shard)", equality_shard_pass))
 
     # Summary
