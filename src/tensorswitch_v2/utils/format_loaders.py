@@ -352,15 +352,31 @@ def extract_ims_metadata(ims_file):
                         metadata[attr_name] = attr_value
 
             # Get unit from metadata if available (IMS typically uses micrometers)
-            unit = metadata.get('Unit', 'micrometer')
+            unit = metadata.get('Unit', '')
             if isinstance(unit, bytes):
                 unit = unit.decode('utf-8', errors='ignore')
+            unit = unit.strip()
 
             if all(key in metadata for key in ['ExtMin0', 'ExtMin1', 'ExtMin2', 'ExtMax0', 'ExtMax1', 'ExtMax2', 'X', 'Y', 'Z']):
                 try:
                     x_size = (float(metadata['ExtMax0']) - float(metadata['ExtMin0'])) / float(metadata['X'])
                     y_size = (float(metadata['ExtMax1']) - float(metadata['ExtMin1'])) / float(metadata['Y'])
                     z_size = (float(metadata['ExtMax2']) - float(metadata['ExtMin2'])) / float(metadata['Z'])
+
+                    # If unit is empty/missing, infer from voxel magnitude
+                    if not unit:
+                        # Voxel < 1 nm is physically impossible for any microscopy
+                        # (sub-atomic scale), so raw values must be in micrometers
+                        min_voxel = min(abs(x_size), abs(y_size), abs(z_size))
+                        if min_voxel < 1.0:
+                            unit = 'um'
+                            print(f"IMS Unit attribute is empty. Voxel size {min_voxel:.4f} < 1 nm "
+                                  f"is sub-atomic, inferring unit as micrometers.")
+                        else:
+                            unit = 'nm'
+                            print(f"IMS Unit attribute is empty. Voxel size {min_voxel:.1f} >= 1, "
+                                  f"assuming nanometers.")
+
                     # Convert to nanometers
                     voxel_sizes = [
                         convert_to_nanometers(x_size, unit),
