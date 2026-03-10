@@ -76,14 +76,22 @@ class TiffReader(BaseReader):
         # tifffile uses 'Q' for unrecognized dimensions; only accept well-defined axes.
         _KNOWN_TIFF_AXES = frozenset('ZYXTCSIzyxtcsi')
         try:
-            if os.path.isfile(self.path):
-                with tifffile.TiffFile(self.path) as tif:
+            # For directories, read metadata from the first sorted TIFF file
+            metadata_file = self.path
+            if os.path.isdir(self.path):
+                from ..utils.format_loaders import _find_tiff_files
+                metadata_file = _find_tiff_files(self.path)[0]
+
+            if os.path.isfile(metadata_file):
+                with tifffile.TiffFile(metadata_file) as tif:
                     if tif.series:
-                        # axes is a string like 'ZYX', 'CZYX', 'TZCYX'
                         axes_str = tif.series[0].axes
                         if all(c in _KNOWN_TIFF_AXES for c in axes_str):
-                            self._dimension_names = [c.lower() for c in axes_str]
-                        # else: unknown codes (e.g. 'Q') → leave None, infer from shape
+                            dims = [c.lower() for c in axes_str]
+                            # For Z-stack directories, prepend 'z' for stacking dimension
+                            if os.path.isdir(self.path) and 'z' not in dims:
+                                dims = ['z'] + dims
+                            self._dimension_names = dims
         except Exception as e:
             print(f"Warning: Could not extract TIFF dimension names: {e}")
             self._dimension_names = None

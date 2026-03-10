@@ -4,6 +4,7 @@ Readers factory class with static methods for creating format-specific readers.
 Provides both auto-detection and explicit reader selection via static methods.
 """
 
+import os
 from typing import Optional
 from ..readers.base import BaseReader, is_local_precomputed as _is_local_precomputed
 
@@ -130,6 +131,13 @@ class Readers:
                 return CZIReader(path)
             except ImportError:
                 return Readers.bioio(path)
+
+        # Directory containing TIFF Z-stack → TiffReader (Tier 2)
+        elif os.path.isdir(path):
+            from ..utils.format_loaders import is_tiff_zstack_directory
+            if is_tiff_zstack_directory(path):
+                return Readers.tiff(path)
+            return Readers.bioio(path)
 
         # Tier 3: BIOIO Adapter (broad compatibility)
         else:

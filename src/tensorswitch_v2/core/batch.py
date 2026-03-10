@@ -79,6 +79,10 @@ def detect_input_mode(input_path: str) -> str:
         # Local precomputed directory (has info file) - treat as single file
         return 'single_file'
     elif os.path.isdir(input_path) or input_path.endswith('/'):
+        # Check if directory is a TIFF Z-stack (numbered 2D TIFFs forming one volume)
+        from ..utils.format_loaders import is_tiff_zstack_directory
+        if is_tiff_zstack_directory(input_path):
+            return 'single_file'
         # Check if directory contains discoverable datasets (e.g., image + segmentation)
         # This takes priority over batch_directory mode
         result = discover_datasets(input_path, verbose=False)

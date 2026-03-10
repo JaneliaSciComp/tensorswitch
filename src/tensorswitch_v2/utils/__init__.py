@@ -58,6 +58,7 @@ from .pyramid_utils import (
 from .format_loaders import (
     load_tiff_stack,
     extract_tiff_ome_metadata,
+    is_tiff_zstack_directory,
     load_nd2_stack,
     extract_nd2_ome_metadata,
     load_ims_stack,
@@ -129,6 +130,7 @@ __all__ = [
     # Format loaders
     'load_tiff_stack',
     'extract_tiff_ome_metadata',
+    'is_tiff_zstack_directory',
     'load_nd2_stack',
     'extract_nd2_ome_metadata',
     'load_ims_stack',
