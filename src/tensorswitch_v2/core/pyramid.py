@@ -242,16 +242,18 @@ class PyramidPlanner:
         >>> job_id = planner.submit_chained_pyramid(plan, project="scicompsoft")
     """
 
-    def __init__(self, s0_path: str):
+    def __init__(self, s0_path: str, include_translation: bool = True):
         """
         Initialize PyramidPlanner.
 
         Args:
             s0_path: Path to s0 array (e.g., "/data/dataset.zarr/s0")
+            include_translation: Include translation transforms in OME metadata (default: True)
         """
         self.s0_path = s0_path
         self.root_path = os.path.dirname(s0_path)
         self._s0_metadata = None
+        self.include_translation = include_translation
 
     def _load_s0_metadata(self) -> Dict[str, Any]:
         """Load metadata from s0 array (supports both Zarr3 and Zarr2)."""
@@ -847,7 +849,7 @@ fi
 
 echo ""
 echo "All jobs complete. Updating root metadata..."
-{q_python_path} -c "from tensorswitch_v2.utils import update_ome_metadata_if_needed; update_ome_metadata_if_needed({repr(self.root_path)}, use_ome_structure=True)"
+{q_python_path} -c "from tensorswitch_v2.utils import update_ome_metadata_if_needed; update_ome_metadata_if_needed({repr(self.root_path)}, use_ome_structure=True, include_translation={self.include_translation})"
 
 echo ""
 echo "================================================================"
@@ -927,7 +929,7 @@ echo "All level jobs completed. Updating root metadata..."
 
 # Update OME-NGFF metadata
 cd {q_tensorswitch_dir}
-{q_python_path} -c "from tensorswitch_v2.utils import update_ome_metadata_if_needed; update_ome_metadata_if_needed({repr(self.root_path)}, use_ome_structure=True)"
+{q_python_path} -c "from tensorswitch_v2.utils import update_ome_metadata_if_needed; update_ome_metadata_if_needed({repr(self.root_path)}, use_ome_structure=True, include_translation={self.include_translation})"
 
 echo ""
 echo "=========================================="
@@ -1316,7 +1318,7 @@ submit_and_wait() {{
 submit_and_wait {level} "{source_path}" "{factor_str}" {level_memory} "{level_wall_time}" {level_cores} "{shard_shape_str}" "{chunk_shape_str}"
 # Fix cumulative_factor in metadata (chained mode passes per-level factor to downsampler,
 # but metadata needs the true cumulative factor from s0 for correct scale computation)
-{q_python_path} -c "import json,os; p='{level_path}'; f=os.path.join(p,'.zattrs') if os.path.exists(os.path.join(p,'.zattrs')) else os.path.join(p,'zarr.json'); d=json.load(open(f)); d.setdefault('custom',{{}})['cumulative_factor']=[{cumulative_factor_str}]; json.dump(d,open(f,'w'),indent=2); print(f'  Fixed {level_name} cumulative_factor to [{cumulative_factor_str}]')"
+{q_python_path} -c "import json,os; p='{level_path}'; f=os.path.join(p,'.zattrs') if os.path.exists(os.path.join(p,'.zattrs')) else os.path.join(p,'zarr.json'); d=json.load(open(f)); target=d.setdefault('attributes',{{}}).setdefault('tensorswitch',{{}}) if f.endswith('zarr.json') else d.setdefault('tensorswitch',{{}}); target['must_understand']=False; target['cumulative_factor']=[{cumulative_factor_str}]; json.dump(d,open(f,'w'),indent=2); print(f'  Fixed {level_name} cumulative_factor to [{cumulative_factor_str}]')"
 
 """
 
@@ -1327,7 +1329,7 @@ echo "============================================================"
 echo "UPDATING ROOT METADATA"
 echo "============================================================"
 echo "All levels complete, updating root zarr.json..."
-{q_python_path} -c "from tensorswitch_v2.utils import update_ome_metadata_if_needed; update_ome_metadata_if_needed({repr(self.root_path)}, use_ome_structure=True)"
+{q_python_path} -c "from tensorswitch_v2.utils import update_ome_metadata_if_needed; update_ome_metadata_if_needed({repr(self.root_path)}, use_ome_structure=True, include_translation={self.include_translation})"
 echo "Metadata update complete."
 
 echo ""
@@ -1364,7 +1366,7 @@ echo ""
             print(f"{'='*60}")
 
         # Use v1's unified metadata update function which handles both zarr3 and zarr2
-        update_ome_metadata_if_needed(self.root_path, use_ome_structure=True)
+        update_ome_metadata_if_needed(self.root_path, use_ome_structure=True, include_translation=self.include_translation)
 
         if verbose:
             print(f"{'='*60}\n")
@@ -1409,6 +1411,7 @@ def create_pyramid_parallel(
     dry_run: bool = False,
     verbose: bool = True,
     custom_per_level_factors: Optional[List[List[int]]] = None,
+    include_translation: bool = True,
 ) -> Dict[str, Any]:
     """
     Convenience function to create full pyramid with chained job submission.
@@ -1449,7 +1452,7 @@ def create_pyramid_parallel(
         ...     custom_per_level_factors=[[1,2,2], [1,2,2], [1,2,2], [1,2,2]]
         ... )
     """
-    planner = PyramidPlanner(s0_path)
+    planner = PyramidPlanner(s0_path, include_translation=include_translation)
 
     # Resolve 'auto' downsample method based on input path
     resolved_method = resolve_downsample_method(downsample_method, s0_path)

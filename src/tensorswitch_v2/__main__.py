@@ -365,6 +365,12 @@ Supported output formats:
              "median (noise reduction), stride (fastest), min, max.",
     )
 
+    parser.add_argument(
+        "--no-translation", action="store_true",
+        help="Disable translation transforms in OME-NGFF multiscale metadata. "
+             "By default, translation offsets are included for Neuroglancer compatibility.",
+    )
+
     # Output control
     parser.add_argument(
         "--quiet", action="store_true",
@@ -1483,6 +1489,7 @@ def main(argv=None):
                         dry_run=False,
                         verbose=False,  # Reduce output in batch mode
                         custom_per_level_factors=custom_per_level_factors,
+                        include_translation=not args.no_translation,
                     )
                     coordinator_jid = result.get('coordinator_job_id')
                     num_levels = result.get('pyramid_plan', {}).get('num_levels', 0)
@@ -1528,6 +1535,7 @@ def main(argv=None):
                 dry_run=False,
                 verbose=verbose,
                 custom_per_level_factors=custom_per_level_factors,
+                include_translation=not args.no_translation,
             )
             num_levels = result.get('pyramid_plan', {}).get('num_levels', 0)
             coordinator_job_id = result.get('coordinator_job_id')
@@ -1570,7 +1578,7 @@ def main(argv=None):
 
             # Update root metadata
             print("\nUpdating root metadata...")
-            update_ome_metadata_if_needed(root_path, use_ome_structure=True)
+            update_ome_metadata_if_needed(root_path, use_ome_structure=True, include_translation=not args.no_translation)
 
             print(f"\n{'='*60}")
             print(f"AUTO-MULTISCALE COMPLETE: {root_path}")

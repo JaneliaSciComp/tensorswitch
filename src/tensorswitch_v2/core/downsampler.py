@@ -469,8 +469,8 @@ class Downsampler:
     def _store_cumulative_factor(self, level_path: str, output_format: str, cumulative_factors: List[int]) -> None:
         """Store cumulative downsampling factor in the level's metadata.
 
-        For zarr3: written to level/zarr.json at attributes.custom.cumulative_factor
-        For zarr2: written to level/.zattrs at custom.cumulative_factor
+        For zarr3: written to level/zarr.json at attributes.tensorswitch.cumulative_factor
+        For zarr2: written to level/.zattrs at tensorswitch.cumulative_factor
 
         This allows update_ome_multiscale_metadata to compute exact nominal voxel sizes
         (s0_voxel * factor) rather than the shape-ratio fallback, which produces
@@ -482,7 +482,9 @@ class Downsampler:
             if os.path.exists(zattrs_path):
                 with open(zattrs_path, 'r') as f:
                     zattrs = json.load(f)
-            zattrs.setdefault('custom', {})['cumulative_factor'] = cumulative_factors
+            ts_meta = zattrs.setdefault('tensorswitch', {})
+            ts_meta['must_understand'] = False
+            ts_meta['cumulative_factor'] = cumulative_factors
             with open(zattrs_path, 'w') as f:
                 json.dump(zattrs, f, indent=2)
         else:  # zarr3
@@ -491,7 +493,9 @@ class Downsampler:
                 return
             with open(zarr_json_path, 'r') as f:
                 metadata = json.load(f)
-            metadata.setdefault('attributes', {}).setdefault('custom', {})['cumulative_factor'] = cumulative_factors
+            ts_meta = metadata.setdefault('attributes', {}).setdefault('tensorswitch', {})
+            ts_meta['must_understand'] = False
+            ts_meta['cumulative_factor'] = cumulative_factors
             with open(zarr_json_path, 'w') as f:
                 json.dump(metadata, f, indent=2)
 

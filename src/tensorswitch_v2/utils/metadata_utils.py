@@ -380,7 +380,7 @@ def auto_detect_max_level(output_path):
     return max(levels), prefix
 
 
-def update_ome_multiscale_metadata(zarr_path, max_level=4, prefix=None):
+def update_ome_multiscale_metadata(zarr_path, max_level=4, prefix=None, include_translation=True):
     """
     Update OME-ZARR metadata to include all multiscale levels.
 
@@ -394,7 +394,7 @@ def update_ome_multiscale_metadata(zarr_path, max_level=4, prefix=None):
     multiscales = metadata["attributes"]["ome"]["multiscales"][0]
     level0_scale_factors = multiscales["datasets"][0]["coordinateTransformations"][0]["scale"]
 
-    downsampling_factors = metadata.get("attributes", {}).get("custom", {}).get("downsampling_factors", None)
+    downsampling_factors = metadata.get("attributes", {}).get("tensorswitch", {}).get("downsampling_factors", None)
 
     # Detect level naming format if not provided
     if prefix is None:
@@ -436,7 +436,7 @@ def update_ome_multiscale_metadata(zarr_path, max_level=4, prefix=None):
         level_shape = level_meta.get('shape')
 
         # Preferred: use cumulative_factor stored in the level's zarr.json during downsampling
-        level_cumulative_factor = level_meta.get('attributes', {}).get('custom', {}).get('cumulative_factor')
+        level_cumulative_factor = level_meta.get('attributes', {}).get('tensorswitch', {}).get('cumulative_factor')
 
         if level_cumulative_factor:
             level_scale = [s0 * f for s0, f in zip(level0_scale_factors, level_cumulative_factor)]
@@ -456,9 +456,10 @@ def update_ome_multiscale_metadata(zarr_path, max_level=4, prefix=None):
         coordinate_transformations = [{"type": "scale", "scale": level_scale}]
 
         # Add translation transform for Neuroglancer compatibility
-        translation = [0.5 * (scale - level0_scale_factors[i]) for i, scale in enumerate(level_scale)]
-        if any(t != 0 for t in translation):
-            coordinate_transformations.append({"type": "translation", "translation": translation})
+        if include_translation:
+            translation = [0.5 * (scale - level0_scale_factors[i]) for i, scale in enumerate(level_scale)]
+            if any(t != 0 for t in translation):
+                coordinate_transformations.append({"type": "translation", "translation": translation})
 
         datasets.append({
             "path": level_name,
@@ -473,7 +474,7 @@ def update_ome_multiscale_metadata(zarr_path, max_level=4, prefix=None):
     print(f"Updated OME metadata with {len(datasets)} levels")
 
 
-def update_ome_multiscale_metadata_zarr2(zarr_path, max_level=4, prefix=None):
+def update_ome_multiscale_metadata_zarr2(zarr_path, max_level=4, prefix=None, include_translation=True):
     """
     Update OME-ZARR metadata for zarr2 format (.zattrs).
 
@@ -524,7 +525,7 @@ def update_ome_multiscale_metadata_zarr2(zarr_path, max_level=4, prefix=None):
         if os.path.exists(level_zattrs_path):
             with open(level_zattrs_path, 'r') as f:
                 level_zattrs = json.load(f)
-            level_cumulative_factor = level_zattrs.get('custom', {}).get('cumulative_factor')
+            level_cumulative_factor = level_zattrs.get('tensorswitch', {}).get('cumulative_factor')
 
         if level_cumulative_factor:
             level_scale = [s0 * f for s0, f in zip(level0_scale_factors, level_cumulative_factor)]
@@ -534,9 +535,10 @@ def update_ome_multiscale_metadata_zarr2(zarr_path, max_level=4, prefix=None):
         coordinate_transformations = [{"type": "scale", "scale": level_scale}]
 
         # Add translation transform for Neuroglancer compatibility (same as Zarr3)
-        translation = [0.5 * (scale - level0_scale_factors[i]) for i, scale in enumerate(level_scale)]
-        if any(t != 0 for t in translation):
-            coordinate_transformations.append({"type": "translation", "translation": translation})
+        if include_translation:
+            translation = [0.5 * (scale - level0_scale_factors[i]) for i, scale in enumerate(level_scale)]
+            if any(t != 0 for t in translation):
+                coordinate_transformations.append({"type": "translation", "translation": translation})
 
         datasets.append({
             "path": level_name,
@@ -767,7 +769,7 @@ def _update_parent_zarr2_zattrs(inner_path, parent_path, image_key):
     print(f"Updated parent zarr2 metadata with {len(adjusted_datasets)} levels")
 
 
-def update_ome_metadata_if_needed(output_path, use_ome_structure):
+def update_ome_metadata_if_needed(output_path, use_ome_structure, include_translation=True):
     """
     Update OME-Zarr metadata if OME structure is used and multiscale levels exist.
     Supports both zarr2 (.zattrs) and zarr3 (zarr.json) formats.
@@ -796,7 +798,7 @@ def update_ome_metadata_if_needed(output_path, use_ome_structure):
     try:
         if os.path.exists(zarr3_metadata):
             print(f"Updating zarr3 OME metadata for {output_path} with levels {level0_name}-{max_level_name}")
-            update_ome_multiscale_metadata(output_path, max_level=max_level, prefix=prefix)
+            update_ome_multiscale_metadata(output_path, max_level=max_level, prefix=prefix, include_translation=include_translation)
             print("OME metadata updated successfully!")
 
             # Also update parent zarr.json if this is a nested image group (e.g., raw/)
@@ -812,7 +814,7 @@ def update_ome_metadata_if_needed(output_path, use_ome_structure):
 
         elif os.path.exists(zarr2_metadata):
             print(f"Updating zarr2 OME metadata for {output_path} with levels {level0_name}-{max_level_name}")
-            update_ome_multiscale_metadata_zarr2(output_path, max_level=max_level, prefix=prefix)
+            update_ome_multiscale_metadata_zarr2(output_path, max_level=max_level, prefix=prefix, include_translation=include_translation)
             print("OME metadata updated successfully!")
 
             # Also update parent .zattrs if this is a nested image group (e.g., raw/)
