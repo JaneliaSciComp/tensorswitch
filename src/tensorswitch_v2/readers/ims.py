@@ -9,10 +9,10 @@ from typing import Dict, List, Optional
 import h5py
 # Import utility functions from v2 utils (independent from v1)
 from ..utils import load_ims_stack, extract_ims_metadata
-from .base import BaseReader
+from .base import DaskReader
 
 
-class IMSReader(BaseReader):
+class IMSReader(DaskReader):
     """
     Reader for Imaris IMS format using existing load_ims_stack function.
 
@@ -103,46 +103,9 @@ class IMSReader(BaseReader):
             print(f"Warning: Could not extract IMS dimension names: {e}")
             self._dimension_names = None
 
-    def get_tensorstore_spec(self) -> Dict:
-        """
-        Return TensorStore spec wrapping Dask array from load_ims_stack.
-
-        Reuses existing load_ims_stack() function which returns a Dask array,
-        then wraps it in TensorStore's 'array' driver.
-
-        Returns:
-            dict: TensorStore spec with 'array' driver wrapping Dask array
-
-        Example:
-            >>> reader = IMSReader("/data.ims")
-            >>> spec = reader.get_tensorstore_spec()
-            >>> print(spec['driver'])
-            'array'
-            >>> print(spec['schema']['dimension_names'])  # Auto-detected
-            ['z', 'y', 'x']
-
-        Notes:
-            - Tier 2 approach: Dask array -> TensorStore 'array' driver
-            - Minimal overhead (one Dask layer)
-            - Dimension names auto-detected from IMS HDF5 structure
-        """
-        self._load()
-
-        # Use auto-detected dimension names, fall back to inference
-        dimension_names = self._dimension_names or self._infer_dimension_names(self._dask_array.shape)
-
-        # Wrap Dask array in TensorStore 'array' driver
-        spec = {
-            'driver': 'array',
-            'array': self._dask_array,
-            'schema': {
-                'dtype': str(self._dask_array.dtype),
-                'shape': list(self._dask_array.shape),
-                'dimension_names': dimension_names
-            }
-        }
-
-        return spec
+    def _get_dimension_names(self):
+        """Return dimension names from IMS HDF5 structure or infer from shape."""
+        return self._dimension_names or self._infer_dimension_names(self._dask_array.shape)
 
     def get_metadata(self) -> Dict:
         """
@@ -221,18 +184,6 @@ class IMSReader(BaseReader):
             'y': metadata.get('voxel_size_y', 1.0),
             'z': metadata.get('voxel_size_z', 1.0)
         }
-
-    def _infer_dimension_names(self, shape):
-        """Infer dimension names from array shape."""
-        ndim = len(shape)
-        if ndim == 3:
-            return ['z', 'y', 'x']
-        elif ndim == 4:
-            return ['c', 'z', 'y', 'x']
-        elif ndim == 5:
-            return ['t', 'c', 'z', 'y', 'x']
-        else:
-            return [f'dim_{i}' for i in range(ndim)]
 
     def __repr__(self) -> str:
         """String representation of IMS reader."""

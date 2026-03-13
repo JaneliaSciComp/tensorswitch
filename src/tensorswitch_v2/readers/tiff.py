@@ -9,10 +9,10 @@ from typing import Dict, List, Optional
 import tifffile
 # Import utility functions from v2 utils (independent from v1)
 from ..utils import load_tiff_stack, extract_tiff_ome_metadata
-from .base import BaseReader
+from .base import DaskReader
 
 
-class TiffReader(BaseReader):
+class TiffReader(DaskReader):
     """
     Reader for TIFF format using existing load_tiff_stack function.
 
@@ -96,46 +96,9 @@ class TiffReader(BaseReader):
             print(f"Warning: Could not extract TIFF dimension names: {e}")
             self._dimension_names = None
 
-    def get_tensorstore_spec(self) -> Dict:
-        """
-        Return TensorStore spec wrapping Dask array from load_tiff_stack.
-
-        Reuses existing load_tiff_stack() function which returns a Dask array,
-        then wraps it in TensorStore's 'array' driver.
-
-        Returns:
-            dict: TensorStore spec with 'array' driver wrapping Dask array
-
-        Example:
-            >>> reader = TiffReader("/data.tif")
-            >>> spec = reader.get_tensorstore_spec()
-            >>> print(spec['driver'])
-            'array'
-            >>> print(spec['schema']['dimension_names'])  # Auto-detected
-            ['z', 'y', 'x']
-
-        Notes:
-            - Tier 2 approach: Dask array → TensorStore 'array' driver
-            - Minimal overhead (one Dask layer)
-            - Dimension names auto-detected from TIFF axes metadata
-        """
-        self._load()
-
-        # Use auto-detected dimension names, fall back to inference
-        dimension_names = self._dimension_names or self._infer_dimension_names(self._dask_array.shape)
-
-        # Wrap Dask array in TensorStore 'array' driver
-        spec = {
-            'driver': 'array',
-            'array': self._dask_array,
-            'schema': {
-                'dtype': str(self._dask_array.dtype),
-                'shape': list(self._dask_array.shape),
-                'dimension_names': dimension_names
-            }
-        }
-
-        return spec
+    def _get_dimension_names(self):
+        """Return dimension names from TIFF metadata or infer from shape."""
+        return self._dimension_names or self._infer_dimension_names(self._dask_array.shape)
 
     def get_metadata(self) -> Dict:
         """
@@ -207,18 +170,6 @@ class TiffReader(BaseReader):
 
         # Default
         return {'x': 1.0, 'y': 1.0, 'z': 1.0}
-
-    def _infer_dimension_names(self, shape):
-        """Infer dimension names from array shape."""
-        ndim = len(shape)
-        if ndim == 3:
-            return ['z', 'y', 'x']
-        elif ndim == 4:
-            return ['c', 'z', 'y', 'x']
-        elif ndim == 5:
-            return ['t', 'c', 'z', 'y', 'x']
-        else:
-            return [f'dim_{i}' for i in range(ndim)]
 
     def __repr__(self) -> str:
         """String representation of TIFF reader."""

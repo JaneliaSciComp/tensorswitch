@@ -9,10 +9,10 @@ from typing import Dict, List, Optional
 import nd2
 # Import utility functions from v2 utils (independent from v1)
 from ..utils import load_nd2_stack, extract_nd2_ome_metadata
-from .base import BaseReader
+from .base import DaskReader
 
 
-class ND2Reader(BaseReader):
+class ND2Reader(DaskReader):
     """
     Reader for Nikon ND2 format using existing load_nd2_stack function.
 
@@ -76,46 +76,9 @@ class ND2Reader(BaseReader):
             print(f"Warning: Could not extract ND2 dimension names: {e}")
             self._dimension_names = None
 
-    def get_tensorstore_spec(self) -> Dict:
-        """
-        Return TensorStore spec wrapping Dask array from load_nd2_stack.
-
-        Reuses existing load_nd2_stack() function which returns a Dask array,
-        then wraps it in TensorStore's 'array' driver.
-
-        Returns:
-            dict: TensorStore spec with 'array' driver wrapping Dask array
-
-        Example:
-            >>> reader = ND2Reader("/data.nd2")
-            >>> spec = reader.get_tensorstore_spec()
-            >>> print(spec['driver'])
-            'array'
-            >>> print(spec['schema']['dimension_names'])  # Auto-detected
-            ['z', 'y', 'x']
-
-        Notes:
-            - Tier 2 approach: Dask array -> TensorStore 'array' driver
-            - Minimal overhead (one Dask layer)
-            - Dimension names auto-detected from ND2 file metadata
-        """
-        self._load()
-
-        # Use auto-detected dimension names, fall back to inference
-        dimension_names = self._dimension_names or self._infer_dimension_names(self._dask_array.shape)
-
-        # Wrap Dask array in TensorStore 'array' driver
-        spec = {
-            'driver': 'array',
-            'array': self._dask_array,
-            'schema': {
-                'dtype': str(self._dask_array.dtype),
-                'shape': list(self._dask_array.shape),
-                'dimension_names': dimension_names
-            }
-        }
-
-        return spec
+    def _get_dimension_names(self):
+        """Return dimension names from ND2 metadata or infer from shape."""
+        return self._dimension_names or self._infer_dimension_names(self._dask_array.shape)
 
     def get_metadata(self) -> Dict:
         """
@@ -173,18 +136,6 @@ class ND2Reader(BaseReader):
             'y': metadata.get('voxel_size_y', 1.0),
             'z': metadata.get('voxel_size_z', 1.0)
         }
-
-    def _infer_dimension_names(self, shape):
-        """Infer dimension names from array shape."""
-        ndim = len(shape)
-        if ndim == 3:
-            return ['z', 'y', 'x']
-        elif ndim == 4:
-            return ['c', 'z', 'y', 'x']
-        elif ndim == 5:
-            return ['t', 'c', 'z', 'y', 'x']
-        else:
-            return [f'dim_{i}' for i in range(ndim)]
 
     def __repr__(self) -> str:
         """String representation of ND2 reader."""

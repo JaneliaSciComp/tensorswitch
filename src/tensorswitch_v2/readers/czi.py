@@ -8,10 +8,10 @@ Uses pylibCZIrw directly (not bioio-czi) to avoid scene name parsing bugs.
 from typing import Dict, Optional, List
 # Import utility functions from v2 utils (independent from v1)
 from ..utils import load_czi_stack, extract_czi_metadata
-from .base import BaseReader
+from .base import DaskReader
 
 
-class CZIReader(BaseReader):
+class CZIReader(DaskReader):
     """
     Reader for Zeiss CZI format using existing load_czi_stack function.
 
@@ -67,25 +67,9 @@ class CZIReader(BaseReader):
             self.path, view_index=self._view_index
         )
 
-    def get_tensorstore_spec(self) -> Dict:
-        """
-        Return TensorStore spec wrapping Dask array from load_czi_stack.
-
-        Returns:
-            dict: TensorStore spec with 'array' driver wrapping Dask array
-        """
-        self._load()
-
-        spec = {
-            'driver': 'array',
-            'array': self._dask_array,
-            'schema': {
-                'dtype': str(self._dask_array.dtype),
-                'shape': list(self._dask_array.shape),
-                'dimension_names': self.axes_order or self._infer_dimension_names(self._dask_array.shape)
-            }
-        }
-        return spec
+    def _get_dimension_names(self):
+        """Return CZI axes order or infer from shape."""
+        return self.axes_order or self._infer_dimension_names(self._dask_array.shape)
 
     def get_metadata(self) -> Dict:
         """
@@ -190,7 +174,7 @@ class CZIReader(BaseReader):
         return ['t' if ax == 'v' else ax for ax in self._axes_order]
 
     def _infer_dimension_names(self, shape):
-        """Infer dimension names from array shape."""
+        """Infer CZI-specific dimension names from shape (5D uses 'v' for views)."""
         ndim = len(shape)
         if ndim == 3:
             return ['z', 'y', 'x']
