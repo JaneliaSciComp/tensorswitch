@@ -8,6 +8,7 @@ intermediate format instead of Dask.
 from typing import Dict, Optional, Tuple
 import tensorstore as ts
 from ..readers.base import BaseReader
+from ..utils import get_dtype_name
 
 
 class TensorSwitchDataset:
@@ -234,7 +235,7 @@ class TensorSwitchDataset:
             'uint16'
         """
         store = self.get_tensorstore()
-        return store.dtype.name if hasattr(store.dtype, 'name') else str(store.dtype)
+        return get_dtype_name(store.dtype)
 
     @property
     def ndim(self) -> int:

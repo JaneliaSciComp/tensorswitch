@@ -68,11 +68,6 @@ class IMSReader(DaskReader):
             print(f"Warning: Could not extract IMS dimension names: {e}")
             self._dimension_names = None
 
-    def _get_dimension_names(self) -> List[str]:
-        """Return dimension names from IMS metadata or infer from shape."""
-        self._load()
-        return self._dimension_names or self._infer_dimension_names(self._dask_array.shape)
-
     def get_metadata(self) -> Dict:
         """Return IMS metadata using existing extract_ims_metadata function."""
         if self._metadata_cache is None:

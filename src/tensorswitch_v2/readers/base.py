@@ -12,6 +12,7 @@ import os
 import json
 import numpy as np
 import tensorstore as ts
+from ..utils import get_dtype_name
 
 
 # ============================================================================
@@ -295,7 +296,7 @@ class BaseReader(ABC):
         # Get basic info from opened store
         store = self.get_tensorstore()
         shape = tuple(store.shape)
-        dtype = store.dtype.name if hasattr(store.dtype, 'name') else str(store.dtype)
+        dtype = get_dtype_name(store.dtype)
         dimension_names = list(store.domain.labels) if store.domain.labels else []
 
         # Get voxel sizes
@@ -585,10 +586,12 @@ class DaskReader(BaseReader):
         """
         Return axis labels for the array domain.
 
-        Default implementation infers names from shape (ZYX/CZYX/TCZYX).
-        Override in subclasses to use format-specific metadata instead
-        (e.g., tifffile axes string, ND2 dimension order).
+        Default: checks self._dimension_names (set by _load from format metadata),
+        falls back to inferring from shape (ZYX/CZYX/TCZYX).
+        Override in subclasses for format-specific logic (e.g., CZI v→t rename).
         """
+        if getattr(self, '_dimension_names', None):
+            return self._dimension_names
         return self._infer_dimension_names(self._dask_array.shape)
 
     def _infer_dimension_names(self, shape):

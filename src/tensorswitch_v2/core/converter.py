@@ -21,23 +21,10 @@ from ..utils import (
     get_chunk_domains,
     get_total_chunks_from_store,
     get_tensorstore_context,
+    get_dtype_name,
     detect_source_order,
     update_ome_metadata_if_needed,
 )
-
-
-def _get_dtype_name(dtype) -> str:
-    """
-    Get dtype name string from TensorStore or numpy dtype.
-
-    TensorStore dtype has a .name attribute that returns the clean dtype string,
-    while numpy/dask dtypes use str() which also works correctly.
-    """
-    # TensorStore dtype has .name attribute
-    if hasattr(dtype, 'name'):
-        return dtype.name
-    # Fallback to str() for numpy/dask dtypes
-    return str(dtype)
 
 
 class DistributedConverter:
@@ -88,7 +75,7 @@ class DistributedConverter:
             print(f"Opening input: {self.reader}")
         self._input_store = self.reader.get_tensorstore()
         input_shape = tuple(self._input_store.shape)
-        input_dtype = _get_dtype_name(self._input_store.dtype)
+        input_dtype = get_dtype_name(self._input_store.dtype)
 
         if verbose:
             print(f"  Shape: {input_shape}, dtype: {input_dtype}")
@@ -329,7 +316,7 @@ class DistributedConverter:
         # Uniform: get shape from reader's TensorStore
         input_store = self.reader.get_tensorstore()
         input_shape = tuple(input_store.shape)
-        input_dtype = _get_dtype_name(input_store.dtype)
+        input_dtype = get_dtype_name(input_store.dtype)
 
         output_spec = self.writer.create_output_spec(
             shape=input_shape,

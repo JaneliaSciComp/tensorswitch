@@ -16,6 +16,7 @@ Modules:
 """
 
 from .tensorstore_utils import (
+    get_dtype_name,
     get_tensorstore_context,
     get_kvstore_spec,
     get_input_driver,

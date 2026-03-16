@@ -45,6 +45,7 @@ os.umask(0o0002)  # Team permissions: rwxrwxr-x
 __version__ = "2.0.0-beta"
 
 from .utils.pyramid_utils import resolve_downsample_method
+from .utils import get_dtype_name
 
 
 def find_base_level(input_path: str, verbose: bool = False) -> tuple:
@@ -727,7 +728,7 @@ def _get_input_metadata(args):
             # Normalize 'channel' to 'c'
             axes_order = ['c' if l.lower() == 'channel' else l.lower() for l in labels]
 
-    dtype_name = store.dtype.name if hasattr(store.dtype, 'name') else str(store.dtype)
+    dtype_name = get_dtype_name(store.dtype)
     return tuple(store.shape), dtype_name, axes_order
 
 
@@ -1078,7 +1079,7 @@ def show_conversion_spec(reader, writer, args, chunk_shape, shard_shape):
         input_store = reader.get_tensorstore()
         print(f"\nTensorStore info:")
         print(f"  shape: {list(input_store.shape)}")
-        dtype_name = input_store.dtype.name if hasattr(input_store.dtype, 'name') else str(input_store.dtype)
+        dtype_name = get_dtype_name(input_store.dtype)
         print(f"  dtype: {dtype_name}")
         labels = list(input_store.domain.labels) if input_store.domain.labels else []
         if labels:
@@ -1638,7 +1639,7 @@ def main(argv=None):
         resolved_data_type = 'image'  # Default
         try:
             store = reader.get_tensorstore()
-            dtype_str = store.dtype.name if hasattr(store.dtype, 'name') else str(store.dtype)
+            dtype_str = get_dtype_name(store.dtype)
 
             from .utils.metadata_utils import is_segmentation_dtype
             if is_segmentation_dtype(dtype_str):

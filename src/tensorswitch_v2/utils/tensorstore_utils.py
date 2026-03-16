@@ -18,6 +18,18 @@ from urllib.parse import urlparse, unquote
 NON_SPATIAL_AXES = {'c', 't', 'v', 'channel'}
 
 
+def get_dtype_name(dtype) -> str:
+    """Get clean dtype name string from TensorStore or numpy dtype.
+
+    TensorStore dtype has .name (e.g. 'uint16'), while numpy str() may
+    include byte-order prefix (e.g. '>u2'). This function always returns
+    the clean name.
+    """
+    if hasattr(dtype, 'name'):
+        return dtype.name
+    return str(dtype)
+
+
 def adaptive_spatial_chunk(shape, dtype_str):
     """Choose default spatial chunk size based on uncompressed dataset size.
 
