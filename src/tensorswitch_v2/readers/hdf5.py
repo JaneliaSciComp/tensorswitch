@@ -136,21 +136,6 @@ class HDF5Reader(DaskReader):
 
         self._dask_array = da.from_array(dataset, chunks=chunks)
 
-    def _get_dimension_names(self) -> List[str]:
-        """Infer dimension names from array shape."""
-        self._load()
-        ndim = len(self._dask_array.shape)
-        if ndim == 2:
-            return ['y', 'x']
-        elif ndim == 3:
-            return ['z', 'y', 'x']
-        elif ndim == 4:
-            return ['c', 'z', 'y', 'x']
-        elif ndim == 5:
-            return ['t', 'c', 'z', 'y', 'x']
-        else:
-            return [f'dim_{i}' for i in range(ndim)]
-
     def get_metadata(self) -> Dict:
         """Return HDF5 metadata from dataset and file attributes."""
         if self._metadata_cache is not None:

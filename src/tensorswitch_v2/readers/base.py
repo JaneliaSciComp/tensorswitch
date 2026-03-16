@@ -550,10 +550,21 @@ class DaskReader(BaseReader):
         """Load data into self._dask_array. Called lazily on first access."""
         pass
 
-    @abstractmethod
+    def _infer_dimension_names(self, shape) -> List[str]:
+        """Infer standard dimension names from array shape."""
+        ndim = len(shape)
+        defaults = {
+            2: ['y', 'x'],
+            3: ['z', 'y', 'x'],
+            4: ['c', 'z', 'y', 'x'],
+            5: ['t', 'c', 'z', 'y', 'x'],
+        }
+        return defaults.get(ndim, [f'dim_{i}' for i in range(ndim)])
+
     def _get_dimension_names(self) -> List[str]:
-        """Return dimension names for the loaded array (e.g. ['z','y','x'])."""
-        pass
+        """Return dimension names for the loaded array. Override for format-specific logic."""
+        self._load()
+        return self._infer_dimension_names(self._dask_array.shape)
 
     def get_tensorstore(self) -> ts.TensorStore:
         """Return TensorStore wrapping the dask array via virtual_chunked."""

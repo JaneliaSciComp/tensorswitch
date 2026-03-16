@@ -72,6 +72,7 @@ class TestZarr3Reader:
 
         assert isinstance(store, ts.TensorStore)
         assert store.shape == (32, 64, 64)
+        assert store.spec().to_json()['driver'] == 'zarr3'
 
     def test_get_metadata(self, sample_zarr3_path):
         """Test getting metadata from Zarr3."""
@@ -104,6 +105,7 @@ class TestZarr2Reader:
 
         assert isinstance(store, ts.TensorStore)
         assert store.shape == (32, 64, 64)
+        assert store.spec().to_json()['driver'] == 'zarr'
 
     def test_factory_method(self, sample_zarr2_path):
         """Test Readers.zarr2() factory method."""
@@ -127,6 +129,7 @@ class TestN5Reader:
 
         assert isinstance(store, ts.TensorStore)
         assert store.shape == (32, 64, 64)
+        assert store.spec().to_json()['driver'] == 'n5'
 
     def test_get_metadata(self, sample_n5_path):
         """Test getting metadata from N5."""

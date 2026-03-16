@@ -51,19 +51,9 @@ class ND2Reader(DaskReader):
             self._dimension_names = None
 
     def _get_dimension_names(self) -> List[str]:
-        """Return dimension names from ND2 metadata or inferred from shape."""
+        """Return dimension names from ND2 metadata or infer from shape."""
         self._load()
-        if self._dimension_names:
-            return self._dimension_names
-        ndim = len(self._dask_array.shape)
-        if ndim == 3:
-            return ['z', 'y', 'x']
-        elif ndim == 4:
-            return ['c', 'z', 'y', 'x']
-        elif ndim == 5:
-            return ['t', 'c', 'z', 'y', 'x']
-        else:
-            return [f'dim_{i}' for i in range(ndim)]
+        return self._dimension_names or self._infer_dimension_names(self._dask_array.shape)
 
     def get_metadata(self) -> Dict:
         """Return ND2 metadata using existing extract_nd2_ome_metadata function."""
