@@ -717,28 +717,18 @@ def _get_input_metadata(args):
         tuple: (shape, dtype_str, axes_order) where axes_order may be None
     """
     reader = create_reader(args)
-    spec = reader.get_tensorstore_spec()
-    if spec.get('driver') == 'array' and 'array' in spec:
-        arr = spec['array']
-        # Try to get axes from spec schema
-        axes_order = spec.get('schema', {}).get('dimension_names')
-        return tuple(arr.shape), str(arr.dtype), axes_order
-    else:
-        import tensorstore as ts
-        from .utils import get_tensorstore_context
-        spec['context'] = get_tensorstore_context()
-        store = ts.open(spec, read=True).result()
-        # Get axes from TensorStore domain labels (e.g., precomputed has ['x','y','z','channel'])
-        axes_order = None
-        if hasattr(store, 'domain') and hasattr(store.domain, 'labels'):
-            labels = store.domain.labels
-            if labels and all(labels):
-                # Normalize 'channel' to 'c'
-                axes_order = ['c' if l.lower() == 'channel' else l.lower() for l in labels]
-        # Fallback to spec schema if available
-        if not axes_order:
-            axes_order = spec.get('schema', {}).get('dimension_names')
-        return tuple(store.shape), store.dtype.name, axes_order
+    store = reader.get_tensorstore()
+
+    # Get axes from TensorStore domain labels (works for all tiers now)
+    axes_order = None
+    if hasattr(store, 'domain') and hasattr(store.domain, 'labels'):
+        labels = store.domain.labels
+        if labels and all(labels):
+            # Normalize 'channel' to 'c'
+            axes_order = ['c' if l.lower() == 'channel' else l.lower() for l in labels]
+
+    dtype_name = store.dtype.name if hasattr(store.dtype, 'name') else str(store.dtype)
+    return tuple(store.shape), dtype_name, axes_order
 
 
 def _estimate_shard_info(args, volume_shape, dtype_str, axes_order=None):
@@ -1083,22 +1073,18 @@ def show_conversion_spec(reader, writer, args, chunk_shape, shard_shape):
     if voxel_sizes:
         print(f"Voxel sizes: {voxel_sizes}")
 
-    # Try to get TensorStore spec (may not be available for all readers)
+    # Try to get TensorStore info
     try:
-        input_spec = reader.get_tensorstore_spec()
-        print(f"\nTensorStore spec:")
-        # Simplify for display
-        display_spec = {
-            "driver": input_spec.get("driver"),
-            "dtype": input_spec.get("dtype"),
-        }
-        if "kvstore" in input_spec:
-            kvstore = input_spec["kvstore"]
-            if isinstance(kvstore, dict):
-                display_spec["kvstore"] = kvstore.get("driver", kvstore)
-        print(json.dumps(display_spec, indent=2, default=str))
+        input_store = reader.get_tensorstore()
+        print(f"\nTensorStore info:")
+        print(f"  shape: {list(input_store.shape)}")
+        dtype_name = input_store.dtype.name if hasattr(input_store.dtype, 'name') else str(input_store.dtype)
+        print(f"  dtype: {dtype_name}")
+        labels = list(input_store.domain.labels) if input_store.domain.labels else []
+        if labels:
+            print(f"  domain labels: {labels}")
     except Exception as e:
-        print(f"(TensorStore spec not available: {e})")
+        print(f"(TensorStore info not available: {e})")
 
     # Output spec
     print("\n--- OUTPUT ---")
@@ -1651,15 +1637,8 @@ def main(argv=None):
         # Auto-detect based on dtype
         resolved_data_type = 'image'  # Default
         try:
-            spec = reader.get_tensorstore_spec()
-            if spec.get('driver') == 'array' and 'array' in spec:
-                dtype_str = str(spec['array'].dtype)
-            else:
-                import tensorstore as ts
-                from .utils import get_tensorstore_context
-                spec['context'] = get_tensorstore_context()
-                store = ts.open(spec, read=True).result()
-                dtype_str = store.dtype.name
+            store = reader.get_tensorstore()
+            dtype_str = store.dtype.name if hasattr(store.dtype, 'name') else str(store.dtype)
 
             from .utils.metadata_utils import is_segmentation_dtype
             if is_segmentation_dtype(dtype_str):

@@ -9,56 +9,30 @@ from typing import Dict, List, Optional
 import tifffile
 # Import utility functions from v2 utils (independent from v1)
 from ..utils import load_tiff_stack, extract_tiff_ome_metadata
-from .base import BaseReader
+from .base import DaskReader
 
 
-class TiffReader(BaseReader):
+class TiffReader(DaskReader):
     """
     Reader for TIFF format using existing load_tiff_stack function.
 
     Wraps the proven load_tiff_stack() from tensorswitch/utils.py which
-    returns a Dask array. Then wraps that Dask array in TensorStore's
-    'array' driver for compatibility with the unified architecture.
+    returns a Dask array. DaskReader base class wraps that via
+    ts.virtual_chunked for a uniform TensorStore API.
 
     Tier: 2 (Custom Optimized - Production Ready)
     - Reuses existing optimized code
-    - Minimal conversion overhead (Dask → TensorStore)
-    - Production-tested implementation
-    - Supports single files and directories
-
-    Features:
-    - Multi-page TIFF support
-    - Directory of TIFFs (Z-stack)
+    - Supports single files and directories (Z-stack via dask_image.imread)
     - OME-TIFF metadata extraction
-    - ImageJ metadata support
 
     Example:
         >>> from tensorswitch_v2.readers import TiffReader
         >>> reader = TiffReader("/path/to/data.tif")
-        >>> spec = reader.get_tensorstore_spec()
-
-    Example (with TensorSwitchDataset):
-        >>> from tensorswitch_v2.api import TensorSwitchDataset, Readers
-        >>> reader = Readers.tiff("/path/to/stack/")
-        >>> dataset = TensorSwitchDataset("/path/to/stack/", reader=reader)
+        >>> store = reader.get_tensorstore()
     """
 
     def __init__(self, path: str):
-        """
-        Initialize TIFF reader.
-
-        Args:
-            path: Path to TIFF file or directory containing TIFFs
-
-        Example:
-            >>> # Single TIFF file
-            >>> reader = TiffReader("/data/image.tif")
-            >>>
-            >>> # Directory of TIFFs (Z-stack)
-            >>> reader = TiffReader("/data/stack/")
-        """
         super().__init__(path)
-        self._dask_array = None
         self._metadata_cache = None
         self._dimension_names: Optional[List[str]] = None
 
@@ -96,67 +70,27 @@ class TiffReader(BaseReader):
             print(f"Warning: Could not extract TIFF dimension names: {e}")
             self._dimension_names = None
 
-    def get_tensorstore_spec(self) -> Dict:
-        """
-        Return TensorStore spec wrapping Dask array from load_tiff_stack.
-
-        Reuses existing load_tiff_stack() function which returns a Dask array,
-        then wraps it in TensorStore's 'array' driver.
-
-        Returns:
-            dict: TensorStore spec with 'array' driver wrapping Dask array
-
-        Example:
-            >>> reader = TiffReader("/data.tif")
-            >>> spec = reader.get_tensorstore_spec()
-            >>> print(spec['driver'])
-            'array'
-            >>> print(spec['schema']['dimension_names'])  # Auto-detected
-            ['z', 'y', 'x']
-
-        Notes:
-            - Tier 2 approach: Dask array → TensorStore 'array' driver
-            - Minimal overhead (one Dask layer)
-            - Dimension names auto-detected from TIFF axes metadata
-        """
+    def _get_dimension_names(self) -> List[str]:
+        """Return dimension names, auto-detected from TIFF axes or inferred from shape."""
         self._load()
-
-        # Use auto-detected dimension names, fall back to inference
-        dimension_names = self._dimension_names or self._infer_dimension_names(self._dask_array.shape)
-
-        # Wrap Dask array in TensorStore 'array' driver
-        spec = {
-            'driver': 'array',
-            'array': self._dask_array,
-            'schema': {
-                'dtype': str(self._dask_array.dtype),
-                'shape': list(self._dask_array.shape),
-                'dimension_names': dimension_names
-            }
-        }
-
-        return spec
+        if self._dimension_names:
+            return self._dimension_names
+        # Fallback: infer from shape
+        ndim = len(self._dask_array.shape)
+        if ndim == 3:
+            return ['z', 'y', 'x']
+        elif ndim == 4:
+            return ['c', 'z', 'y', 'x']
+        elif ndim == 5:
+            return ['t', 'c', 'z', 'y', 'x']
+        else:
+            return [f'dim_{i}' for i in range(ndim)]
 
     def get_metadata(self) -> Dict:
-        """
-        Return TIFF metadata using existing extract_tiff_ome_metadata function.
-
-        Returns:
-            dict: TIFF metadata including shape, dtype, OME-XML and voxel sizes
-
-        Example:
-            >>> reader = TiffReader("/data.tif")
-            >>> metadata = reader.get_metadata()
-
-        Notes:
-            - Reuses extract_tiff_ome_metadata from utils.py
-            - Cached after first read
-            - Returns (ome_xml, voxel_sizes) tuple, converted to dict
-        """
+        """Return TIFF metadata using existing extract_tiff_ome_metadata function."""
         if self._metadata_cache is None:
             # Ensure dask array is loaded to get shape/dtype
-            if self._dask_array is None:
-                self._dask_array = load_tiff_stack(self.path)
+            self._load()
 
             try:
                 ome_xml, voxel_sizes = extract_tiff_ome_metadata(self.path)
@@ -178,26 +112,9 @@ class TiffReader(BaseReader):
         return self._metadata_cache
 
     def get_voxel_sizes(self) -> Dict[str, float]:
-        """
-        Return voxel dimensions from TIFF metadata.
-
-        Extracts voxel sizes from OME-XML or ImageJ metadata if available.
-
-        Returns:
-            dict: Voxel dimensions with keys 'x', 'y', 'z' in nanometers
-
-        Example:
-            >>> reader = TiffReader("/data.tif")
-            >>> voxel_sizes = reader.get_voxel_sizes()
-
-        Notes:
-            - Returns 1.0 for each dimension if metadata unavailable
-            - Checks OME-XML first, then ImageJ metadata
-            - Values are converted to nanometers from source units
-        """
+        """Return voxel dimensions from TIFF metadata in nanometers."""
         metadata = self.get_metadata()
 
-        # Try to extract from metadata
         if 'voxel_size_x' in metadata:
             return {
                 'x': metadata.get('voxel_size_x', 1.0),
@@ -205,21 +122,7 @@ class TiffReader(BaseReader):
                 'z': metadata.get('voxel_size_z', 1.0)
             }
 
-        # Default
         return {'x': 1.0, 'y': 1.0, 'z': 1.0}
 
-    def _infer_dimension_names(self, shape):
-        """Infer dimension names from array shape."""
-        ndim = len(shape)
-        if ndim == 3:
-            return ['z', 'y', 'x']
-        elif ndim == 4:
-            return ['c', 'z', 'y', 'x']
-        elif ndim == 5:
-            return ['t', 'c', 'z', 'y', 'x']
-        else:
-            return [f'dim_{i}' for i in range(ndim)]
-
     def __repr__(self) -> str:
-        """String representation of TIFF reader."""
         return f"TiffReader(path='{self.path}')"

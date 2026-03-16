@@ -52,17 +52,14 @@ class TestBIOIOReaderBasic:
 
     @pytest.mark.skipif(skip_if_no_bioio(), reason="BIOIO not installed")
     @pytest.mark.skipif(skip_if_no_test_data(ND2_TEST_FILE), reason="ND2 test data not found")
-    def test_nd2_tensorstore_spec(self):
-        """Test getting TensorStore spec from ND2 via BIOIO."""
+    def test_nd2_tensorstore(self):
+        """Test getting TensorStore from ND2 via BIOIO."""
+        import tensorstore as ts
         reader = BIOIOReader(ND2_TEST_FILE)
-        spec = reader.get_tensorstore_spec()
+        store = reader.get_tensorstore()
 
-        assert spec is not None
-        assert spec['driver'] == 'array'
-        assert 'schema' in spec
-        assert 'shape' in spec['schema']
-        assert 'dtype' in spec['schema']
-        assert len(spec['schema']['shape']) >= 3  # At least ZYX
+        assert isinstance(store, ts.TensorStore)
+        assert len(store.shape) >= 3  # At least ZYX
 
     @pytest.mark.skipif(skip_if_no_bioio(), reason="BIOIO not installed")
     @pytest.mark.skipif(skip_if_no_test_data(ND2_TEST_FILE), reason="ND2 test data not found")
@@ -95,12 +92,12 @@ class TestBIOIOReaderBasic:
     @pytest.mark.skipif(skip_if_no_test_data(TIFF_TEST_FILE), reason="TIFF test data not found")
     def test_tiff_reader(self):
         """Test BIOIO reader with TIFF file."""
+        import tensorstore as ts
         reader = BIOIOReader(TIFF_TEST_FILE)
-        spec = reader.get_tensorstore_spec()
+        store = reader.get_tensorstore()
 
-        assert spec is not None
-        assert spec['driver'] == 'array'
-        assert len(spec['schema']['shape']) >= 3
+        assert isinstance(store, ts.TensorStore)
+        assert len(store.shape) >= 3
 
 
 class TestBIOIOReaderMultiResolution:

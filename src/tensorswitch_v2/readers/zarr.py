@@ -8,7 +8,9 @@ Contains both Zarr3Reader and Zarr2Reader.
 from typing import Dict, Optional, List
 import os
 import json
+import tensorstore as ts
 from .base import BaseReader
+from ..utils import get_tensorstore_context
 
 
 class Zarr3Reader(BaseReader):
@@ -33,7 +35,7 @@ class Zarr3Reader(BaseReader):
     Example:
         >>> from tensorswitch_v2.readers import Zarr3Reader
         >>> reader = Zarr3Reader("/path/to/data.zarr")
-        >>> spec = reader.get_tensorstore_spec()
+        >>> store = reader.get_tensorstore()
 
     Example (with TensorSwitchDataset):
         >>> from tensorswitch_v2.api import TensorSwitchDataset
@@ -65,37 +67,26 @@ class Zarr3Reader(BaseReader):
         super().__init__(path)
         self._dataset_path = dataset_path
         self._metadata_cache = None
+        self._ts_store_cache = None
 
-    def get_tensorstore_spec(self) -> Dict:
-        """
-        Return native TensorStore spec for Zarr3.
-
-        Creates a TensorStore spec using the 'zarr3' driver for
-        direct, high-performance access to Zarr3 data.
-
-        Returns:
-            dict: TensorStore spec with 'zarr3' driver
-
-        Example:
-            >>> reader = Zarr3Reader("/data.zarr", dataset_path="s0")
-            >>> spec = reader.get_tensorstore_spec()
-            >>> print(spec['driver'])
-            'zarr3'
-
-        Notes:
-            - Tier 1: Direct TensorStore driver, zero conversion overhead
-            - Supports local files, GCS, S3, and HTTP
-        """
-        # Build kvstore based on path type
+    def _build_spec(self) -> Dict:
+        """Build TensorStore spec dict for Zarr3 (without opening)."""
         kvstore = self._build_kvstore()
-
-        spec = {
+        return {
             'driver': 'zarr3',
             'kvstore': kvstore,
             'open': True,
         }
 
-        return spec
+    def get_tensorstore(self) -> ts.TensorStore:
+        """Return opened TensorStore using native zarr3 driver."""
+        if self._ts_store_cache is not None:
+            return self._ts_store_cache
+
+        spec = self._build_spec()
+        spec['context'] = get_tensorstore_context()
+        self._ts_store_cache = ts.open(spec, read=True).result()
+        return self._ts_store_cache
 
     def _build_kvstore(self) -> Dict:
         """
@@ -269,7 +260,7 @@ class Zarr2Reader(BaseReader):
     Example:
         >>> from tensorswitch_v2.readers import Zarr2Reader
         >>> reader = Zarr2Reader("/path/to/data.zarr")
-        >>> spec = reader.get_tensorstore_spec()
+        >>> store = reader.get_tensorstore()
 
     Example (multiscale):
         >>> reader = Zarr2Reader("/data.zarr", dataset_path="0")
@@ -290,33 +281,26 @@ class Zarr2Reader(BaseReader):
         super().__init__(path)
         self._dataset_path = dataset_path
         self._metadata_cache = None
+        self._ts_store_cache = None
 
-    def get_tensorstore_spec(self) -> Dict:
-        """
-        Return native TensorStore spec for Zarr2.
-
-        Creates a TensorStore spec using the 'zarr' driver for
-        direct, high-performance access to Zarr2 data.
-
-        Returns:
-            dict: TensorStore spec with 'zarr' driver
-
-        Example:
-            >>> reader = Zarr2Reader("/data.zarr")
-            >>> spec = reader.get_tensorstore_spec()
-            >>> print(spec['driver'])
-            'zarr'
-        """
-        # Build kvstore based on path type
+    def _build_spec(self) -> Dict:
+        """Build TensorStore spec dict for Zarr2 (without opening)."""
         kvstore = self._build_kvstore()
-
-        spec = {
+        return {
             'driver': 'zarr',  # TensorStore uses 'zarr' for v2
             'kvstore': kvstore,
             'open': True,
         }
 
-        return spec
+    def get_tensorstore(self) -> ts.TensorStore:
+        """Return opened TensorStore using native zarr (v2) driver."""
+        if self._ts_store_cache is not None:
+            return self._ts_store_cache
+
+        spec = self._build_spec()
+        spec['context'] = get_tensorstore_context()
+        self._ts_store_cache = ts.open(spec, read=True).result()
+        return self._ts_store_cache
 
     def _build_kvstore(self) -> Dict:
         """Build kvstore spec based on path type."""

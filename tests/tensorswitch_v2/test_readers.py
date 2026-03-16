@@ -27,13 +27,14 @@ class TestTiffReader:
         reader = TiffReader(sample_tiff_path)
         assert reader.path == sample_tiff_path
 
-    def test_get_tensorstore_spec(self, sample_tiff_path):
-        """Test getting TensorStore spec from TIFF."""
+    def test_get_tensorstore(self, sample_tiff_path):
+        """Test getting TensorStore from TIFF."""
+        import tensorstore as ts
         reader = TiffReader(sample_tiff_path)
-        spec = reader.get_tensorstore_spec()
+        store = reader.get_tensorstore()
 
-        assert spec is not None
-        assert 'driver' in spec
+        assert isinstance(store, ts.TensorStore)
+        assert len(store.shape) >= 3
 
     def test_get_metadata(self, sample_tiff_path):
         """Test getting metadata from TIFF."""
@@ -63,13 +64,14 @@ class TestZarr3Reader:
         reader = Zarr3Reader(sample_zarr3_path)
         assert reader.path == sample_zarr3_path
 
-    def test_get_tensorstore_spec(self, sample_zarr3_path):
-        """Test getting TensorStore spec from Zarr3."""
+    def test_get_tensorstore(self, sample_zarr3_path):
+        """Test getting TensorStore from Zarr3."""
+        import tensorstore as ts
         reader = Zarr3Reader(sample_zarr3_path, dataset_path="s0")
-        spec = reader.get_tensorstore_spec()
+        store = reader.get_tensorstore()
 
-        assert spec is not None
-        assert spec['driver'] == 'zarr3'
+        assert isinstance(store, ts.TensorStore)
+        assert store.shape == (32, 64, 64)
 
     def test_get_metadata(self, sample_zarr3_path):
         """Test getting metadata from Zarr3."""
@@ -94,13 +96,14 @@ class TestZarr2Reader:
         reader = Zarr2Reader(sample_zarr2_path)
         assert reader.path == sample_zarr2_path
 
-    def test_get_tensorstore_spec(self, sample_zarr2_path):
-        """Test getting TensorStore spec from Zarr2."""
+    def test_get_tensorstore(self, sample_zarr2_path):
+        """Test getting TensorStore from Zarr2."""
+        import tensorstore as ts
         reader = Zarr2Reader(sample_zarr2_path, dataset_path="s0")
-        spec = reader.get_tensorstore_spec()
+        store = reader.get_tensorstore()
 
-        assert spec is not None
-        assert spec['driver'] == 'zarr'
+        assert isinstance(store, ts.TensorStore)
+        assert store.shape == (32, 64, 64)
 
     def test_factory_method(self, sample_zarr2_path):
         """Test Readers.zarr2() factory method."""
@@ -116,13 +119,14 @@ class TestN5Reader:
         reader = N5Reader(sample_n5_path)
         assert reader.path == sample_n5_path
 
-    def test_get_tensorstore_spec(self, sample_n5_path):
-        """Test getting TensorStore spec from N5."""
+    def test_get_tensorstore(self, sample_n5_path):
+        """Test getting TensorStore from N5."""
+        import tensorstore as ts
         reader = N5Reader(sample_n5_path, dataset_path="s0")
-        spec = reader.get_tensorstore_spec()
+        store = reader.get_tensorstore()
 
-        assert spec is not None
-        assert spec['driver'] == 'n5'
+        assert isinstance(store, ts.TensorStore)
+        assert store.shape == (32, 64, 64)
 
     def test_get_metadata(self, sample_n5_path):
         """Test getting metadata from N5."""
@@ -174,31 +178,21 @@ class TestReaderDataAccess:
     def test_tiff_read_data(self, sample_tiff_path, sample_3d_array):
         """Test reading data through TiffReader.
 
-        Note: TiffReader is a Tier 2 reader that returns a dask array.
-        The dask array is wrapped in a TensorStore 'array' driver spec,
-        but we access the data through the dask array directly.
+        TiffReader wraps dask arrays via ts.virtual_chunked, so
+        get_tensorstore() returns a real TensorStore that can be read.
         """
         reader = TiffReader(sample_tiff_path)
-        spec = reader.get_tensorstore_spec()
+        store = reader.get_tensorstore()
 
-        # TiffReader uses 'array' driver with dask array
-        assert spec['driver'] == 'array'
-        assert 'array' in spec
-
-        # Access dask array directly and compute
-        dask_array = spec['array']
-        data = dask_array.compute()
+        data = store.read().result()
 
         assert data.shape == sample_3d_array.shape
         assert np.array_equal(data, sample_3d_array)
 
     def test_zarr3_read_data(self, sample_zarr3_path, sample_3d_array):
         """Test reading data through Zarr3Reader."""
-        import tensorstore as ts
-
         reader = Zarr3Reader(sample_zarr3_path, dataset_path="s0")
-        spec = reader.get_tensorstore_spec()
-        store = ts.open(spec, read=True).result()
+        store = reader.get_tensorstore()
 
         data = store[...].read().result()
 
@@ -207,11 +201,8 @@ class TestReaderDataAccess:
 
     def test_n5_read_data(self, sample_n5_path, sample_3d_array):
         """Test reading data through N5Reader."""
-        import tensorstore as ts
-
         reader = N5Reader(sample_n5_path, dataset_path="s0")
-        spec = reader.get_tensorstore_spec()
-        store = ts.open(spec, read=True).result()
+        store = reader.get_tensorstore()
 
         data = store[...].read().result()
 

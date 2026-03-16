@@ -44,16 +44,8 @@ class DistributedConverter:
     """
     Format-agnostic converter with LSF/Dask distributed processing support.
 
-    Connects readers and writers to perform data conversions. Supports:
-    - LSF multi-job mode: Chunks are distributed across LSF jobs
-    - Dask single-job mode: Local parallel processing
-    - Sequential mode: Single-threaded processing
-
-    Design Principles:
-    - Readers provide input TensorStore arrays (format-agnostic)
-    - Writers handle output format encoding
-    - Converter manages chunk iteration and coordination
-    - No knowledge of specific input/output formats
+    All readers now return a ts.TensorStore from get_tensorstore(),
+    so the converter uses a single uniform code path for all formats.
 
     Example (Basic conversion):
         >>> from tensorswitch_v2.api import Readers, Writers
@@ -63,26 +55,9 @@ class DistributedConverter:
         >>> writer = Writers.zarr3("/output.zarr")
         >>> converter = DistributedConverter(reader, writer)
         >>> converter.convert()
-
-    Example (LSF multi-job mode):
-        >>> # Job 1: Process chunks 0-99
-        >>> converter.convert(start_idx=0, stop_idx=100)
-        >>>
-        >>> # Job 2: Process chunks 100-199
-        >>> converter.convert(start_idx=100, stop_idx=200)
-
-    Example (Custom chunk shape):
-        >>> converter.convert(chunk_shape=(32, 256, 256))
     """
 
     def __init__(self, reader: BaseReader, writer: BaseWriter):
-        """
-        Initialize converter with reader and writer.
-
-        Args:
-            reader: BaseReader instance for input data
-            writer: BaseWriter instance for output format
-        """
         self.reader = reader
         self.writer = writer
         self._input_store = None
@@ -105,61 +80,15 @@ class DistributedConverter:
         is_label: bool = False,
         expand_to_5d: bool = False,
     ) -> Dict[str, Any]:
-        """
-        Convert data from reader to writer.
-
-        Args:
-            start_idx: Starting chunk index (for LSF multi-job mode)
-            stop_idx: Ending chunk index (None = process all remaining)
-            chunk_shape: Override chunk shape (uses writer default if None)
-            shard_shape: Override shard shape (Zarr3 only, uses default if None)
-            write_metadata: Write OME-NGFF metadata after conversion
-            preserve_order: Preserve source data order (F-order vs C-order)
-            force_order: Force output order: 'c' for C-order, 'f' for F-order,
-                None (default) for auto-detect from source
-            progress_interval: Report progress every N chunks
-            verbose: Print progress messages
-            delete_existing: Override store deletion behavior. None (default)
-                preserves existing logic (delete when start_idx==0). Set to
-                False for manual bsub jobs where the store is pre-created.
-            voxel_size_override: Override voxel sizes {'x': nm, 'y': nm, 'z': nm} in nanometers.
-                Use when source file lacks embedded voxel size metadata.
-            is_label: If True, write OME-NGFF image-label metadata for segmentation data.
-
-        Returns:
-            dict: Conversion statistics (chunks_processed, elapsed_time, etc.)
-
-        Example:
-            >>> # Convert all chunks
-            >>> stats = converter.convert()
-            >>> print(f"Processed {stats['chunks_processed']} chunks")
-
-            >>> # LSF job processing subset
-            >>> stats = converter.convert(start_idx=0, stop_idx=100)
-        """
+        """Convert data from reader to writer."""
         start_time = time.time()
 
-        # 1. Open input store from reader
+        # 1. Open input store from reader (uniform API for all tiers)
         if verbose:
             print(f"Opening input: {self.reader}")
-        input_spec = self.reader.get_tensorstore_spec()
-
-        # Handle Tier 2 readers (dask arrays) vs Tier 1 (native TensorStore)
-        if input_spec.get('driver') == 'array' and 'array' in input_spec:
-            # Tier 2: Reader returns a dask array wrapped in 'array' driver
-            self._dask_array = input_spec['array']
-            self._input_store = None  # Will use dask array directly
-            input_shape = tuple(self._dask_array.shape)
-            input_dtype = _get_dtype_name(self._dask_array.dtype)
-            self._is_tier2 = True
-        else:
-            # Tier 1: Native TensorStore driver
-            input_spec['context'] = get_tensorstore_context()
-            self._input_store = ts.open(input_spec, read=True).result()
-            input_shape = tuple(self._input_store.shape)
-            input_dtype = _get_dtype_name(self._input_store.dtype)
-            self._is_tier2 = False
-            self._dask_array = None
+        self._input_store = self.reader.get_tensorstore()
+        input_shape = tuple(self._input_store.shape)
+        input_dtype = _get_dtype_name(self._input_store.dtype)
 
         if verbose:
             print(f"  Shape: {input_shape}, dtype: {input_dtype}")
@@ -168,39 +97,26 @@ class DistributedConverter:
         use_fortran_order = False
         axes_order = None
 
-        # First try to get actual domain labels from TensorStore (most accurate)
-        if not self._is_tier2 and self._input_store is not None:
-            try:
-                domain_labels = list(self._input_store.domain.labels)
-                if domain_labels and all(isinstance(l, str) and l for l in domain_labels):
-                    axes_order = domain_labels
-                    if verbose:
-                        print(f"  Axes from TensorStore domain: {axes_order}")
-            except Exception:
-                pass
-
-        # Fallback: try dimension_names from reader spec (CZI, etc.)
-        if axes_order is None:
-            reader_axes = input_spec.get('schema', {}).get('dimension_names')
-            if reader_axes and all(isinstance(a, str) for a in reader_axes):
-                axes_order = list(reader_axes)
+        # Get domain labels from TensorStore (works for all tiers now)
+        try:
+            domain_labels = list(self._input_store.domain.labels)
+            if domain_labels and all(isinstance(l, str) and l for l in domain_labels):
+                axes_order = domain_labels
                 if verbose:
-                    print(f"  Axes from reader: {axes_order}")
+                    print(f"  Axes from TensorStore domain: {axes_order}")
+        except Exception:
+            pass
 
         # Handle order: force_order overrides auto-detection
         if force_order is not None:
-            # Explicit override
             use_fortran_order = (force_order.lower() == 'f')
             if verbose:
                 order_name = "F-order" if use_fortran_order else "C-order"
                 print(f"  Forcing {order_name} (--force_{force_order.lower()}_order)")
         elif preserve_order:
-            # Auto-detect from source
             try:
-                source_for_order = self._dask_array if self._is_tier2 else self._input_store
-                order_info = detect_source_order(source_for_order)
+                order_info = detect_source_order(self._input_store)
                 use_fortran_order = order_info.get('is_fortran_order', False)
-                # Only use detected axes if reader didn't provide them
                 if axes_order is None:
                     axes_order = order_info.get('suggested_axes', None)
                 if verbose:
@@ -209,7 +125,6 @@ class DistributedConverter:
             except Exception:
                 pass  # Default to C-order
 
-        # Store for use during chunk reading
         self._use_fortran_order = use_fortran_order
 
         # 2b. Detect and squeeze singleton channel dimension
@@ -219,16 +134,13 @@ class DistributedConverter:
         self._squeeze_axis = None
 
         if axes_order and len(axes_order) == len(input_shape):
-            # Check for singleton trailing channel dimension (precomputed format)
             axes_lower = [a.lower() for a in axes_order]
             if 'channel' in axes_lower:
                 channel_idx = axes_lower.index('channel')
                 if input_shape[channel_idx] == 1:
-                    # Singleton channel - squeeze it out
                     self._squeeze_channel = True
                     self._squeeze_axis = channel_idx
 
-                    # Create squeezed shape and axes
                     squeezed_shape = tuple(s for i, s in enumerate(input_shape) if i != channel_idx)
                     squeezed_axes = [a for i, a in enumerate(axes_order) if i != channel_idx]
 
@@ -236,7 +148,6 @@ class DistributedConverter:
                         print(f"  Squeezing singleton channel: {input_shape} -> {squeezed_shape}")
                         print(f"  Axes: {axes_order} -> {squeezed_axes}")
 
-                    # Update for output
                     input_shape = squeezed_shape
                     axes_order = squeezed_axes
 
@@ -246,7 +157,6 @@ class DistributedConverter:
         except Exception:
             voxel_sizes = None
 
-        # Apply voxel size override if provided
         if voxel_size_override:
             voxel_sizes = voxel_size_override
             if verbose:
@@ -257,7 +167,6 @@ class DistributedConverter:
         except Exception:
             ome_metadata = None
 
-        # Extract raw ome_xml if available (ND2, TIFF store it in get_metadata())
         ome_xml = None
         try:
             raw_metadata = self.reader.get_metadata()
@@ -308,58 +217,40 @@ class DistributedConverter:
             linear_indices_to_process=linear_indices
         )
 
-        # 7. Process chunks with per-chunk transactions
+        # 7. Process chunks — uniform path for all reader tiers
         chunks_processed = 0
         last_report_time = start_time
 
         for idx, chunk_domain in enumerate(chunk_domains, start=start_idx):
             try:
-                # Convert domain for reading if writer has shape expansion (e.g., 5D Zarr2)
-                # The chunk_domain is in OUTPUT coordinates (e.g., 5D)
-                # We need INPUT coordinates (e.g., 3D) for reading
                 read_domain = chunk_domain
-                write_domain = chunk_domain  # Keep original for writing
+                write_domain = chunk_domain
                 if hasattr(self.writer, 'get_input_domain_from_output'):
                     read_domain = self.writer.get_input_domain_from_output(chunk_domain)
 
                 # If we squeezed a singleton channel, expand domain back for reading
-                # but keep the squeezed domain for writing
                 if self._squeeze_channel and self._squeeze_axis is not None:
-                    # Convert domain to slices if needed
                     if hasattr(read_domain, 'origin'):
                         slices = []
                         for i in range(read_domain.ndim):
-                            start = int(read_domain.origin[i])
-                            stop = start + int(read_domain.shape[i])
-                            slices.append(slice(start, stop))
+                            start_val = int(read_domain.origin[i])
+                            stop_val = start_val + int(read_domain.shape[i])
+                            slices.append(slice(start_val, stop_val))
                         read_domain = tuple(slices)
 
-                    # Insert slice(0, 1) for the squeezed channel axis
                     read_domain = list(read_domain)
                     read_domain.insert(self._squeeze_axis, slice(0, 1))
                     read_domain = tuple(read_domain)
 
-                # Read from input (handle both Tier 1 and Tier 2 readers)
-                if self._is_tier2:
-                    # Tier 2: Read from dask array, need to convert domain to slices
-                    # read_domain may already be a tuple of slices
-                    if isinstance(read_domain, tuple) and all(isinstance(s, slice) for s in read_domain):
-                        slices = read_domain
-                    else:
-                        slices = self._domain_to_slices(read_domain)
-                    data = self._dask_array[slices].compute()
-                else:
-                    # Tier 1: Read from TensorStore directly
-                    # Pass order parameter to preserve source memory layout (F-order vs C-order)
-                    read_order = 'F' if getattr(self, '_use_fortran_order', False) else 'C'
-                    data = self._input_store[read_domain].read(order=read_order).result()
+                # Read from input — uniform for all tiers
+                read_order = 'F' if self._use_fortran_order else 'C'
+                data = self._input_store[read_domain].read(order=read_order).result()
 
                 # Squeeze singleton channel if we detected one
                 if self._squeeze_channel and self._squeeze_axis is not None:
                     data = np.squeeze(data, axis=self._squeeze_axis)
 
-                # Write using writer's method (handles 5D expansion for Zarr2)
-                # Use write_domain (squeezed/original) not read_domain (expanded for input)
+                # Write
                 self.writer.write_chunk(write_domain, data, self._output_store)
                 chunks_processed += 1
 
@@ -379,12 +270,11 @@ class DistributedConverter:
                     print(f"  Warning: Skipping chunk {idx}: {e}")
                 continue
 
-        # 9. Write metadata (when processing through the end, or explicitly forced)
+        # 9. Write metadata
         if write_metadata and (stop_idx >= self._total_chunks or start_idx > 0):
             if verbose:
                 print("Writing metadata...")
             try:
-                # Extract image name from source path (filename without extension)
                 source_path = getattr(self.reader, 'path', None)
                 if source_path:
                     image_name = os.path.splitext(os.path.basename(source_path))[0]
@@ -400,7 +290,6 @@ class DistributedConverter:
                     image_name=image_name,
                     is_label=is_label
                 )
-                # Also update root zarr.json for OME-NGFF multiscales
                 root_path = os.path.dirname(self.writer.output_path)
                 if root_path and os.path.basename(self.writer.output_path) == 's0':
                     if verbose:
@@ -433,49 +322,21 @@ class DistributedConverter:
         self,
         chunk_shape: Optional[Tuple[int, ...]] = None
     ) -> int:
-        """
-        Get total number of chunks for the conversion.
-
-        Useful for LSF job distribution - divide total_chunks by num_jobs
-        to get chunk ranges for each job.
-
-        Args:
-            chunk_shape: Override chunk shape (uses default if None)
-
-        Returns:
-            int: Total number of chunks
-
-        Example:
-            >>> total = converter.get_total_chunks()
-            >>> chunks_per_job = total // num_jobs
-            >>> # Job i processes: start=i*chunks_per_job, stop=(i+1)*chunks_per_job
-        """
+        """Get total number of chunks for the conversion."""
         if self._total_chunks is not None:
             return self._total_chunks
 
-        # Get input shape (handle both Tier 1 and Tier 2 readers)
-        input_spec = self.reader.get_tensorstore_spec()
+        # Uniform: get shape from reader's TensorStore
+        input_store = self.reader.get_tensorstore()
+        input_shape = tuple(input_store.shape)
+        input_dtype = _get_dtype_name(input_store.dtype)
 
-        if input_spec.get('driver') == 'array' and 'array' in input_spec:
-            # Tier 2: Get shape from dask array
-            dask_array = input_spec['array']
-            input_shape = tuple(dask_array.shape)
-            input_dtype = _get_dtype_name(dask_array.dtype)
-        else:
-            # Tier 1: Open TensorStore to get shape
-            input_spec['context'] = get_tensorstore_context()
-            input_store = ts.open(input_spec, read=True).result()
-            input_shape = tuple(input_store.shape)
-            input_dtype = _get_dtype_name(input_store.dtype)
-
-        # Create temp output spec to get chunk layout
         output_spec = self.writer.create_output_spec(
             shape=input_shape,
             dtype=input_dtype,
             chunk_shape=chunk_shape
         )
 
-        # Calculate total chunks from shape and chunk_shape
         if chunk_shape is None:
             chunk_shape = self.writer.get_default_chunk_shape(input_shape)
 
@@ -489,21 +350,7 @@ class DistributedConverter:
         num_jobs: int,
         chunk_shape: Optional[Tuple[int, ...]] = None
     ) -> List[Tuple[int, int]]:
-        """
-        Get chunk ranges for distributing work across LSF jobs.
-
-        Args:
-            num_jobs: Number of parallel jobs
-            chunk_shape: Override chunk shape (uses default if None)
-
-        Returns:
-            List of (start_idx, stop_idx) tuples for each job
-
-        Example:
-            >>> ranges = converter.get_chunk_ranges(num_jobs=10)
-            >>> for i, (start, stop) in enumerate(ranges):
-            ...     print(f"Job {i}: chunks {start} to {stop}")
-        """
+        """Get chunk ranges for distributing work across LSF jobs."""
         total = self.get_total_chunks(chunk_shape)
         chunks_per_job = total // num_jobs
         remainder = total % num_jobs
@@ -511,30 +358,12 @@ class DistributedConverter:
         ranges = []
         start = 0
         for i in range(num_jobs):
-            # Distribute remainder across first jobs
             extra = 1 if i < remainder else 0
             stop = start + chunks_per_job + extra
             ranges.append((start, stop))
             start = stop
 
         return ranges
-
-    def _domain_to_slices(self, domain) -> tuple:
-        """
-        Convert TensorStore IndexDomain to Python slice tuple for dask array indexing.
-
-        Args:
-            domain: TensorStore IndexDomain
-
-        Returns:
-            tuple: Tuple of slices for array indexing
-        """
-        slices = []
-        for i in range(domain.ndim):
-            start = int(domain.origin[i])
-            stop = start + int(domain.shape[i])
-            slices.append(slice(start, stop))
-        return tuple(slices)
 
     def __repr__(self) -> str:
         return f"DistributedConverter(reader={self.reader}, writer={self.writer})"

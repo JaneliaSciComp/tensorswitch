@@ -8,22 +8,18 @@ Uses pylibCZIrw directly (not bioio-czi) to avoid scene name parsing bugs.
 from typing import Dict, Optional, List
 # Import utility functions from v2 utils (independent from v1)
 from ..utils import load_czi_stack, extract_czi_metadata
-from .base import BaseReader
+from .base import DaskReader
 
 
-class CZIReader(BaseReader):
+class CZIReader(DaskReader):
     """
     Reader for Zeiss CZI format using existing load_czi_stack function.
 
-    Wraps the proven load_czi_stack() from tensorswitch/utils.py which
-    uses pylibCZIrw directly. Supports multi-view CZI files (V dimension)
+    Uses pylibCZIrw directly. Supports multi-view CZI files (V dimension)
     that bioio-czi cannot handle due to scene name parsing bugs.
+    DaskReader base class wraps the dask array via ts.virtual_chunked.
 
     Tier: 2 (Custom Optimized - Production Ready)
-    - Reuses existing optimized code (pylibCZIrw)
-    - Multi-view support (V dimension → 5D VCZYX arrays)
-    - Metadata extraction via CZI XML
-    - No dependency on bioio/bioio-czi
 
     Dimension handling:
     - Single view, single channel: 3D ZYX
@@ -33,29 +29,12 @@ class CZIReader(BaseReader):
     Example:
         >>> from tensorswitch_v2.readers import CZIReader
         >>> reader = CZIReader("/path/to/data.czi")
-        >>> spec = reader.get_tensorstore_spec()
-        >>> print(spec['schema']['shape'])
-        [36, 2, 2153, 1920, 1920]  # VCZYX for multi-view
-
-    Example (single view):
-        >>> reader = CZIReader("/path/to/data.czi", view_index=0)
-        >>> spec = reader.get_tensorstore_spec()
-        >>> print(spec['schema']['shape'])
-        [2, 2153, 1920, 1920]  # CZYX
+        >>> store = reader.get_tensorstore()
     """
 
     def __init__(self, path: str, view_index: Optional[int] = None):
-        """
-        Initialize CZI reader.
-
-        Args:
-            path: Path to CZI file
-            view_index: Optional specific view to load. If None and multiple
-                       views exist, loads all views as 5D VCZYX array.
-        """
         super().__init__(path)
         self._view_index = view_index
-        self._dask_array = None
         self._axes_order = None
         self._metadata_cache = None
 
@@ -67,33 +46,13 @@ class CZIReader(BaseReader):
             self.path, view_index=self._view_index
         )
 
-    def get_tensorstore_spec(self) -> Dict:
-        """
-        Return TensorStore spec wrapping Dask array from load_czi_stack.
-
-        Returns:
-            dict: TensorStore spec with 'array' driver wrapping Dask array
-        """
+    def _get_dimension_names(self) -> List[str]:
+        """Return dimension names from CZI axes order."""
         self._load()
-
-        spec = {
-            'driver': 'array',
-            'array': self._dask_array,
-            'schema': {
-                'dtype': str(self._dask_array.dtype),
-                'shape': list(self._dask_array.shape),
-                'dimension_names': self.axes_order or self._infer_dimension_names(self._dask_array.shape)
-            }
-        }
-        return spec
+        return self.axes_order
 
     def get_metadata(self) -> Dict:
-        """
-        Return CZI metadata using existing extract_czi_metadata function.
-
-        Returns:
-            dict: CZI metadata including raw XML, voxel sizes, and axes order
-        """
+        """Return CZI metadata using existing extract_czi_metadata function."""
         if self._metadata_cache is not None:
             return self._metadata_cache
 
@@ -103,7 +62,7 @@ class CZIReader(BaseReader):
             raw_xml, voxel_sizes = extract_czi_metadata(self.path)
             self._metadata_cache = {
                 'raw_xml': raw_xml,
-                'axes_order': self.axes_order,  # Use property (converts 'v' to 't')
+                'axes_order': self.axes_order,
                 'voxel_size_x': voxel_sizes.get('x', 1.0) if voxel_sizes else 1.0,
                 'voxel_size_y': voxel_sizes.get('y', 1.0) if voxel_sizes else 1.0,
                 'voxel_size_z': voxel_sizes.get('z', 1.0) if voxel_sizes else 1.0,
@@ -113,7 +72,7 @@ class CZIReader(BaseReader):
         except Exception as e:
             print(f"Warning: Failed to extract CZI metadata: {e}")
             self._metadata_cache = {
-                'axes_order': self.axes_order,  # Use property (converts 'v' to 't')
+                'axes_order': self.axes_order,
                 'shape': tuple(self._dask_array.shape),
                 'dtype': str(self._dask_array.dtype),
             }
@@ -121,15 +80,7 @@ class CZIReader(BaseReader):
         return self._metadata_cache
 
     def get_voxel_sizes(self) -> Dict[str, float]:
-        """
-        Return voxel dimensions from CZI metadata.
-
-        Returns:
-            dict: Voxel dimensions with keys 'x', 'y', 'z' in nanometers
-
-        Notes:
-            - Values are converted to nanometers from source units (meters in CZI)
-        """
+        """Return voxel dimensions from CZI metadata in nanometers."""
         metadata = self.get_metadata()
         return {
             'x': metadata.get('voxel_size_x', 1.0),
@@ -138,16 +89,10 @@ class CZIReader(BaseReader):
         }
 
     def get_ome_metadata(self) -> Dict:
-        """
-        Return OME-NGFF metadata using CZI axes order.
-
-        Overrides base implementation to use the axes order from
-        load_czi_stack() (e.g., ['v', 'c', 'z', 'y', 'x'] for multi-view).
-        """
+        """Return OME-NGFF metadata using CZI axes order."""
         self._load()
         voxel_sizes = self.get_voxel_sizes()
 
-        # Build axes from CZI axes_order
         axes = []
         scale = []
         for axis_name in self._axes_order:
@@ -161,7 +106,6 @@ class CZIReader(BaseReader):
                 axes.append({'name': 't', 'type': 'time', 'unit': 'second'})
                 scale.append(1.0)
             elif axis_name == 'v':
-                # 'v' (view) renamed to 't' and treated as time so viewers show it as a slider
                 axes.append({'name': 't', 'type': 'time'})
                 scale.append(1.0)
             else:
@@ -186,20 +130,7 @@ class CZIReader(BaseReader):
     def axes_order(self) -> List[str]:
         """Get the CZI axes order (e.g., ['t', 'c', 'z', 'y', 'x'])."""
         self._load()
-        # Rename 'v' to 't' for viewer compatibility (Neuroglancer needs 't' not 'v')
         return ['t' if ax == 'v' else ax for ax in self._axes_order]
-
-    def _infer_dimension_names(self, shape):
-        """Infer dimension names from array shape."""
-        ndim = len(shape)
-        if ndim == 3:
-            return ['z', 'y', 'x']
-        elif ndim == 4:
-            return ['c', 'z', 'y', 'x']
-        elif ndim == 5:
-            return ['v', 'c', 'z', 'y', 'x']
-        else:
-            return [f'dim_{i}' for i in range(ndim)]
 
     def __repr__(self) -> str:
         view_str = f", view_index={self._view_index}" if self._view_index is not None else ""

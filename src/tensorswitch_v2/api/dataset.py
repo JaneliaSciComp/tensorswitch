@@ -96,74 +96,48 @@ class TensorSwitchDataset:
                 "Readers factory will be added in Day 4-5 (see PLAN_phase5.md)."
             )
 
-    def get_tensorstore_array(self, mode: str = "virtual") -> ts.TensorStore:
+    def get_tensorstore_array(self, mode: str = "open") -> ts.TensorStore:
         """
-        Return TensorStore array handle or spec.
+        Return TensorStore array handle.
 
-        Three modes available:
-        - 'virtual': Returns spec dict (lazy, zero-copy) - default
-        - 'open': Returns opened TensorStore handle
+        Two modes available:
+        - 'open': Returns opened TensorStore handle (default)
         - 'copy': Returns in-memory TensorStore array
 
         Args:
-            mode: Access mode ('virtual', 'open', or 'copy')
+            mode: Access mode ('open' or 'copy')
 
         Returns:
-            TensorStore array or spec dict
+            ts.TensorStore: Opened TensorStore array
 
-        Example (virtual mode - default):
-            >>> spec = dataset.get_tensorstore_array(mode='virtual')
-            >>> # Returns dict, can be passed to ts.open() later
-            >>> ts_array = ts.open(spec).result()
-
-        Example (open mode):
-            >>> ts_array = dataset.get_tensorstore_array(mode='open')
-            >>> # Already opened, ready to read
+        Example (open mode - default):
+            >>> ts_array = dataset.get_tensorstore_array()
             >>> chunk_data = ts_array[0:10, :, :].read().result()
 
         Example (copy mode):
             >>> ts_array = dataset.get_tensorstore_array(mode='copy')
             >>> # Data loaded into memory
-
-        Notes:
-            - Virtual mode: Best for lazy evaluation, no I/O
-            - Open mode: Opens handle, I/O on read
-            - Copy mode: Loads all data into memory (use carefully!)
-            - Results are cached per mode for efficiency
         """
-        # Check cache first
         if mode in self._ts_array_cache:
             return self._ts_array_cache[mode]
 
-        if mode == "virtual":
-            # Return virtual spec (lazy, zero-copy)
-            spec = self.get_tensorstore_spec()
-            self._ts_array_cache[mode] = spec
-            return spec
-
-        elif mode == "open":
-            # Open TensorStore handle
-            spec = self.get_tensorstore_spec()
-            ts_array = ts.open(spec).result()
+        if mode == "open":
+            ts_array = self.get_tensorstore()
             self._ts_array_cache[mode] = ts_array
             return ts_array
 
         elif mode == "copy":
-            # Read into memory, create in-memory TensorStore
-            spec = self.get_tensorstore_spec()
-            ts_array = ts.open(spec).result()
-
-            # Read all data
+            ts_array = self.get_tensorstore()
             data = ts_array.read().result()
 
-            # Create in-memory TensorStore
+            labels = list(ts_array.domain.labels) if ts_array.domain.labels else []
             mem_spec = {
                 'driver': 'array',
                 'array': data,
                 'schema': {
                     'dtype': str(data.dtype),
                     'shape': list(data.shape),
-                    'dimension_names': spec.get('schema', {}).get('dimension_names', [])
+                    'dimension_names': labels
                 }
             }
             mem_array = ts.open(mem_spec).result()
@@ -171,29 +145,25 @@ class TensorSwitchDataset:
             return mem_array
 
         else:
-            raise ValueError(f"Unknown mode: {mode}. Use 'virtual', 'open', or 'copy'")
+            raise ValueError(f"Unknown mode: {mode}. Use 'open' or 'copy'")
 
-    def get_tensorstore_spec(self) -> Dict:
+    def get_tensorstore(self) -> ts.TensorStore:
         """
-        Return TensorStore spec (virtual).
+        Return opened TensorStore array.
 
-        Delegates to the reader's get_tensorstore_spec() method.
+        Delegates to the reader's get_tensorstore() method.
         Result is cached for efficiency.
 
         Returns:
-            dict: TensorStore spec with keys:
-                - 'driver': TensorStore driver name
-                - 'kvstore': Key-value store specification
-                - 'schema': Array schema (dtype, shape, dimension_names)
-                - Additional format-specific keys
+            ts.TensorStore: Opened TensorStore with .shape, .dtype, .domain.labels
 
         Example:
-            >>> spec = dataset.get_tensorstore_spec()
-            >>> print(spec['driver'])  # 'zarr3', 'n5', 'array', etc.
-            >>> print(spec['schema']['shape'])  # [100, 1024, 1024]
+            >>> store = dataset.get_tensorstore()
+            >>> print(store.shape)
+            >>> print(store.dtype)
         """
         if self._ts_spec_cache is None:
-            self._ts_spec_cache = self._reader.get_tensorstore_spec()
+            self._ts_spec_cache = self._reader.get_tensorstore()
         return self._ts_spec_cache
 
     def get_ome_ngff_metadata(self, version: str = "0.5") -> Dict:
@@ -251,8 +221,8 @@ class TensorSwitchDataset:
             >>> dataset.shape
             (100, 1024, 1024)
         """
-        spec = self.get_tensorstore_spec()
-        return tuple(spec.get('schema', {}).get('shape', []))
+        store = self.get_tensorstore()
+        return tuple(store.shape)
 
     @property
     def dtype(self) -> str:
@@ -263,8 +233,8 @@ class TensorSwitchDataset:
             >>> dataset.dtype
             'uint16'
         """
-        spec = self.get_tensorstore_spec()
-        return spec.get('schema', {}).get('dtype', 'unknown')
+        store = self.get_tensorstore()
+        return store.dtype.name if hasattr(store.dtype, 'name') else str(store.dtype)
 
     @property
     def ndim(self) -> int:

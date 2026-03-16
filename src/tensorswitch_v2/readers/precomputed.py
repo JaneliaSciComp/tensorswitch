@@ -11,6 +11,7 @@ from typing import Dict, Optional
 import tensorstore as ts
 from .base import BaseReader, build_kvstore, is_remote_path
 from ..utils.format_loaders import extract_precomputed_metadata
+from ..utils import get_tensorstore_context
 
 
 class PrecomputedReader(BaseReader):
@@ -36,7 +37,7 @@ class PrecomputedReader(BaseReader):
     Example:
         >>> from tensorswitch_v2.readers import PrecomputedReader
         >>> reader = PrecomputedReader("precomputed://gs://bucket/data")
-        >>> spec = reader.get_tensorstore_spec()
+        >>> store = reader.get_tensorstore()
 
     Example (HTTP):
         >>> reader = PrecomputedReader("precomputed://https://example.com/data")
@@ -57,50 +58,32 @@ class PrecomputedReader(BaseReader):
         """
         super().__init__(path)
         self.scale_index = scale_index
+        self._ts_store_cache = None
 
-    def get_tensorstore_spec(self) -> Dict:
-        """
-        Return TensorStore spec using native Neuroglancer Precomputed driver.
-
-        This is a Tier 1 reader - uses TensorStore's native driver
-        with zero conversion overhead. Supports local paths and remote URLs.
-
-        Returns:
-            dict: TensorStore spec for Precomputed dataset
-
-        Example (remote GCS):
-            >>> reader = PrecomputedReader("precomputed://gs://bucket/data")
-            >>> spec = reader.get_tensorstore_spec()
-            >>> print(spec['kvstore'])
-            {'driver': 'gcs', 'bucket': 'bucket', 'path': 'data'}
-
-        Example (local path):
-            >>> reader = PrecomputedReader("/path/to/precomputed_data")
-            >>> spec = reader.get_tensorstore_spec()
-            >>> print(spec['kvstore'])
-            {'driver': 'file', 'path': '/path/to/precomputed_data'}
-
-        Notes:
-            - Native driver = maximum performance
-            - Supports local, HTTP, GCS, S3 via build_kvstore()
-            - Handles multi-resolution automatically via scale_index
-        """
-        # Strip precomputed:// prefix if present
+    def _build_spec(self) -> Dict:
+        """Build TensorStore spec dict for Precomputed (without opening)."""
         clean_path = self.path
         if clean_path.startswith('precomputed://'):
             clean_path = clean_path[len('precomputed://'):]
 
-        # Build kvstore using shared utility (handles local, gs://, s3://, http://)
         kvstore = build_kvstore(clean_path)
 
-        spec = {
+        return {
             'driver': 'neuroglancer_precomputed',
             'kvstore': kvstore,
             'scale_index': self.scale_index,
             'open': True
         }
 
-        return spec
+    def get_tensorstore(self) -> ts.TensorStore:
+        """Return opened TensorStore using native Precomputed driver."""
+        if self._ts_store_cache is not None:
+            return self._ts_store_cache
+
+        spec = self._build_spec()
+        spec['context'] = get_tensorstore_context()
+        self._ts_store_cache = ts.open(spec, read=True).result()
+        return self._ts_store_cache
 
     def get_metadata(self) -> Dict:
         """
@@ -126,9 +109,8 @@ class PrecomputedReader(BaseReader):
         info, _ = extract_precomputed_metadata(self.path, self.scale_index)
 
         # Also get basic info from TensorStore for shape/dtype
-        spec = self.get_tensorstore_spec()
         try:
-            store = ts.open(spec).result()
+            store = self.get_tensorstore()
             metadata = {
                 'shape': list(store.shape),
                 'dtype': str(store.dtype),

@@ -52,7 +52,7 @@ class BioFormatsReader(BIOIOReader):
     Example:
         >>> from tensorswitch_v2.readers import BioFormatsReader
         >>> reader = BioFormatsReader("/path/to/data.vsi")
-        >>> spec = reader.get_tensorstore_spec()
+        >>> store = reader.get_tensorstore()
         >>> metadata = reader.get_metadata()
 
     Example (via Readers factory):
