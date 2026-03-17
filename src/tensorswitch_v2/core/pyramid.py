@@ -1257,7 +1257,25 @@ submit_and_wait() {{
     echo "  Waiting for jobs to complete..."
     bwait -w "$wait_condition" 2>&1 || true
 
-    echo "  s$level complete: $(date)"
+    # Verify all jobs completed successfully (not EXIT/failed)
+    for job_id in $job_ids; do
+        job_stat=$(bjobs -noheader -o "stat" $job_id 2>/dev/null | tr -d ' ')
+        if [ "$job_stat" = "EXIT" ]; then
+            echo ""
+            echo "ERROR: s$level job $job_id FAILED (EXIT status)."
+            echo "Aborting pyramid generation — subsequent levels depend on s$level."
+            echo "Check error log: bjobs -l $job_id"
+            echo "Fix the issue and re-run. Do NOT use downstream levels — their metadata may be wrong."
+            exit 1
+        elif [ "$job_stat" != "DONE" ]; then
+            echo ""
+            echo "WARNING: s$level job $job_id has unexpected status: $job_stat"
+            echo "Aborting pyramid generation to be safe."
+            exit 1
+        fi
+    done
+
+    echo "  s$level complete (verified DONE): $(date)"
 }}
 
 """
