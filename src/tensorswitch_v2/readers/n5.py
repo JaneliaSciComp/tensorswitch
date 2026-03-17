@@ -10,7 +10,7 @@ import os
 from typing import Dict, Optional, Tuple
 from urllib.parse import urlparse
 import tensorstore as ts
-from .base import BaseReader
+from .base import BaseReader, _default_voxel_sizes
 from ..utils.format_loaders import convert_to_nanometers
 from ..utils import get_tensorstore_context
 
@@ -317,9 +317,7 @@ class N5Reader(BaseReader):
                     z, y, x = scale_data[0], scale_data[1], scale_data[2]
                     return {'x': float(x), 'y': float(y), 'z': float(z)}
 
-        # Default: return 1.0 for all dimensions if no voxel size found
-        print(f"Warning: No voxel size metadata found in N5, using default 1.0")
-        return {'x': 1.0, 'y': 1.0, 'z': 1.0}
+        return _default_voxel_sizes("N5")
 
     def supports_remote(self) -> bool:
         """

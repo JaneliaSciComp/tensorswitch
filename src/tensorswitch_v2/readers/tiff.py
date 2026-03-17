@@ -9,7 +9,7 @@ from typing import Dict, List, Optional
 import tifffile
 # Import utility functions from v2 utils (independent from v1)
 from ..utils import load_tiff_stack, extract_tiff_ome_metadata
-from .base import DaskReader
+from .base import DaskReader, _default_voxel_sizes
 
 
 class TiffReader(DaskReader):
@@ -106,7 +106,7 @@ class TiffReader(DaskReader):
                 'z': metadata.get('voxel_size_z', 1.0)
             }
 
-        return {'x': 1.0, 'y': 1.0, 'z': 1.0}
+        return _default_voxel_sizes("TIFF")
 
     def __repr__(self) -> str:
         return f"TiffReader(path='{self.path}')"

@@ -9,7 +9,7 @@ import os
 import json
 from typing import Dict, Optional
 import tensorstore as ts
-from .base import BaseReader, build_kvstore, is_remote_path
+from .base import BaseReader, build_kvstore, is_remote_path, _default_voxel_sizes
 from ..utils.format_loaders import extract_precomputed_metadata
 from ..utils import get_tensorstore_context
 
@@ -151,8 +151,7 @@ class PrecomputedReader(BaseReader):
         _, voxel_sizes = extract_precomputed_metadata(self.path, self.scale_index)
 
         if voxel_sizes is None:
-            print(f"Warning: Could not extract voxel sizes from precomputed info, using default 1.0")
-            return {'x': 1.0, 'y': 1.0, 'z': 1.0}
+            return _default_voxel_sizes("Precomputed")
 
         return voxel_sizes
 

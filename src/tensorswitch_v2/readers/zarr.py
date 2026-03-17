@@ -9,7 +9,7 @@ from typing import Dict, Optional, List
 import os
 import json
 import tensorstore as ts
-from .base import BaseReader
+from .base import BaseReader, _default_voxel_sizes
 from ..utils import get_tensorstore_context
 
 
@@ -227,7 +227,7 @@ class Zarr3Reader(BaseReader):
                             return voxel_sizes
 
         # Default
-        return {'x': 1.0, 'y': 1.0, 'z': 1.0}
+        return _default_voxel_sizes("Zarr")
 
     def supports_remote(self) -> bool:
         """Check if this is a remote store."""
@@ -415,7 +415,7 @@ class Zarr2Reader(BaseReader):
                                     voxel_sizes[axis_name] = convert_to_nanometers(scales[i], unit)
                             return voxel_sizes
 
-        return {'x': 1.0, 'y': 1.0, 'z': 1.0}
+        return _default_voxel_sizes("Zarr")
 
     def supports_remote(self) -> bool:
         """Check if this is a remote store."""

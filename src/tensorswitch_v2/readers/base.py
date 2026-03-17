@@ -10,9 +10,21 @@ from typing import Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 import os
 import json
+import warnings
 import numpy as np
 import tensorstore as ts
 from ..utils import get_dtype_name
+
+
+def _default_voxel_sizes(source_format: str = "unknown") -> Dict[str, float]:
+    """Return default voxel sizes [1.0, 1.0, 1.0] with a warning."""
+    warnings.warn(
+        f"No voxel size metadata found in {source_format} source. Defaulting to [1.0, 1.0, 1.0]. "
+        "This may produce incorrect scales for anisotropic data. "
+        "Use --voxel_size X,Y,Z to provide the correct voxel sizes.",
+        stacklevel=3,
+    )
+    return {'x': 1.0, 'y': 1.0, 'z': 1.0}
 
 
 # ============================================================================
@@ -303,7 +315,7 @@ class BaseReader(ABC):
         try:
             voxel_sizes = self.get_voxel_sizes()
         except Exception:
-            voxel_sizes = {'x': 1.0, 'y': 1.0, 'z': 1.0}
+            voxel_sizes = _default_voxel_sizes(self.__class__.__name__)
 
         # Get raw metadata
         try:

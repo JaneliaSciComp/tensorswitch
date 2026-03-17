@@ -380,6 +380,25 @@ def auto_detect_max_level(output_path):
     return max(levels), prefix
 
 
+def _compute_scale_rounded_ratio(level0_scale_factors, level0_shape, level_shape):
+    """
+    Compute scale by rounding the shape ratio to the nearest integer.
+
+    Infers the cumulative downsampling factor from actual array dimensions:
+        factor = round(s0_shape / sN_shape)
+        scale  = s0_voxel * factor
+
+    This handles ceiling division noise (e.g. 627/314 = 1.997 → rounds to 2)
+    and works for any downsampling pattern without assumptions.
+    """
+    level_scale = []
+    for i in range(len(level0_shape)):
+        ratio = level0_shape[i] / level_shape[i]
+        factor = round(ratio)
+        level_scale.append(level0_scale_factors[i] * factor)
+    return level_scale
+
+
 def update_ome_multiscale_metadata(zarr_path, max_level=4, prefix=None, include_translation=True):
     """
     Update OME-ZARR metadata to include all multiscale levels.
@@ -394,8 +413,6 @@ def update_ome_multiscale_metadata(zarr_path, max_level=4, prefix=None, include_
     multiscales = metadata["attributes"]["ome"]["multiscales"][0]
     level0_scale_factors = multiscales["datasets"][0]["coordinateTransformations"][0]["scale"]
 
-    downsampling_factors = metadata.get("attributes", {}).get("tensorswitch", {}).get("downsampling_factors", None)
-
     # Detect level naming format if not provided
     if prefix is None:
         prefix = detect_level_format(zarr_path)
@@ -405,14 +422,6 @@ def update_ome_multiscale_metadata(zarr_path, max_level=4, prefix=None, include_
     with open(level0_metadata_path, 'r') as f:
         level0_meta = json.load(f)
     level0_shape = level0_meta.get('shape')
-
-    if downsampling_factors:
-        print("Using downsampling factors from custom metadata (incremental method)")
-        use_factors = True
-        previous_scale = level0_scale_factors
-    else:
-        print("No downsampling factors found - using dimension ratio method")
-        use_factors = False
 
     datasets = []
 
@@ -440,18 +449,9 @@ def update_ome_multiscale_metadata(zarr_path, max_level=4, prefix=None, include_
 
         if level_cumulative_factor:
             level_scale = [s0 * f for s0, f in zip(level0_scale_factors, level_cumulative_factor)]
-        elif use_factors:
-            prev_level_name = get_level_name(level - 1, prefix)
-            factor_key = f"{prev_level_name}_to_{level_name}"
-            level_factors = downsampling_factors.get(factor_key)
-            if level_factors:
-                level_scale = [prev * factor for prev, factor in zip(previous_scale, level_factors)]
-            else:
-                print(f"Warning: Missing factors for {factor_key}, falling back to ratio method")
-                level_scale = [level0_scale_factors[i] * (level0_shape[i] / level_shape[i]) for i in range(len(level0_shape))]
-            previous_scale = level_scale
         else:
-            level_scale = [level0_scale_factors[i] * (level0_shape[i] / level_shape[i]) for i in range(len(level0_shape))]
+            print(f"Warning: No cumulative_factor for {level_name}, inferring from shape ratio (rounded)")
+            level_scale = _compute_scale_rounded_ratio(level0_scale_factors, level0_shape, level_shape)
 
         coordinate_transformations = [{"type": "scale", "scale": level_scale}]
 
@@ -530,7 +530,8 @@ def update_ome_multiscale_metadata_zarr2(zarr_path, max_level=4, prefix=None, in
         if level_cumulative_factor:
             level_scale = [s0 * f for s0, f in zip(level0_scale_factors, level_cumulative_factor)]
         else:
-            level_scale = [level0_scale_factors[i] * (level0_shape[i] / level_shape[i]) for i in range(len(level0_shape))]
+            print(f"Warning: No cumulative_factor for {level_name}, inferring from shape ratio (rounded)")
+            level_scale = _compute_scale_rounded_ratio(level0_scale_factors, level0_shape, level_shape)
 
         coordinate_transformations = [{"type": "scale", "scale": level_scale}]
 
