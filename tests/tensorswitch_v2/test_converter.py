@@ -17,6 +17,9 @@ from tensorswitch_v2.writers import Zarr3Writer, Zarr2Writer, N5Writer
 
 from conftest import validate_zarr3_output, validate_zarr2_output, validate_n5_output
 
+# Synthetic test data has no voxel metadata; provide explicit defaults
+_TEST_VOXEL_SIZE = {'x': 1.0, 'y': 1.0, 'z': 1.0}
+
 
 class TestDistributedConverterBasic:
     """Basic tests for DistributedConverter."""
@@ -68,7 +71,8 @@ class TestTiffToZarr3:
         writer = Writers.zarr3(output_path, use_sharding=False, use_nested_structure=False)
 
         converter = DistributedConverter(reader, writer)
-        stats = converter.convert(chunk_shape=(16, 32, 32), verbose=False)
+        stats = converter.convert(chunk_shape=(16, 32, 32), verbose=False,
+                                  voxel_size_override=_TEST_VOXEL_SIZE)
 
         assert stats['chunks_processed'] > 0
         assert stats['elapsed_seconds'] > 0
@@ -97,7 +101,8 @@ class TestTiffToZarr3:
         writer = Writers.zarr3(output_path, use_sharding=False, use_nested_structure=False)
 
         converter = DistributedConverter(reader, writer)
-        converter.convert(chunk_shape=(16, 32, 32), write_metadata=True, verbose=False)
+        converter.convert(chunk_shape=(16, 32, 32), write_metadata=True, verbose=False,
+                         voxel_size_override=_TEST_VOXEL_SIZE)
 
         # Check zarr.json has OME metadata
         zarr_json_path = os.path.join(output_path, "zarr.json")
@@ -123,7 +128,8 @@ class TestZarr3ToZarr3:
 
         converter = DistributedConverter(reader, writer)
         # Use different chunk shape than input
-        stats = converter.convert(chunk_shape=(8, 16, 16), verbose=False)
+        stats = converter.convert(chunk_shape=(8, 16, 16), verbose=False,
+                                  voxel_size_override=_TEST_VOXEL_SIZE)
 
         assert stats['chunks_processed'] > 0
 
@@ -149,7 +155,8 @@ class TestN5ToZarr3:
         writer = Writers.zarr3(output_path, use_sharding=False)
 
         converter = DistributedConverter(reader, writer)
-        stats = converter.convert(chunk_shape=(16, 32, 32), verbose=False)
+        stats = converter.convert(chunk_shape=(16, 32, 32), verbose=False,
+                                  voxel_size_override=_TEST_VOXEL_SIZE)
 
         assert stats['chunks_processed'] > 0
 
@@ -175,7 +182,8 @@ class TestTiffToZarr2:
         writer = Writers.zarr2(output_path)
 
         converter = DistributedConverter(reader, writer)
-        stats = converter.convert(chunk_shape=(16, 32, 32), verbose=False)
+        stats = converter.convert(chunk_shape=(16, 32, 32), verbose=False,
+                                  voxel_size_override=_TEST_VOXEL_SIZE)
 
         assert stats['chunks_processed'] > 0
 
@@ -215,7 +223,8 @@ class TestChunkRangeProcessing:
             stop_idx=total // 2,
             chunk_shape=(16, 32, 32),
             write_metadata=False,
-            verbose=False
+            verbose=False,
+            voxel_size_override=_TEST_VOXEL_SIZE,
         )
 
         # Process second half
@@ -228,7 +237,8 @@ class TestChunkRangeProcessing:
             stop_idx=total,
             chunk_shape=(16, 32, 32),
             write_metadata=True,  # Write metadata on last job
-            verbose=False
+            verbose=False,
+            voxel_size_override=_TEST_VOXEL_SIZE,
         )
 
         # Total processed should equal total chunks
@@ -256,7 +266,8 @@ class TestConverterStatistics:
         writer = Writers.zarr3(output_path, use_sharding=False)
 
         converter = DistributedConverter(reader, writer)
-        stats = converter.convert(chunk_shape=(16, 32, 32), verbose=False)
+        stats = converter.convert(chunk_shape=(16, 32, 32), verbose=False,
+                                  voxel_size_override=_TEST_VOXEL_SIZE)
 
         assert 'chunks_processed' in stats
         assert 'total_chunks' in stats
@@ -273,7 +284,8 @@ class TestConverterStatistics:
         writer = Writers.zarr3(output_path, use_sharding=False)
 
         converter = DistributedConverter(reader, writer)
-        stats = converter.convert(chunk_shape=(16, 32, 32), verbose=False)
+        stats = converter.convert(chunk_shape=(16, 32, 32), verbose=False,
+                                  voxel_size_override=_TEST_VOXEL_SIZE)
 
         # Shape (32, 64, 64) with (16, 32, 32) = 8 chunks
         assert stats['total_chunks'] == 8
