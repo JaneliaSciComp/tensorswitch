@@ -1270,7 +1270,7 @@ def main(argv=None):
             submit_discovered_folder_lsf,
         )
 
-        input_mode = detect_input_mode(args.input)
+        input_mode = detect_input_mode(args.input, output_path=args.output)
 
         if input_mode == 'discovered_folder':
             # Discovered folder mode: convert image and/or segmentation datasets

@@ -55,12 +55,13 @@ OUTPUT_EXTENSIONS = {
 }
 
 
-def detect_input_mode(input_path: str) -> str:
+def detect_input_mode(input_path: str, output_path: str = None) -> str:
     """
     Determine if input is single file, batch directory, or discovered folder.
 
     Args:
         input_path: Input path from CLI
+        output_path: Output path from CLI (used to disambiguate batch vs Z-stack)
 
     Returns:
         'single_file': Single file or single dataset (e.g., one Precomputed dir)
@@ -82,6 +83,12 @@ def detect_input_mode(input_path: str) -> str:
         # Check if directory is a TIFF Z-stack (numbered 2D TIFFs forming one volume)
         from ..utils.format_loaders import is_tiff_zstack_directory
         if is_tiff_zstack_directory(input_path):
+            # If output path looks like a directory (no .zarr/.n5 extension),
+            # the user likely wants batch mode even with 2D TIFFs
+            if output_path:
+                out_ext = os.path.splitext(output_path)[1].lower()
+                if out_ext not in ('.zarr', '.n5'):
+                    return 'batch_directory'
             return 'single_file'
         # Check if directory contains discoverable datasets (e.g., image + segmentation)
         # This takes priority over batch_directory mode

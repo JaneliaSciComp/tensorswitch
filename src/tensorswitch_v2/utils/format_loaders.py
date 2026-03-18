@@ -105,23 +105,44 @@ def _find_tiff_files(directory):
 
 
 def is_tiff_zstack_directory(path):
-    """Check if a directory contains a TIFF Z-stack (2+ TIFF files).
+    """Check if a directory contains a TIFF Z-stack (2D TIFF slices forming one volume).
+
+    Distinguishes between:
+    - Z-stack directory: multiple 2D TIFFs (each is a single Z-plane)
+    - Batch directory: multiple 3D TIFFs (each is an independent volume)
+
+    A TIFF is considered 2D if it has only 1 page (single image plane).
 
     Args:
         path: Path to check
 
     Returns:
-        True if directory contains 2+ files with .tif/.tiff extension
+        True if directory contains 2+ 2D TIFF files (a Z-stack)
     """
     if not os.path.isdir(path):
         return False
-    count = 0
+
+    tiff_files = []
     for entry in os.scandir(path):
         if entry.is_file() and entry.name.lower().endswith(('.tif', '.tiff')):
-            count += 1
-            if count >= 2:
-                return True
-    return False
+            tiff_files.append(entry.path)
+            if len(tiff_files) >= 2:
+                break
+
+    if len(tiff_files) < 2:
+        return False
+
+    # Sample the first TIFF to check if it's 2D (single page) or 3D (multi-page)
+    import tifffile
+    try:
+        with tifffile.TiffFile(tiff_files[0]) as tif:
+            # A 2D slice has exactly 1 page; a 3D volume has many pages
+            if len(tif.pages) > 1:
+                return False  # 3D TIFFs → batch directory, not Z-stack
+    except Exception:
+        pass  # If we can't read it, fall back to old behavior (assume Z-stack)
+
+    return True
 
 
 def load_tiff_stack(folder_or_file):
