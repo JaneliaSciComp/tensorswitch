@@ -27,7 +27,7 @@ runnables:
         type: enum
         description: Output format.
         default: zarr3
-        values:
+        options:
           - zarr3
           - zarr2
           - n5
