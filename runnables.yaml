@@ -1,0 +1,53 @@
+name: TensorSwitch
+description: High-performance microscopy data conversion tool. Converts 200+ formats (TIFF, ND2, CZI, IMS, N5, etc.) to Zarr3/Zarr2/N5 with automatic multi-scale pyramid generation.
+version: "2.0.0"
+
+requirements:
+  - "pixi>=0.40"
+
+runnables:
+  - id: convert
+    type: job
+    name: Convert to Zarr
+    description: Convert a microscopy file to Zarr3, Zarr2, or N5 format with automatic chunk/shard optimization.
+    command: pixi run tensorswitch-v2
+    parameters:
+      - flag: -i
+        name: Input Path
+        type: file
+        description: Path to input file (TIFF, ND2, CZI, IMS, HDF5, N5, Zarr, or 200+ formats).
+        required: true
+      - flag: -o
+        name: Output Path
+        type: directory
+        description: Output path for the converted dataset (e.g., /path/to/output.zarr).
+        required: true
+      - flag: --output_format
+        name: Output Format
+        type: enum
+        description: Output format.
+        default: zarr3
+        values:
+          - zarr3
+          - zarr2
+          - n5
+    resources:
+      cpus: 4
+      memory: "60 GB"
+      walltime: "24:00"
+
+  - id: pyramid
+    type: job
+    name: Generate Pyramid
+    description: Generate multi-scale pyramid from an existing Zarr dataset. Auto-detects the base level (s0) and creates all downsampled levels.
+    command: pixi run tensorswitch-v2 --auto_multiscale
+    parameters:
+      - flag: -i
+        name: Dataset Path
+        type: directory
+        description: Path to the Zarr dataset root (e.g., /path/to/dataset.zarr). The s0 level is auto-detected.
+        required: true
+    resources:
+      cpus: 4
+      memory: "32 GB"
+      walltime: "08:00"
