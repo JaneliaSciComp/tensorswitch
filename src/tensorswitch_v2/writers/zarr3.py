@@ -672,6 +672,7 @@ class Zarr3Writer(BaseWriter):
         print(f"Zarr3 metadata: using axes: {axes_order}")
 
         # Handle nested structure metadata
+        voxel_unit = kwargs.get('voxel_unit', 'nanometer')
         if self.use_nested_structure and self._ome_structure:
             self._write_nested_metadata(
                 array_shape=array_shape,
@@ -679,7 +680,8 @@ class Zarr3Writer(BaseWriter):
                 voxel_sizes=voxel_sizes,
                 image_name=image_name,
                 ome_xml=ome_xml,
-                is_label=is_label
+                is_label=is_label,
+                voxel_unit=voxel_unit,
             )
         else:
             # Legacy: write single metadata file at root
@@ -690,7 +692,8 @@ class Zarr3Writer(BaseWriter):
                 pixel_sizes=voxel_sizes,
                 axes_order=axes_order,
                 include_omero=self.include_omero,
-                is_label=is_label
+                is_label=is_label,
+                spatial_unit=voxel_unit,
             )
             write_zarr3_group_metadata(self.output_path, full_metadata)
 
@@ -701,7 +704,8 @@ class Zarr3Writer(BaseWriter):
         voxel_sizes: Optional[Dict[str, float]],
         image_name: str,
         ome_xml: Optional[str],
-        is_label: bool
+        is_label: bool,
+        voxel_unit: str = 'nanometer',
     ) -> None:
         """
         Write metadata for OME-NGFF nested structure.
@@ -718,7 +722,7 @@ class Zarr3Writer(BaseWriter):
         for axis_name in axes_order:
             axis_lower = axis_name.lower()
             if axis_lower in ['x', 'y', 'z']:
-                axes.append({'name': axis_lower, 'type': 'space', 'unit': 'nanometer'})
+                axes.append({'name': axis_lower, 'type': 'space', 'unit': voxel_unit})
             elif axis_lower in ['c', 'channel']:
                 axes.append({'name': 'c', 'type': 'channel'})
             elif axis_lower in ['t', 'v']:

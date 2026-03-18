@@ -260,8 +260,16 @@ Supported output formats:
     # Voxel size override
     parser.add_argument(
         "--voxel_size", default=None,
-        help="Override voxel size in nanometers, comma-separated X,Y,Z (e.g., '9,9,12'). "
+        help="Override voxel size, comma-separated X,Y,Z (e.g., '9,9,12'). "
+             "Values are in nanometers by default, or in the unit specified by --voxel_unit. "
              "Use when source file lacks embedded voxel size metadata.",
+    )
+    parser.add_argument(
+        "--voxel_unit", default=None,
+        choices=["nanometer", "micrometer", "millimeter"],
+        help="Override the spatial unit in OME metadata. "
+             "When set, voxel sizes are written as-is in this unit (no nm conversion). "
+             "Without --voxel_size, defaults to scale [1,1,1] in the specified unit.",
     )
 
     # Label/segmentation mode
@@ -881,6 +889,8 @@ def submit_job(args, return_job_id=False):
         reinvoke.append("--force_f_order")
     if getattr(args, 'voxel_size', None):
         reinvoke += ["--voxel_size", args.voxel_size]
+    if getattr(args, 'voxel_unit', None):
+        reinvoke += ["--voxel_unit", args.voxel_unit]
     if getattr(args, 'is_label', False):
         reinvoke.append("--is-label")
     if getattr(args, 'expand_to_5d', False):
@@ -1666,6 +1676,7 @@ def main(argv=None):
 
     # Parse voxel_size override if provided
     voxel_size_override = None
+    voxel_unit = getattr(args, 'voxel_unit', None)
     if args.voxel_size:
         parts = args.voxel_size.split(',')
         if len(parts) == 3:
@@ -1695,6 +1706,7 @@ def main(argv=None):
             verbose=verbose,
             force_order=force_order,
             voxel_size_override=voxel_size_override,
+            voxel_unit=voxel_unit,
             is_label=is_label,
             expand_to_5d=expand_to_5d,
         )
@@ -1707,6 +1719,7 @@ def main(argv=None):
             verbose=verbose,
             force_order=force_order,
             voxel_size_override=voxel_size_override,
+            voxel_unit=voxel_unit,
             is_label=is_label,
             expand_to_5d=expand_to_5d,
         )

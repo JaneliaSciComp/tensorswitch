@@ -64,6 +64,7 @@ class DistributedConverter:
         verbose: bool = True,
         delete_existing: Optional[bool] = None,
         voxel_size_override: Optional[Dict[str, float]] = None,
+        voxel_unit: Optional[str] = None,
         is_label: bool = False,
         expand_to_5d: bool = False,
     ) -> Dict[str, Any]:
@@ -139,15 +140,38 @@ class DistributedConverter:
                     axes_order = squeezed_axes
 
         # 3. Get metadata from reader
+        # Readers return voxel sizes in nanometers when real metadata exists.
+        # When no metadata, _default_voxel_sizes() returns {x:1.0, y:1.0, z:1.0} placeholder.
+        source_unit = 'nanometer'
+        target_unit = voxel_unit or 'nanometer'
         try:
             voxel_sizes = self.reader.get_voxel_sizes()
         except Exception:
             voxel_sizes = None
 
         if voxel_size_override:
+            # --voxel_size values are in the target unit (--voxel_unit, or nm if not set)
             voxel_sizes = voxel_size_override
+            source_unit = target_unit  # override already in target unit
             if verbose:
-                print(f"  Using voxel size override: {voxel_sizes}")
+                print(f"  Using voxel size override ({source_unit}): {voxel_sizes}")
+        elif voxel_sizes and all(v == 1.0 for v in voxel_sizes.values()):
+            # Default placeholder [1,1,1] — no real voxel metadata in source.
+            # Refuse to guess; require user to specify explicitly.
+            raise ValueError(
+                "No voxel size metadata found in source file. "
+                "Please provide --voxel_size X,Y,Z (and optionally --voxel_unit) "
+                "so the output metadata is correct. "
+                "Example: --voxel_size 0.108,0.108,0.268 --voxel_unit micrometer"
+            )
+
+        # Convert voxel sizes from source unit to target unit if they differ
+        if voxel_sizes and source_unit != target_unit:
+            to_nm = {'nanometer': 1.0, 'micrometer': 1e3, 'millimeter': 1e6}
+            factor = to_nm[source_unit] / to_nm[target_unit]
+            voxel_sizes = {k: v * factor for k, v in voxel_sizes.items()}
+            if verbose:
+                print(f"  Converted voxel sizes: {source_unit} -> {target_unit} (x{factor}): {voxel_sizes}")
 
         try:
             ome_metadata = self.reader.get_ome_metadata()
@@ -271,6 +295,7 @@ class DistributedConverter:
                 self.writer.write_metadata(
                     ome_metadata=ome_metadata,
                     voxel_sizes=voxel_sizes,
+                    voxel_unit=target_unit,
                     array_shape=input_shape,
                     axes_order=axes_order,
                     ome_xml=ome_xml,

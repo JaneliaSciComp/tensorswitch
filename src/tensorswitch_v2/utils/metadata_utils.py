@@ -181,7 +181,7 @@ def extract_omero_channels(ome_xml: str) -> list:
     return channels if channels else None
 
 
-def create_zarr3_ome_metadata(ome_xml, array_shape, image_name, pixel_sizes=None, axes_order=None, include_omero=False, is_label=False, label_colors=None, level_path="s0"):
+def create_zarr3_ome_metadata(ome_xml, array_shape, image_name, pixel_sizes=None, axes_order=None, include_omero=False, is_label=False, label_colors=None, level_path="s0", spatial_unit='nanometer'):
     """
     Create OME-ZARR metadata structure for zarr3 format.
 
@@ -217,7 +217,7 @@ def create_zarr3_ome_metadata(ome_xml, array_shape, image_name, pixel_sizes=None
 
     def get_axis_unit(axis_name):
         if axis_name in ['x', 'y', 'z']:
-            return 'nanometer'
+            return spatial_unit
         elif axis_name == 't':
             return 'millisecond'
         return None
@@ -240,25 +240,25 @@ def create_zarr3_ome_metadata(ome_xml, array_shape, image_name, pixel_sizes=None
         if array_shape[0] <= 10:
             axes = [
                 {"name": "c", "type": "channel"},
-                {"name": "y", "type": "space", "unit": "nanometer"},
-                {"name": "x", "type": "space", "unit": "nanometer"}
+                {"name": "y", "type": "space", "unit": spatial_unit},
+                {"name": "x", "type": "space", "unit": spatial_unit}
             ]
             if pixel_sizes:
                 scale_factors = [1.0, pixel_sizes.get('y', 1.0), pixel_sizes.get('x', 1.0)]
         else:
             axes = [
-                {"name": "z", "type": "space", "unit": "nanometer"},
-                {"name": "y", "type": "space", "unit": "nanometer"},
-                {"name": "x", "type": "space", "unit": "nanometer"}
+                {"name": "z", "type": "space", "unit": spatial_unit},
+                {"name": "y", "type": "space", "unit": spatial_unit},
+                {"name": "x", "type": "space", "unit": spatial_unit}
             ]
             if pixel_sizes:
                 scale_factors = [pixel_sizes.get('z', 1.0), pixel_sizes.get('y', 1.0), pixel_sizes.get('x', 1.0)]
     elif ndim == 4:
         axes = [
             {"name": "c", "type": "channel"},
-            {"name": "z", "type": "space", "unit": "nanometer"},
-            {"name": "y", "type": "space", "unit": "nanometer"},
-            {"name": "x", "type": "space", "unit": "nanometer"}
+            {"name": "z", "type": "space", "unit": spatial_unit},
+            {"name": "y", "type": "space", "unit": spatial_unit},
+            {"name": "x", "type": "space", "unit": spatial_unit}
         ]
         if pixel_sizes:
             scale_factors = [1.0, pixel_sizes.get('z', 1.0), pixel_sizes.get('y', 1.0), pixel_sizes.get('x', 1.0)]
@@ -266,9 +266,9 @@ def create_zarr3_ome_metadata(ome_xml, array_shape, image_name, pixel_sizes=None
         axes = [
             {"name": "t", "type": "time", "unit": "millisecond"},
             {"name": "c", "type": "channel"},
-            {"name": "z", "type": "space", "unit": "nanometer"},
-            {"name": "y", "type": "space", "unit": "nanometer"},
-            {"name": "x", "type": "space", "unit": "nanometer"}
+            {"name": "z", "type": "space", "unit": spatial_unit},
+            {"name": "y", "type": "space", "unit": spatial_unit},
+            {"name": "x", "type": "space", "unit": spatial_unit}
         ]
         if pixel_sizes:
             scale_factors = [1.0, 1.0, pixel_sizes.get('z', 1.0), pixel_sizes.get('y', 1.0), pixel_sizes.get('x', 1.0)]
