@@ -5,6 +5,8 @@ environments:
     - url: https://conda.anaconda.org/conda-forge/
     indexes:
     - https://pypi.org/simple
+    options:
+      pypi-prerelease-mode: if-necessary-or-explicit
     packages:
       linux-64:
       - conda: https://conda.anaconda.org/conda-forge/linux-64/_libgcc_mutex-0.1-conda_forge.tar.bz2
@@ -368,6 +370,8 @@ environments:
     - url: https://conda.anaconda.org/conda-forge/
     indexes:
     - https://pypi.org/simple
+    options:
+      pypi-prerelease-mode: if-necessary-or-explicit
     packages:
       linux-64:
       - conda: https://conda.anaconda.org/conda-forge/linux-64/_libgcc_mutex-0.1-conda_forge.tar.bz2
@@ -6244,7 +6248,7 @@ packages:
 - pypi: ./
   name: tensorswitch
   version: 2.0.0
-  sha256: 71a860aa71f146beaeb8650a37635deddda16b0a4d38efa3ca12c632904bc3db
+  sha256: 18202abf5309afe02242f7bf2aa11d856b8955f43c62956aeafffa7d02263f34
   requires_dist:
   - tensorstore>=0.1.79,<0.2
   - psutil
@@ -6264,7 +6268,6 @@ packages:
   - bioio-bioformats>=1.0.0
   - bioformats-jar
   requires_python: '>=3.11'
-  editable: true
 - conda: https://conda.anaconda.org/conda-forge/noarch/tifffile-2025.6.11-pyhd8ed1ab_0.conda
   sha256: a21d4eb4c2ac99cdcffbc33b135b56c1e82f534a73753afbf6f7ba926ca461c8
   md5: 9363f389b9fe136488fef8664acb77c6
