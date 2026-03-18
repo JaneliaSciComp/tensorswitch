@@ -1258,8 +1258,17 @@ submit_and_wait() {{
     bwait -w "$wait_condition" 2>&1 || true
 
     # Verify all jobs completed successfully (not EXIT/failed)
+    # Sleep briefly after bwait to let LSF status propagate
+    sleep 5
     for job_id in $job_ids; do
-        job_stat=$(bjobs -noheader -o "stat" $job_id 2>/dev/null | tr -d ' ')
+        # Retry status check up to 5 times (LSF status can lag behind bwait)
+        for attempt in 1 2 3 4 5; do
+            job_stat=$(bjobs -noheader -o "stat" $job_id 2>/dev/null | tr -d ' ')
+            if [ "$job_stat" = "DONE" ] || [ "$job_stat" = "EXIT" ]; then
+                break
+            fi
+            sleep 5
+        done
         if [ "$job_stat" = "EXIT" ]; then
             echo ""
             echo "ERROR: s$level job $job_id FAILED (EXIT status)."
@@ -1269,7 +1278,7 @@ submit_and_wait() {{
             exit 1
         elif [ "$job_stat" != "DONE" ]; then
             echo ""
-            echo "WARNING: s$level job $job_id has unexpected status: $job_stat"
+            echo "WARNING: s$level job $job_id has unexpected status after retries: $job_stat"
             echo "Aborting pyramid generation to be safe."
             exit 1
         fi
