@@ -527,7 +527,7 @@ class PyramidPlanner:
             cumulative = [c * f for c, f in zip(cumulative, factors)]
 
             # Calculate predicted shape
-            predicted_shape = [max(1, s // f) for s, f in zip(s0_shape, cumulative)]
+            predicted_shape = [max(1, (s + f - 1) // f) for s, f in zip(s0_shape, cumulative)]
 
             # Calculate predicted voxel sizes (assume 1.0 if unknown - custom factors mean user knows best)
             # We don't have voxel info, so use cumulative factors as relative voxel size
