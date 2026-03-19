@@ -399,7 +399,53 @@ def _compute_scale_rounded_ratio(level0_scale_factors, level0_shape, level_shape
     return level_scale
 
 
-def update_ome_multiscale_metadata(zarr_path, max_level=4, prefix=None, include_translation=True):
+def _compute_translation(level_scale, level0_scale_factors, downsample_method=None):
+    """
+    Compute per-axis translation for a downsampled level.
+
+    For block-based methods (mean, mode, median, min, max), each output pixel
+    covers a block of input pixels.  The output pixel's center is shifted by
+    half the difference between the new and original voxel sizes:
+
+        translation[i] = 0.5 * (scale_sN[i] - scale_s0[i])
+
+    For stride, the output pixel IS the input pixel at position j*f — its
+    center already aligns with the original grid, so translation = 0.
+
+    For unknown methods, translation is skipped with a warning since the
+    correct offset is unknown and applying the wrong value is worse than
+    omitting it.
+
+    Args:
+        level_scale: Scale factors for this level (e.g., [800, 232, 232] nm)
+        level0_scale_factors: Scale factors for level 0 (e.g., [400, 116, 116] nm)
+        downsample_method: Downsample method used ('mean', 'mode', 'stride', etc.)
+                           None defaults to block-method behavior.
+
+    Returns:
+        list of float: Per-axis translation values (physical units)
+    """
+    # Block methods: symmetric window — output center shifted by 0.5*(sN - s0)
+    BLOCK_METHODS = {'mean', 'mode', 'median', 'min', 'max'}
+    # Stride: output pixel = input pixel at j*f — no shift
+    STRIDE_METHODS = {'stride'}
+
+    if downsample_method in STRIDE_METHODS:
+        return [0.0] * len(level_scale)
+
+    if downsample_method is not None and downsample_method not in BLOCK_METHODS:
+        print(
+            f"WARNING: Unknown downsample method '{downsample_method}' — "
+            f"cannot determine correct translation offset (only 0.5 is supported "
+            f"for block methods). Skipping translation to avoid incorrect metadata."
+        )
+        return [0.0] * len(level_scale)
+
+    # Block methods (or None/default): 0.5 * (sN - s0) per axis
+    return [0.5 * (scale - level0_scale_factors[i]) for i, scale in enumerate(level_scale)]
+
+
+def update_ome_multiscale_metadata(zarr_path, max_level=4, prefix=None, include_translation=True, downsample_method=None):
     """
     Update OME-ZARR metadata to include all multiscale levels.
 
@@ -457,9 +503,11 @@ def update_ome_multiscale_metadata(zarr_path, max_level=4, prefix=None, include_
 
         # Add translation transform for Neuroglancer compatibility
         if include_translation:
-            translation = [0.5 * (scale - level0_scale_factors[i]) for i, scale in enumerate(level_scale)]
+            translation = _compute_translation(level_scale, level0_scale_factors, downsample_method)
             if any(t != 0 for t in translation):
                 coordinate_transformations.append({"type": "translation", "translation": translation})
+                method_label = downsample_method or 'block'
+                print(f"  {level_name}: translation={[round(t, 4) for t in translation]} (method={method_label})")
 
         datasets.append({
             "path": level_name,
@@ -474,7 +522,7 @@ def update_ome_multiscale_metadata(zarr_path, max_level=4, prefix=None, include_
     print(f"Updated OME metadata with {len(datasets)} levels")
 
 
-def update_ome_multiscale_metadata_zarr2(zarr_path, max_level=4, prefix=None, include_translation=True):
+def update_ome_multiscale_metadata_zarr2(zarr_path, max_level=4, prefix=None, include_translation=True, downsample_method=None):
     """
     Update OME-ZARR metadata for zarr2 format (.zattrs).
 
@@ -537,9 +585,11 @@ def update_ome_multiscale_metadata_zarr2(zarr_path, max_level=4, prefix=None, in
 
         # Add translation transform for Neuroglancer compatibility (same as Zarr3)
         if include_translation:
-            translation = [0.5 * (scale - level0_scale_factors[i]) for i, scale in enumerate(level_scale)]
+            translation = _compute_translation(level_scale, level0_scale_factors, downsample_method)
             if any(t != 0 for t in translation):
                 coordinate_transformations.append({"type": "translation", "translation": translation})
+                method_label = downsample_method or 'block'
+                print(f"  {level_name}: translation={[round(t, 4) for t in translation]} (method={method_label})")
 
         datasets.append({
             "path": level_name,
@@ -770,7 +820,7 @@ def _update_parent_zarr2_zattrs(inner_path, parent_path, image_key):
     print(f"Updated parent zarr2 metadata with {len(adjusted_datasets)} levels")
 
 
-def update_ome_metadata_if_needed(output_path, use_ome_structure, include_translation=True):
+def update_ome_metadata_if_needed(output_path, use_ome_structure, include_translation=True, downsample_method=None):
     """
     Update OME-Zarr metadata if OME structure is used and multiscale levels exist.
     Supports both zarr2 (.zattrs) and zarr3 (zarr.json) formats.
@@ -778,6 +828,13 @@ def update_ome_metadata_if_needed(output_path, use_ome_structure, include_transl
     Also updates the parent zarr.json/zattrs if this path is a nested image group
     (e.g., raw/ inside <name>.zarr/), propagating all pyramid levels with the
     image_key prefix (e.g., raw/s0, raw/s1, ...).
+
+    Args:
+        output_path: Path to zarr root
+        use_ome_structure: Whether OME structure is used
+        include_translation: Include translation transforms in metadata
+        downsample_method: Downsample method used ('mean', 'mode', 'stride', etc.)
+                          Controls translation computation.
     """
     if not use_ome_structure:
         return
@@ -799,7 +856,7 @@ def update_ome_metadata_if_needed(output_path, use_ome_structure, include_transl
     try:
         if os.path.exists(zarr3_metadata):
             print(f"Updating zarr3 OME metadata for {output_path} with levels {level0_name}-{max_level_name}")
-            update_ome_multiscale_metadata(output_path, max_level=max_level, prefix=prefix, include_translation=include_translation)
+            update_ome_multiscale_metadata(output_path, max_level=max_level, prefix=prefix, include_translation=include_translation, downsample_method=downsample_method)
             print("OME metadata updated successfully!")
 
             # Also update parent zarr.json if this is a nested image group (e.g., raw/)
@@ -815,7 +872,7 @@ def update_ome_metadata_if_needed(output_path, use_ome_structure, include_transl
 
         elif os.path.exists(zarr2_metadata):
             print(f"Updating zarr2 OME metadata for {output_path} with levels {level0_name}-{max_level_name}")
-            update_ome_multiscale_metadata_zarr2(output_path, max_level=max_level, prefix=prefix, include_translation=include_translation)
+            update_ome_multiscale_metadata_zarr2(output_path, max_level=max_level, prefix=prefix, include_translation=include_translation, downsample_method=downsample_method)
             print("OME metadata updated successfully!")
 
             # Also update parent .zattrs if this is a nested image group (e.g., raw/)

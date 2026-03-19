@@ -1545,8 +1545,11 @@ def main(argv=None):
         else:
             # Local mode: run downsampling directly for each level
             from .core.downsampler import downsample_level
+            from .utils.pyramid_utils import resolve_downsample_method
 
-            planner = PyramidPlanner(s0_path)
+            resolved_method = resolve_downsample_method(args.downsample_method, s0_path)
+
+            planner = PyramidPlanner(s0_path, include_translation=not args.no_translation, downsample_method=resolved_method)
             plan = planner.calculate_pyramid_plan(custom_per_level_factors=custom_per_level_factors)
             planner.print_pyramid_plan(plan)
 
@@ -1570,12 +1573,13 @@ def main(argv=None):
                     use_shard=use_shard,
                     custom_shard_shape=level_info.get('shard_shape'),
                     custom_chunk_shape=level_info.get('chunk_shape'),
+                    downsample_method=resolved_method,
                     verbose=verbose,
                 )
 
             # Update root metadata
             print("\nUpdating root metadata...")
-            update_ome_metadata_if_needed(root_path, use_ome_structure=True, include_translation=not args.no_translation)
+            update_ome_metadata_if_needed(root_path, use_ome_structure=True, include_translation=not args.no_translation, downsample_method=resolved_method)
 
             print(f"\n{'='*60}")
             print(f"AUTO-MULTISCALE COMPLETE: {root_path}")

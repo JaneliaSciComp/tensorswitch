@@ -242,18 +242,21 @@ class PyramidPlanner:
         >>> job_id = planner.submit_chained_pyramid(plan, project="scicompsoft")
     """
 
-    def __init__(self, s0_path: str, include_translation: bool = True):
+    def __init__(self, s0_path: str, include_translation: bool = True, downsample_method: str = "mean"):
         """
         Initialize PyramidPlanner.
 
         Args:
             s0_path: Path to s0 array (e.g., "/data/dataset.zarr/s0")
             include_translation: Include translation transforms in OME metadata (default: True)
+            downsample_method: Downsample method used — controls translation computation.
+                              'stride' → no translation; block methods → 0.5*(sN-s0).
         """
         self.s0_path = s0_path
         self.root_path = os.path.dirname(s0_path)
         self._s0_metadata = None
         self.include_translation = include_translation
+        self.downsample_method = downsample_method
 
     def _load_s0_metadata(self) -> Dict[str, Any]:
         """Load metadata from s0 array (supports both Zarr3 and Zarr2)."""
@@ -849,7 +852,7 @@ fi
 
 echo ""
 echo "All jobs complete. Updating root metadata..."
-{q_python_path} -c "from tensorswitch_v2.utils import update_ome_metadata_if_needed; update_ome_metadata_if_needed({repr(self.root_path)}, use_ome_structure=True, include_translation={self.include_translation})"
+{q_python_path} -c "from tensorswitch_v2.utils import update_ome_metadata_if_needed; update_ome_metadata_if_needed({repr(self.root_path)}, use_ome_structure=True, include_translation={self.include_translation}, downsample_method={repr(self.downsample_method)})"
 
 echo ""
 echo "================================================================"
@@ -929,7 +932,7 @@ echo "All level jobs completed. Updating root metadata..."
 
 # Update OME-NGFF metadata
 cd {q_tensorswitch_dir}
-{q_python_path} -c "from tensorswitch_v2.utils import update_ome_metadata_if_needed; update_ome_metadata_if_needed({repr(self.root_path)}, use_ome_structure=True, include_translation={self.include_translation})"
+{q_python_path} -c "from tensorswitch_v2.utils import update_ome_metadata_if_needed; update_ome_metadata_if_needed({repr(self.root_path)}, use_ome_structure=True, include_translation={self.include_translation}, downsample_method={repr(self.downsample_method)})"
 
 echo ""
 echo "=========================================="
@@ -1356,7 +1359,7 @@ echo "============================================================"
 echo "UPDATING ROOT METADATA"
 echo "============================================================"
 echo "All levels complete, updating root zarr.json..."
-{q_python_path} -c "from tensorswitch_v2.utils import update_ome_metadata_if_needed; update_ome_metadata_if_needed({repr(self.root_path)}, use_ome_structure=True, include_translation={self.include_translation})"
+{q_python_path} -c "from tensorswitch_v2.utils import update_ome_metadata_if_needed; update_ome_metadata_if_needed({repr(self.root_path)}, use_ome_structure=True, include_translation={self.include_translation}, downsample_method={repr(self.downsample_method)})"
 echo "Metadata update complete."
 
 echo ""
@@ -1393,7 +1396,7 @@ echo ""
             print(f"{'='*60}")
 
         # Use v1's unified metadata update function which handles both zarr3 and zarr2
-        update_ome_metadata_if_needed(self.root_path, use_ome_structure=True, include_translation=self.include_translation)
+        update_ome_metadata_if_needed(self.root_path, use_ome_structure=True, include_translation=self.include_translation, downsample_method=self.downsample_method)
 
         if verbose:
             print(f"{'='*60}\n")
@@ -1479,12 +1482,12 @@ def create_pyramid_parallel(
         ...     custom_per_level_factors=[[1,2,2], [1,2,2], [1,2,2], [1,2,2]]
         ... )
     """
-    planner = PyramidPlanner(s0_path, include_translation=include_translation)
-
     # Resolve 'auto' downsample method based on input path
     resolved_method = resolve_downsample_method(downsample_method, s0_path)
     if verbose and downsample_method == 'auto':
         print(f"Auto-detected downsample method: {resolved_method}")
+
+    planner = PyramidPlanner(s0_path, include_translation=include_translation, downsample_method=resolved_method)
 
     # Calculate pyramid plan
     pyramid_plan = planner.calculate_pyramid_plan(
