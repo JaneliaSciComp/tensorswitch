@@ -270,14 +270,24 @@ Use `--expand-to-5d` for compatibility with tools requiring strict 5D TCZYX form
 
 | Argument | Description |
 |----------|-------------|
-| `--voxel_size` | Override voxel size in nanometers, comma-separated X,Y,Z (e.g., `160,160,400`) |
+| `--voxel_size` | Override voxel size, comma-separated X,Y,Z (e.g., `160,160,400`). Values are in nanometers by default, or in the unit specified by `--voxel_unit`. |
+| `--voxel_unit` | Override spatial unit in OME metadata: `nanometer`, `micrometer`, `millimeter`. When set, voxel sizes are written as-is in this unit. |
+| `--no-translation` | Disable translation transforms in OME-NGFF multiscale metadata. Default: translation ON (for Neuroglancer alignment). |
 
-**Use case**: When source files lack embedded voxel size metadata (e.g., raw TIFF stacks, BigStitcher output).
+**Use case**: When source files lack embedded voxel size metadata (e.g., raw TIFF stacks, flat Zarr arrays). If a source file has no voxel metadata and `--voxel_size` is not provided, the converter will error rather than silently guessing.
 
 ```bash
-# Example: Set voxel size for a TIFF without embedded metadata (160nm x 160nm x 400nm)
+# Set voxel size in nanometers (default unit)
 pixi run python -m tensorswitch_v2 -i input.tif -o output.zarr \
   --voxel_size 160,160,400
+
+# Set voxel size in micrometers
+pixi run python -m tensorswitch_v2 -i input.tif -o output.zarr \
+  --voxel_size 0.108,0.108,0.268 --voxel_unit micrometer
+
+# Disable translation transforms (e.g., for tools that don't use them)
+pixi run python -m tensorswitch_v2 --auto_multiscale \
+  -i output.zarr/s0 -o output.zarr --no-translation --submit -P scicompsoft
 ```
 
 ### Unit Handling
@@ -286,11 +296,13 @@ TensorSwitch v2 follows these rules for spatial units:
 
 | Operation | Unit Behavior |
 |-----------|---------------|
-| **New conversions** (TIFF/ND2/CZI → Zarr) | Always converts to **nanometers**. Source units (µm, mm, etc.) are auto-detected and converted. |
+| **New conversions** (TIFF/ND2/CZI → Zarr) | Converts to **nanometers** by default. Use `--voxel_unit` to write in a different unit. |
 | **Downsampling/Pyramid** (existing Zarr → pyramid levels) | **Preserves source s0 unit** (micrometer, nanometer, etc.) for consistency. |
+| **`--voxel_unit` override** | Values from `--voxel_size` are written as-is in the specified unit (no conversion). |
 
 **Examples:**
 - TIFF with 0.116 µm voxels → Zarr with `"unit": "nanometer"` and scale `[116.0, 116.0, 400.0]`
+- `--voxel_size 0.108,0.108,0.268 --voxel_unit micrometer` → Zarr with `"unit": "micrometer"` and scale `[0.268, 0.108, 0.108]`
 - BigStitcher Zarr2 with `"unit": "micrometer"` → Pyramid levels keep `"unit": "micrometer"`
 
 ---
@@ -336,8 +348,8 @@ reader = Readers.zarr3("/path/to/data.zarr")    # Tier 1
 reader = Readers.bioio("/path/to/data.lif")     # Tier 3
 reader = Readers.bioformats("/path/to/data.vsi")  # Tier 4 (Java)
 
-# Get TensorStore spec
-spec = reader.get_tensorstore_spec()
+# Get TensorStore array (unified API — all tiers return ts.TensorStore)
+store = reader.get_tensorstore()
 metadata = reader.get_metadata()
 ```
 

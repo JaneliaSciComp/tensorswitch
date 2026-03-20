@@ -895,6 +895,14 @@ def submit_job(args, return_job_id=False):
         reinvoke.append("--is-label")
     if getattr(args, 'expand_to_5d', False):
         reinvoke.append("--expand-to-5d")
+    if getattr(args, 'data_type', 'auto') != 'auto':
+        reinvoke += ["--data-type", args.data_type]
+    if getattr(args, 'label_key', 'segmentation') != 'segmentation':
+        reinvoke += ["--label-key", args.label_key]
+    if getattr(args, 'image_key', 'raw') != 'raw':
+        reinvoke += ["--image-key", args.image_key]
+    if getattr(args, 'use_nested_structure', True) is False:
+        reinvoke.append("--no-nested-structure")
 
     # Convert to properly quoted shell command string
     # This handles paths with spaces correctly when bsub creates its wrapper
