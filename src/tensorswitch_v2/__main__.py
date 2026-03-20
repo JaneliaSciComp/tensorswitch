@@ -1555,7 +1555,6 @@ def main(argv=None):
         else:
             # Local mode: run downsampling directly for each level
             from .core.downsampler import downsample_level
-            from .utils.pyramid_utils import resolve_downsample_method
 
             resolved_method = resolve_downsample_method(args.downsample_method, s0_path)
 
