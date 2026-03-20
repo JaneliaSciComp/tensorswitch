@@ -1384,6 +1384,8 @@ def main(argv=None):
                     job_group=args.job_group,
                     skip_existing=skip_existing,
                     dry_run=args.dry_run,
+                    voxel_size=args.voxel_size,
+                    voxel_unit=args.voxel_unit,
                 )
             else:
                 # Run locally (sequential)

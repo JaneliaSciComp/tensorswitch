@@ -358,6 +358,8 @@ class BatchConverter:
         job_group: Optional[str] = None,
         skip_existing: bool = True,
         dry_run: bool = False,
+        voxel_size: Optional[str] = None,
+        voxel_unit: Optional[str] = None,
     ) -> BatchResult:
         """
         Submit batch conversion as LSF job array.
@@ -445,6 +447,10 @@ class BatchConverter:
             worker_cmd_list += ["--chunk_shape", chunk_shape]
         if shard_shape:
             worker_cmd_list += ["--shard_shape", shard_shape]
+        if voxel_size:
+            worker_cmd_list += ["--voxel_size", voxel_size]
+        if voxel_unit:
+            worker_cmd_list += ["--voxel_unit", voxel_unit]
 
         # Convert to properly quoted shell command string
         # This handles paths with spaces correctly when bsub creates its wrapper
