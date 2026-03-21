@@ -775,6 +775,9 @@ def _update_parent_zarr2_zattrs(inner_path, parent_path, image_key):
     """
     Update parent .zattrs to reflect inner path's multiscale levels with image_key prefix.
 
+    If the parent is a labels container (has "labels" key in .zattrs), only ensures
+    the label name is in the labels list — does NOT write multiscales there.
+
     Args:
         inner_path: Path to the inner group (e.g., <name>.zarr/raw/)
         parent_path: Path to the parent zarr root (e.g., <name>.zarr/)
@@ -782,6 +785,19 @@ def _update_parent_zarr2_zattrs(inner_path, parent_path, image_key):
     """
     inner_zattrs = os.path.join(inner_path, '.zattrs')
     parent_zattrs = os.path.join(parent_path, '.zattrs')
+
+    with open(parent_zattrs, 'r') as f:
+        parent_metadata = json.load(f)
+
+    # If parent is a labels container, don't write multiscales — just ensure label is listed
+    if 'labels' in parent_metadata:
+        existing_labels = parent_metadata['labels']
+        if image_key not in existing_labels:
+            existing_labels.append(image_key)
+            with open(parent_zattrs, 'w') as f:
+                json.dump(parent_metadata, f, indent=2)
+        print(f"Updated labels container with label '{image_key}' (total: {len(existing_labels)} labels)")
+        return
 
     with open(inner_zattrs, 'r') as f:
         inner_metadata = json.load(f)
@@ -798,9 +814,6 @@ def _update_parent_zarr2_zattrs(inner_path, parent_path, image_key):
         new_ds = ds.copy()
         new_ds['path'] = f"{image_key}/{ds['path']}"
         adjusted_datasets.append(new_ds)
-
-    with open(parent_zattrs, 'r') as f:
-        parent_metadata = json.load(f)
 
     parent_ms_list = parent_metadata.get('multiscales', [])
 

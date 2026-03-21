@@ -866,10 +866,26 @@ class OMEStructureZarr2:
         self,
         label_names: Optional[List[str]] = None
     ) -> None:
-        """Write labels container metadata."""
+        """Write labels container metadata, merging with existing labels."""
         path = self.get_labels_container_path()
         self._write_zgroup(path)
-        metadata = self.create_labels_container_metadata(label_names)
+
+        # Read existing labels to merge (avoid clobbering previous label entries)
+        existing_labels = []
+        zattrs_path = os.path.join(path, '.zattrs')
+        if os.path.exists(zattrs_path):
+            try:
+                with open(zattrs_path, 'r') as f:
+                    existing_metadata = json.load(f)
+                existing_labels = existing_metadata.get('labels', [])
+            except (json.JSONDecodeError, IOError):
+                pass
+
+        # Merge: union of existing + new label names, preserving order
+        new_labels = label_names or [self.config.label_name]
+        merged = list(dict.fromkeys(existing_labels + new_labels))
+
+        metadata = {"labels": merged}
         self._write_zattrs(path, metadata)
 
     def write_label_image_metadata(
