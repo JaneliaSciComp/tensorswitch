@@ -266,6 +266,33 @@ Use `--expand-to-5d` for compatibility with tools requiring strict 5D TCZYX form
 
 **Default behavior**: Source order is auto-detected and preserved. Use these flags only to override.
 
+### Remote Sources & Subvolume Extraction
+
+| Argument | Description |
+|----------|-------------|
+| `--bbox` | Bounding box for subvolume extraction: `origin_0,origin_1,origin_2,size_0,size_1,size_2`. Values are voxel indices in source dimension order. |
+
+**Remote URL support**: Tier 1 readers (Neuroglancer precomputed, Zarr2/3, N5) accept remote URLs as input — GCS (`gs://`), S3 (`s3://`), and HTTP/HTTPS. Prefix with `precomputed://` for Neuroglancer precomputed format.
+
+```bash
+# Extract a subvolume from a remote dataset (MICRONS on GCS)
+pixi run python -m tensorswitch_v2 \
+  -i "precomputed://gs://iarpa_microns/minnie/minnie65/em" \
+  -o /output/microns-crop.zarr --output_format zarr2 \
+  --bbox 116316,87591,21337,10240,10240,1024 \
+  --voxel_size 8,8,40
+
+# Remote read without bbox (full volume — use with caution on large datasets)
+pixi run python -m tensorswitch_v2 \
+  -i "precomputed://https://storage.googleapis.com/iarpa_microns/minnie/minnie65/em" \
+  -o /output/microns.zarr --output_format zarr2 \
+  --voxel_size 8,8,40
+```
+
+**Bbox coordinates** are always in voxel indices (integers), in the source's dimension order:
+- For Neuroglancer precomputed: X, Y, Z order
+- For Zarr/N5: Z, Y, X order (or whatever the source axes are)
+
 ### Metadata Override
 
 | Argument | Description |
