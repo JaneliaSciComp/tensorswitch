@@ -67,14 +67,72 @@ class DistributedConverter:
         voxel_unit: Optional[str] = None,
         is_label: bool = False,
         expand_to_5d: bool = False,
+        bbox: Optional[Tuple[Tuple[int, ...], Tuple[int, ...]]] = None,
     ) -> Dict[str, Any]:
-        """Convert data from reader to writer."""
+        """Convert data from reader to writer.
+
+        Args:
+            bbox: Optional (origin, size) tuple for subvolume extraction.
+                  origin and size are 3-tuples in source dimension order.
+                  Spatial dimensions are auto-detected from domain labels.
+        """
         start_time = time.time()
 
         # 1. Open input store from reader (uniform API for all tiers)
         if verbose:
             print(f"Opening input: {self.reader}")
         self._input_store = self.reader.get_tensorstore()
+
+        # 1b. Apply bounding box if specified (subvolume extraction)
+        if bbox is not None:
+            origin, size = bbox
+            try:
+                labels = list(self._input_store.domain.labels)
+            except Exception:
+                labels = []
+
+            # Identify spatial dimensions (skip channel, time, etc.)
+            NON_SPATIAL = ('channel', 'c', 't', 'v')
+            if labels:
+                spatial_dims = [i for i, l in enumerate(labels)
+                                if l.lower() not in NON_SPATIAL]
+            else:
+                # No labels — assume first min(3, ndim) dims are spatial
+                spatial_dims = list(range(min(3, self._input_store.ndim)))
+
+            # Validate bbox against source domain
+            domain = self._input_store.domain
+            for j, dim_i in enumerate(spatial_dims):
+                if j >= len(origin):
+                    break
+                dim_origin = domain.origin[dim_i]
+                dim_end = dim_origin + self._input_store.shape[dim_i]
+                bbox_start = origin[j]
+                bbox_end = origin[j] + size[j]
+                dim_label = labels[dim_i] if labels else f"dim{dim_i}"
+                if bbox_start < dim_origin or bbox_end > dim_end:
+                    raise ValueError(
+                        f"Bbox for {dim_label} [{bbox_start}:{bbox_end}) is outside "
+                        f"source domain [{dim_origin}:{dim_end})"
+                    )
+
+            # Build indexing tuple
+            idx = [slice(None)] * self._input_store.ndim
+            for j, dim_i in enumerate(spatial_dims):
+                if j < len(origin):
+                    idx[dim_i] = slice(origin[j], origin[j] + size[j])
+
+            self._input_store = self._input_store[tuple(idx)]
+
+            # Rebase domain to zero-origin so chunk indexing works correctly.
+            # TensorStore slicing preserves original coordinates (e.g., x=[116316,116444)),
+            # but the converter and writer expect zero-based chunk indices.
+            self._input_store = self._input_store[ts.d[:].translate_to[0]]
+
+            if verbose:
+                print(f"  Bbox applied: origin={origin}, size={size}")
+                print(f"  Cropped shape: {tuple(self._input_store.shape)}")
+
         input_shape = tuple(self._input_store.shape)
         input_dtype = get_dtype_name(self._input_store.dtype)
 

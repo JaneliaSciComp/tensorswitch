@@ -380,6 +380,15 @@ Supported output formats:
              "By default, translation offsets are included for Neuroglancer compatibility.",
     )
 
+    # Subvolume extraction
+    parser.add_argument(
+        "--bbox", type=str, default=None,
+        help="Bounding box for subvolume extraction: origin_0,origin_1,origin_2,size_0,size_1,size_2 "
+             "(in source voxel coordinates, source dimension order). "
+             "For Neuroglancer precomputed: x,y,z order. For Zarr/N5: z,y,x order. "
+             "Example: --bbox 116316,87591,20800,10240,10240,1024",
+    )
+
     # Output control
     parser.add_argument(
         "--quiet", action="store_true",
@@ -493,11 +502,39 @@ Supported output formats:
     return parser.parse_args(argv)
 
 
+def parse_bbox(bbox_str):
+    """Parse bbox string into (origin, size) tuples.
+
+    Args:
+        bbox_str: Comma-separated string 'origin_0,origin_1,origin_2,size_0,size_1,size_2'
+                  Coordinates are in source voxel coordinates, source dimension order.
+                  For Neuroglancer precomputed: x,y,z order.
+                  For Zarr/N5: z,y,x order.
+
+    Returns:
+        Tuple of (origin, size) where each is a 3-tuple of ints.
+
+    Raises:
+        ValueError: If format is invalid.
+    """
+    values = [int(v.strip()) for v in bbox_str.split(',')]
+    if len(values) != 6:
+        raise ValueError(
+            f"--bbox requires 6 comma-separated integers: origin_0,origin_1,origin_2,size_0,size_1,size_2\n"
+            f"Got {len(values)} values: {bbox_str}"
+        )
+    origin = tuple(values[:3])
+    size = tuple(values[3:])
+    if any(s <= 0 for s in size):
+        raise ValueError(f"--bbox size values must be positive, got: {size}")
+    return origin, size
+
+
 def validate_input_path(path: str, allow_directory: bool = True) -> None:
     """Validate that input path exists and is readable.
 
     Args:
-        path: Input file or directory path
+        path: Input file or directory path (local or remote URL)
         allow_directory: If True, directories are allowed (batch mode)
 
     Raises:
@@ -505,6 +542,12 @@ def validate_input_path(path: str, allow_directory: bool = True) -> None:
         PermissionError: If path is not readable
         ValueError: If path is a directory but not allowed
     """
+    from .readers.base import is_remote_path
+
+    # Skip local filesystem checks for remote URLs — reader handles connectivity
+    if is_remote_path(path) or path.startswith('precomputed://'):
+        return
+
     if not os.path.exists(path):
         raise FileNotFoundError(
             f"Input path does not exist: {path}\n"
@@ -903,6 +946,8 @@ def submit_job(args, return_job_id=False):
         reinvoke += ["--image-key", args.image_key]
     if getattr(args, 'use_nested_structure', True) is False:
         reinvoke.append("--no-nested-structure")
+    if getattr(args, 'bbox', None):
+        reinvoke += ["--bbox", args.bbox]
 
     # Convert to properly quoted shell command string
     # This handles paths with spaces correctly when bsub creates its wrapper
@@ -1707,6 +1752,9 @@ def main(argv=None):
     # Get expand_to_5d flag (default False = preserve source layout)
     expand_to_5d = getattr(args, 'expand_to_5d', False)
 
+    # Parse bbox for subvolume extraction
+    bbox = parse_bbox(args.bbox) if getattr(args, 'bbox', None) else None
+
     if args.start_idx is not None:
         # Manual chunk-range mode (for bsub workers)
         converter.convert(
@@ -1722,6 +1770,7 @@ def main(argv=None):
             voxel_unit=voxel_unit,
             is_label=is_label,
             expand_to_5d=expand_to_5d,
+            bbox=bbox,
         )
     else:
         # Full single-process conversion
@@ -1735,6 +1784,7 @@ def main(argv=None):
             voxel_unit=voxel_unit,
             is_label=is_label,
             expand_to_5d=expand_to_5d,
+            bbox=bbox,
         )
 
 
