@@ -750,6 +750,17 @@ def _update_parent_zarr3_json(inner_path, parent_path, image_key):
         parent_metadata = json.load(f)
 
     parent_ome = parent_metadata.get('attributes', {}).get('ome', {})
+
+    # If parent is a labels container, don't write multiscales — just ensure label is listed
+    if 'labels' in parent_ome:
+        existing_labels = parent_ome['labels']
+        if image_key not in existing_labels:
+            existing_labels.append(image_key)
+            with open(parent_zarr_json, 'w') as f:
+                json.dump(parent_metadata, f, indent=2)
+        print(f"Updated labels container with label '{image_key}' (total: {len(existing_labels)} labels)")
+        return
+
     parent_ms_list = parent_ome.get('multiscales', [])
 
     if parent_ms_list:

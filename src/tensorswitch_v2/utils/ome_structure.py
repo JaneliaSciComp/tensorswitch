@@ -411,13 +411,29 @@ class OMEStructure:
         label_names: Optional[List[str]] = None
     ) -> None:
         """
-        Write labels container metadata.
+        Write labels container metadata, merging with existing labels.
 
         Args:
             label_names: List of label image names
         """
-        metadata = self.create_labels_container_metadata(label_names)
         path = os.path.join(self.get_labels_container_path(), 'zarr.json')
+
+        # Read existing labels to merge (avoid clobbering previous label entries)
+        existing_labels = []
+        if os.path.exists(path):
+            try:
+                with open(path, 'r') as f:
+                    existing_metadata = json.load(f)
+                existing_labels = existing_metadata.get('attributes', {}).get('ome', {}).get('labels', [])
+            except (json.JSONDecodeError, IOError):
+                pass
+
+        # Merge: union of existing + new label names, preserving order
+        new_labels = label_names or [self.config.label_name]
+        merged = list(dict.fromkeys(existing_labels + new_labels))
+
+        metadata = self.create_base_group_metadata()
+        metadata['attributes']['ome']['labels'] = merged
         self.write_metadata(path, metadata)
 
     def write_label_image_metadata(
