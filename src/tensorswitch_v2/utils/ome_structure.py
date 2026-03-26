@@ -519,6 +519,11 @@ class OMEStructure:
 
         metadata['attributes']['ome'] = new_ome
 
+        # Preserve existing non-ome attributes (e.g., source provenance)
+        for key, value in existing_metadata.get('attributes', {}).items():
+            if key not in metadata['attributes']:
+                metadata['attributes'][key] = value
+
         # Preserve or set ome_xml at attributes level (consistent with legacy non-nested mode)
         final_ome_xml = ome_xml or existing_metadata.get('attributes', {}).get('ome_xml')
         if final_ome_xml:
@@ -966,6 +971,11 @@ class OMEStructureZarr2:
             metadata['labels'] = list(existing_labels | new_labels)
         elif 'labels' in existing_metadata and 'labels' not in metadata:
             metadata['labels'] = existing_metadata['labels']
+
+        # Preserve existing non-ome attributes (e.g., source provenance)
+        for key, value in existing_metadata.items():
+            if key not in metadata:
+                metadata[key] = value
 
         # Preserve or set ome_xml (consistent with non-nested Zarr2 mode)
         final_ome_xml = ome_xml or existing_metadata.get('ome_xml')

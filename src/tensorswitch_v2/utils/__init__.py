@@ -48,6 +48,7 @@ from .metadata_utils import (
     precreate_zarr3_metadata_safely,
     extract_omero_channels,
     generate_default_label_colors,
+    write_source_metadata,
 )
 
 from .pyramid_utils import (
@@ -124,6 +125,7 @@ __all__ = [
     'precreate_zarr3_metadata_safely',
     'extract_omero_channels',
     'generate_default_label_colors',
+    'write_source_metadata',
     # Pyramid utilities
     'calculate_pyramid_plan',
     'calculate_anisotropic_downsample_factors',

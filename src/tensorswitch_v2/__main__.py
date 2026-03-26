@@ -1787,6 +1787,16 @@ def main(argv=None):
             bbox=bbox,
         )
 
+    # Write source provenance metadata when --bbox is used
+    if bbox:
+        from .utils.metadata_utils import write_source_metadata
+        write_source_metadata(
+            output_path=args.output,
+            source_url=args.input,
+            bbox=bbox,
+            voxel_sizes=voxel_size_override,
+        )
+
 
 if __name__ == "__main__":
     main()

@@ -916,6 +916,107 @@ def update_ome_metadata_if_needed(output_path, use_ome_structure, include_transl
         print(f"Warning: Failed to update OME metadata: {e}")
 
 
+def write_source_metadata(output_path, source_url, bbox, voxel_sizes=None, source_format=None):
+    """
+    Write source provenance metadata to root zarr.json or .zattrs.
+
+    Records where the data came from when --bbox subvolume extraction is used.
+    Supports both Zarr3 (zarr.json) and Zarr2 (.zattrs).
+
+    Args:
+        output_path: Path to the zarr root directory
+        source_url: Input URL or path (e.g., "precomputed://gs://bucket/path")
+        bbox: Tuple of (origin, size) where each is a 3-tuple of ints
+        voxel_sizes: Optional dict {"x": nm, "y": nm, "z": nm} or list [x, y, z]
+        source_format: Optional string describing input format (e.g., "neuroglancer_precomputed")
+    """
+    from datetime import date
+
+    origin, size = bbox
+
+    # Auto-detect format and coordinate order from source URL
+    if source_format is None:
+        url_lower = source_url.lower()
+        if url_lower.startswith('precomputed://'):
+            source_format = "neuroglancer_precomputed"
+        elif url_lower.endswith('.n5') or '/n5' in url_lower:
+            source_format = "n5"
+        elif url_lower.endswith('.zarr'):
+            source_format = "zarr"
+
+    # Precomputed uses XYZ, Zarr/N5 use ZYX
+    if source_format == "neuroglancer_precomputed":
+        coord_order = "XYZ"
+    else:
+        coord_order = "ZYX"
+
+    # Detect Zarr3 vs Zarr2 and read existing source metadata
+    zarr3_path = os.path.join(output_path, 'zarr.json')
+    zarr2_path = os.path.join(output_path, '.zattrs')
+    existing_source = {}
+
+    if os.path.exists(zarr3_path):
+        with open(zarr3_path, 'r') as f:
+            metadata = json.load(f)
+        existing_source = metadata.get('attributes', {}).get('source', {})
+    elif os.path.exists(zarr2_path):
+        with open(zarr2_path, 'r') as f:
+            metadata = json.load(f)
+        existing_source = metadata.get('source', {})
+    else:
+        print(f"Warning: No root metadata file found at {output_path} — skipping source metadata")
+        return
+
+    # Merge source_urls: append this invocation's URL, keyed by data type
+    source_urls = existing_source.get("source_urls", {})
+    # Derive key from URL path components (e.g., "em", "seg_v1300")
+    clean_url = source_url.rstrip('/')
+    if clean_url.startswith('precomputed://'):
+        clean_url = clean_url[len('precomputed://'):]
+    parts = clean_url.rstrip('/').split('/')
+    # Use last component, or last two joined with _ if last is a version-like string
+    url_key = parts[-1]
+    if len(parts) >= 2 and (url_key.startswith('v') or url_key.isdigit()):
+        url_key = f"{parts[-2]}_{parts[-1]}"
+    source_urls[url_key] = source_url
+
+    source = {
+        "source_urls": source_urls,
+        "bbox_origin_voxel": list(origin),
+        "bbox_size_voxel": list(size),
+    }
+
+    if source_format:
+        source["format"] = source_format
+        source["bbox_coordinate_order"] = coord_order
+
+    # Add voxel size and physical extent if available
+    if voxel_sizes:
+        if isinstance(voxel_sizes, dict):
+            vs = [voxel_sizes.get('x', 0), voxel_sizes.get('y', 0), voxel_sizes.get('z', 0)]
+        else:
+            vs = list(voxel_sizes)
+        source["voxel_size_nm"] = vs
+        # Compute physical extent in micrometers
+        if all(v > 0 for v in vs):
+            source["physical_extent_um"] = [round(s * v / 1000.0, 2) for s, v in zip(size, vs)]
+
+    source["conversion_tool"] = "TensorSwitch v2"
+    source["conversion_date"] = str(date.today())
+
+    # Write back
+    if os.path.exists(zarr3_path):
+        metadata.setdefault('attributes', {})['source'] = source
+        with open(zarr3_path, 'w') as f:
+            json.dump(metadata, f, indent=2)
+    else:
+        metadata['source'] = source
+        with open(zarr2_path, 'w') as f:
+            json.dump(metadata, f, indent=2)
+
+    print(f"Wrote source provenance metadata to {output_path}")
+
+
 def precreate_shard_directories(output_path, level, output_shape, shard_shape, use_ome_structure=True, level_prefix=None):
     """
     Pre-create all shard directory structures to avoid race conditions with parallel workers.
