@@ -838,6 +838,17 @@ def submit_job(args, return_job_id=False):
     if needs_auto:
         print("Reading input metadata for resource estimation...")
         volume_shape, dtype_str, axes_order = _get_input_metadata(args)
+
+        # When --bbox is used, estimate resources from the bbox subvolume, not the full source
+        if getattr(args, 'bbox', None):
+            bbox_origin, bbox_size = parse_bbox(args.bbox)
+            # bbox_size has same number of spatial dims; squeeze singleton channel if present
+            if len(volume_shape) == len(bbox_size) + 1:
+                volume_shape = bbox_size
+            else:
+                volume_shape = bbox_size[:len(volume_shape)]
+            print(f"  Bbox applied for resource estimation: size={bbox_size}")
+
         shard_shape, total_shards = _estimate_shard_info(args, volume_shape, dtype_str, axes_order)
         # Both BIOIO and BioFormats use Dask and have similar overhead
         use_bioio = getattr(args, 'use_bioio', False) or getattr(args, 'use_bioformats', False)
