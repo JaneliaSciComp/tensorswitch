@@ -751,8 +751,10 @@ def _update_parent_zarr3_json(inner_path, parent_path, image_key):
 
     parent_ome = parent_metadata.get('attributes', {}).get('ome', {})
 
-    # If parent is a labels container, don't write multiscales — just ensure label is listed
-    if 'labels' in parent_ome:
+    # If parent is a pure labels container (has 'labels' but no 'multiscales'),
+    # don't write multiscales — just ensure label is listed.
+    # Root containers can have BOTH 'labels' and 'multiscales' — must update multiscales.
+    if 'labels' in parent_ome and 'multiscales' not in parent_ome:
         existing_labels = parent_ome['labels']
         if image_key not in existing_labels:
             existing_labels.append(image_key)
@@ -800,8 +802,10 @@ def _update_parent_zarr2_zattrs(inner_path, parent_path, image_key):
     with open(parent_zattrs, 'r') as f:
         parent_metadata = json.load(f)
 
-    # If parent is a labels container, don't write multiscales — just ensure label is listed
-    if 'labels' in parent_metadata:
+    # If parent is a pure labels container (has 'labels' but no 'multiscales'),
+    # don't write multiscales — just ensure label is listed.
+    # Root containers can have BOTH 'labels' and 'multiscales' — must update multiscales.
+    if 'labels' in parent_metadata and 'multiscales' not in parent_metadata:
         existing_labels = parent_metadata['labels']
         if image_key not in existing_labels:
             existing_labels.append(image_key)
