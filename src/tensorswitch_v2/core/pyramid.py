@@ -163,18 +163,15 @@ def _calculate_downsample_wall_time(
     # Calculate total shards
     total_shards = int(np.prod(np.ceil(np.array(level_shape) / np.array(shard_shape)).astype(int)))
 
-    # Time estimation based on empirical observations:
-    # In chained mode, we're reading from smaller source levels
-    # - Small shards (<0.1 GB): ~0.5 min each (faster since source is smaller)
-    # - Medium shards (0.1-1 GB): ~2 min each
-    # - Large shards (>1 GB): ~4 min each
-
-    if shard_size_gb < 0.1:
-        minutes_per_shard = 0.5
-    elif shard_size_gb < 1.0:
-        minutes_per_shard = 2
+    # Time estimation (recalibrated from H01/MICRONS benchmarks, Mar 2026):
+    # Pyramid source is always the previous Zarr level (TensorStore-native, local).
+    # TensorStore's internal thread pool pipelines reads/writes/compression efficiently.
+    # - Small shards (<1 GB): ~3 sec each
+    # - Large shards (>=1 GB): ~5 sec each
+    if shard_size_gb < 1.0:
+        minutes_per_shard = 0.05     # ~3 sec
     else:
-        minutes_per_shard = 4
+        minutes_per_shard = 0.083    # ~5 sec
 
     # Base time for processing
     base_minutes = minutes_per_shard * total_shards
@@ -187,8 +184,8 @@ def _calculate_downsample_wall_time(
     else:
         read_overhead = 1
 
-    # Total with 2x safety margin, round to 15 min, cap at 12 hours
-    total_minutes = int(math.ceil((base_minutes + read_overhead) * 2 / 15) * 15)
+    # 1.5x safety margin, round to 15 min, cap at 12 hours
+    total_minutes = int(math.ceil((base_minutes + read_overhead) * 1.5 / 15) * 15)
     total_minutes = max(15, min(total_minutes, 12 * 60))  # 15 min to 12 hours
 
     hours = total_minutes // 60

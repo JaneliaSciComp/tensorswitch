@@ -806,6 +806,7 @@ def _estimate_shard_info(args, volume_shape, dtype_str, axes_order=None):
 # Import resource calculation functions from utils (shared with batch.py)
 from .utils.resource_utils import calculate_memory as _calculate_memory
 from .utils.resource_utils import calculate_wall_time as _calculate_wall_time
+from .utils.resource_utils import calculate_job_resources as _calculate_job_resources
 
 
 def submit_job(args, return_job_id=False):
@@ -864,6 +865,13 @@ def submit_job(args, return_job_id=False):
             mode_name = "Bio-Formats" if getattr(args, 'use_bioformats', False) else "BioIO"
             print(f"  {mode_name} mode: applying 10x wall time and 3x memory multipliers")
 
+        # Detect source type: TensorStore-native (fast) vs file-decoded (slower)
+        _NATIVE_EXTENSIONS = {'.zarr', '.n5'}
+        _input_ext = os.path.splitext(args.input)[1].lower()
+        is_native = _input_ext in _NATIVE_EXTENSIONS or '://' in args.input
+        if not is_native:
+            print(f"  Source type: file-decoded ({_input_ext})")
+
         if memory_gb is None:
             memory_gb = _calculate_memory(volume_shape, dtype_str, shard_shape, total_shards, use_bioio=use_bioio, output_format=args.output_format)
 
@@ -871,8 +879,11 @@ def submit_job(args, return_job_id=False):
     # Non-sharded (Zarr2 / Zarr3 --no_sharding): min 4 cores — many small chunk files
     #   benefit from I/O parallelism + compression threads
     # Zarr3 sharded: based on memory (large shard buffers need more cores)
+    # Single-shard: 1 core (no parallelism benefit)
     if args.cores is not None:
         cores = args.cores
+    elif use_sharding and total_shards == 1:
+        cores = 1
     elif not use_sharding and dataset_size_gb is not None:
         cores = min(8, max(4, int(math.ceil(dataset_size_gb / 25)) * 2))
     else:
@@ -882,7 +893,7 @@ def submit_job(args, return_job_id=False):
     if needs_auto and wall_time is None:
         wall_time = _calculate_wall_time(volume_shape, dtype_str, shard_shape, total_shards, use_bioio=use_bioio,
                                          output_format=args.output_format, no_sharding=args.no_sharding,
-                                         cores=cores)
+                                         cores=cores, is_native_source=is_native)
 
     # Enforce cluster policy: 15 GB per core minimum
     memory_gb = max(memory_gb, cores * 15)
@@ -1427,15 +1438,46 @@ def main(argv=None):
                 if not args.project:
                     raise ValueError("--project is required with --submit")
 
+                # Auto-calculate resources from first discovered file when not overridden
+                memory_gb = args.memory
+                wall_time = args.wall_time
+                cores = args.cores
+
+                if not (memory_gb and wall_time and cores):
+                    first_file = files[0].input_path
+                    print(f"Reading sample file for resource estimation: {os.path.basename(first_file)}")
+                    original_input = args.input
+                    args.input = first_file
+                    try:
+                        volume_shape, dtype_str, axes_order = _get_input_metadata(args)
+                    finally:
+                        args.input = original_input
+
+                    _NATIVE_EXTENSIONS = {'.zarr', '.n5'}
+                    _ext = os.path.splitext(first_file)[1].lower()
+                    is_native = _ext in _NATIVE_EXTENSIONS or '://' in first_file
+
+                    auto_mem, auto_wall, auto_cores = _calculate_job_resources(
+                        shape=list(volume_shape), dtype=dtype_str,
+                        output_format=args.output_format,
+                        chunk_shape_str=args.chunk_shape, shard_shape_str=args.shard_shape,
+                        axes_order=axes_order, no_sharding=args.no_sharding,
+                        is_native_source=is_native,
+                    )
+                    memory_gb = memory_gb or auto_mem
+                    wall_time = wall_time or auto_wall
+                    cores = cores or auto_cores
+                    print(f"  Auto-calculated: {memory_gb} GB, {wall_time}, {cores} cores")
+
                 result = batch.submit_lsf(
                     project=args.project,
                     chunk_shape=args.chunk_shape,
                     shard_shape=args.shard_shape,
                     compression=args.compression,
                     compression_level=args.compression_level,
-                    memory_gb=args.memory or 30,
-                    wall_time=args.wall_time or "1:00",
-                    cores=args.cores or 2,
+                    memory_gb=memory_gb,
+                    wall_time=wall_time,
+                    cores=cores,
                     max_concurrent=args.max_concurrent,
                     job_group=args.job_group,
                     skip_existing=skip_existing,

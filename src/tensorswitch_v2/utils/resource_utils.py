@@ -89,7 +89,7 @@ def calculate_memory(volume_shape, dtype_str, shard_shape, total_shards, use_bio
 
 
 def calculate_wall_time(volume_shape, dtype_str, shard_shape, total_shards, use_bioio=False,
-                        output_format='zarr3', no_sharding=False, cores=1):
+                        output_format='zarr3', no_sharding=False, cores=1, is_native_source=True):
     """Calculate wall time string (H:MM) for LSF job.
 
     Three modes:
@@ -107,6 +107,8 @@ def calculate_wall_time(volume_shape, dtype_str, shard_shape, total_shards, use_
         output_format: 'zarr3' or 'zarr2'
         no_sharding: If True, zarr3 uses the per-chunk model instead of per-shard
         cores: Number of cores allocated (used to scale down non-sharded wall time)
+        is_native_source: If True, source is TensorStore-native (Zarr, N5, Precomputed, GCS/S3/HTTP).
+            If False, source is file-decoded (TIFF, ND2, CZI, IMS, HDF5) with slower I/O.
 
     Returns:
         str: Wall time string in H:MM format
@@ -119,8 +121,9 @@ def calculate_wall_time(volume_shape, dtype_str, shard_shape, total_shards, use_
 
     if use_chunk_model:
         # Estimate 1: Data throughput (dominates for large custom chunks)
-        # Empirical: ~10 MB/s for ND2/dask source over network filesystem
-        throughput_mb_s = 10
+        # Native sources (Zarr, N5, Precomputed): ~50 MB/s via TensorStore
+        # File-decoded sources (TIFF, ND2, CZI): ~10 MB/s due to tifffile/dask decode
+        throughput_mb_s = 50 if is_native_source else 10
         throughput_minutes = (dataset_size_gb * 1024) / throughput_mb_s / 60
 
         # Estimate 2: Per-chunk overhead (dominates for many small chunks)
@@ -151,19 +154,28 @@ def calculate_wall_time(volume_shape, dtype_str, shard_shape, total_shards, use_
         else:
             overhead = 2
 
-        # 3x safety, round to nearest 30 min
-        safe_minutes = int(math.ceil((base_minutes + overhead) * 3 / 30) * 30)
+        # 2x safety, round to nearest 30 min
+        safe_minutes = int(math.ceil((base_minutes + overhead) * 2 / 30) * 30)
     else:
         # Zarr3: per-shard time estimate
         shard_size_gb = (np.prod(shard_shape) * dtype_bytes) / (1024 ** 3)
 
-        # Per-shard time estimate (empirical)
-        if shard_size_gb < 0.1:
-            minutes_per_shard = 0.5
-        elif shard_size_gb < 1.0:
-            minutes_per_shard = 2
+        # Per-shard time estimate (recalibrated from H01/MICRONS/Lila benchmarks, Mar 2026)
+        # TensorStore's internal thread pool pipelines reads/writes/compression efficiently
+        if is_native_source:
+            # TensorStore-native (Zarr, N5, Precomputed, GCS/S3/HTTP): 1-3 sec/shard
+            if shard_size_gb < 1.0:
+                minutes_per_shard = 0.05     # ~3 sec
+            else:
+                minutes_per_shard = 0.083    # ~5 sec
         else:
-            minutes_per_shard = 3
+            # File-decoded (TIFF, ND2, CZI, IMS, HDF5): tifffile/dask decode overhead
+            if shard_size_gb < 0.5:
+                minutes_per_shard = 0.083    # ~5 sec
+            elif shard_size_gb < 2.0:
+                minutes_per_shard = 0.25     # ~15 sec
+            else:
+                minutes_per_shard = 0.5      # ~30 sec
 
         base_minutes = minutes_per_shard * total_shards
 
@@ -181,8 +193,8 @@ def calculate_wall_time(volume_shape, dtype_str, shard_shape, total_shards, use_
         else:
             overhead = 2
 
-        # 2x safety, round to nearest 30 min
-        safe_minutes = int(math.ceil((base_minutes + overhead) * 2 / 30) * 30)
+        # 1.5x safety, round to nearest 30 min
+        safe_minutes = int(math.ceil((base_minutes + overhead) * 1.5 / 30) * 30)
 
     # BioIO is ~10-50x slower due to Dask overhead, apply 10x multiplier
     if use_bioio:
@@ -265,6 +277,7 @@ def calculate_job_resources(
     shard_shape_str: Optional[str] = None,
     axes_order: Optional[List[str]] = None,
     no_sharding: bool = False,
+    is_native_source: bool = True,
 ) -> Tuple[int, str, int]:
     """
     Calculate memory, wall time, and cores based on dataset size.
@@ -280,6 +293,8 @@ def calculate_job_resources(
         shard_shape_str: Shard shape string (e.g., '1024,1024,1024') or None
         axes_order: Axis names (e.g., ['z','y','x']) or None
         no_sharding: If True, zarr3 uses non-sharded defaults
+        is_native_source: If True, source is TensorStore-native (Zarr, N5, Precomputed, GCS/S3/HTTP).
+            If False, source is file-decoded (TIFF, ND2, CZI, IMS, HDF5).
 
     Returns:
         tuple: (memory_gb, wall_time_str, cores)
@@ -305,6 +320,28 @@ def calculate_job_resources(
         no_sharding=no_sharding,
     )
 
+    dtype_bytes = np.dtype(dtype).itemsize
+    dataset_size_gb = (np.prod(shape) * dtype_bytes) / (1024 ** 3)
+    use_sharding = output_format == "zarr3" and not no_sharding
+
+    # Single-shard optimization: batch tiles with 1 shard don't benefit from
+    # multiple cores. Use simplified resource calculation.
+    if total_shards == 1 and use_sharding:
+        cores = 1
+        shard_size_gb = (np.prod(shard_shape) * dtype_bytes) / (1024 ** 3)
+        memory_gb = max(int(math.ceil(shard_size_gb * 3)), 8)
+        wall_time = calculate_wall_time(shape, dtype, shard_shape, total_shards,
+                                        output_format=output_format, no_sharding=no_sharding,
+                                        cores=cores, is_native_source=is_native_source)
+        # Apply 10 min floor for single-shard (instead of 30 min general floor)
+        hours, mins = (int(x) for x in wall_time.split(':'))
+        wt_minutes = hours * 60 + mins
+        if wt_minutes < 10:
+            wall_time = "0:10"
+        # Enforce cluster policy: 15 GB per core minimum
+        memory_gb = max(memory_gb, cores * 15)
+        return memory_gb, wall_time, cores
+
     # Calculate memory first (needed for Zarr3 sharded core formula)
     memory_gb = calculate_memory(shape, dtype, shard_shape, total_shards, output_format=output_format)
 
@@ -312,9 +349,6 @@ def calculate_job_resources(
     # Non-sharded (Zarr2 / Zarr3 --no_sharding): min 4 cores — many small chunk files
     #   benefit from I/O parallelism + compression threads
     # Zarr3 sharded: based on memory (large shard buffers need more cores)
-    dtype_bytes = np.dtype(dtype).itemsize
-    dataset_size_gb = (np.prod(shape) * dtype_bytes) / (1024 ** 3)
-    use_sharding = output_format == "zarr3" and not no_sharding
     if not use_sharding:
         cores = min(8, max(4, int(math.ceil(dataset_size_gb / 25)) * 2))
     else:
@@ -322,7 +356,7 @@ def calculate_job_resources(
 
     # Wall time: pass cores so non-sharded estimates scale with parallelism
     wall_time = calculate_wall_time(shape, dtype, shard_shape, total_shards, output_format=output_format,
-                                    no_sharding=no_sharding, cores=cores)
+                                    no_sharding=no_sharding, cores=cores, is_native_source=is_native_source)
 
     # Enforce cluster policy: 15 GB per core minimum
     memory_gb = max(memory_gb, cores * 15)
