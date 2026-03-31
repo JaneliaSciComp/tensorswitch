@@ -1035,6 +1035,43 @@ converter.convert(
 
 ---
 
+## MCP Server (AI/Agent Integration)
+
+TensorSwitch v2 includes an MCP (Model Context Protocol) server that allows Claude and other LLM agents to directly inspect, convert, and generate pyramids for microscopy data.
+
+### Available Tools
+
+| Tool | Description |
+|------|-------------|
+| `inspect_dataset` | Returns shape, dtype, voxel sizes, axes, pyramid levels, OME metadata |
+| `discover_datasets` | Scans a directory for image/segmentation layers |
+| `convert` | Converts between formats (HDF5/TIFF/N5/Zarr → Zarr3/Zarr2/N5) |
+| `generate_pyramid` | Creates multiscale pyramid with anisotropic handling |
+| `list_formats` | Lists all supported input/output formats |
+
+### Setup (Claude Code)
+
+```bash
+# One-time registration
+claude mcp add --transport stdio tensorswitch -- pixi run python -m tensorswitch_v2.mcp_server
+
+# Start Claude Code — server auto-starts
+claude
+```
+
+Then ask Claude natural language questions like:
+- "Inspect /path/to/dataset.zarr"
+- "Convert my HDF5 to Zarr3 with sharding"
+- "What formats does TensorSwitch support?"
+
+### Requirements
+
+```bash
+pixi run pip install "mcp[cli]"
+```
+
+---
+
 ## Module Structure
 
 ```
