@@ -432,6 +432,13 @@ Supported output formats:
              "Requires: conda install -c conda-forge scyjava && pip install bioio-bioformats",
     )
 
+    parser.add_argument(
+        "--no_two_pass", action="store_true",
+        help="Disable auto two-pass conversion for large DaskReader source chunks. "
+             "By default, two-pass is auto-enabled when source chunks are >500 MB "
+             "or >100x larger than output chunks (ND2, TIFF, etc.).",
+    )
+
     # Memory order (mutually exclusive)
     order_group = parser.add_mutually_exclusive_group()
     order_group.add_argument(
@@ -970,6 +977,8 @@ def submit_job(args, return_job_id=False):
         reinvoke.append("--no-nested-structure")
     if getattr(args, 'bbox', None):
         reinvoke += ["--bbox", args.bbox]
+    if getattr(args, 'no_two_pass', False):
+        reinvoke.append("--no_two_pass")
 
     # Convert to properly quoted shell command string
     # This handles paths with spaces correctly when bsub creates its wrapper
@@ -1731,6 +1740,26 @@ def main(argv=None):
 
     # Standard conversion mode (single level / s0)
     if args.submit:
+        # Check for two-pass before submitting
+        if not getattr(args, 'no_two_pass', False):
+            from .core.two_pass import should_use_two_pass
+            try:
+                _reader_check = create_reader(args)
+                _use_two_pass, _reason = should_use_two_pass(
+                    _reader_check,
+                    chunk_shape=chunk_shape,
+                    shard_shape=shard_shape,
+                    output_format=args.output_format,
+                    no_sharding=args.no_sharding,
+                )
+                if _use_two_pass:
+                    print(f"\nTwo-pass mode detected: {_reason}")
+                    from .core.two_pass import submit_two_pass_job
+                    submit_two_pass_job(args, _reader_check)
+                    return
+            except Exception as e:
+                print(f"  Two-pass detection skipped: {e}")
+
         submit_job(args)
         return
 
@@ -1826,6 +1855,44 @@ def main(argv=None):
             bbox=bbox,
         )
     else:
+        # Check for two-pass (local mode, full conversion only)
+        if not getattr(args, 'no_two_pass', False):
+            from .core.two_pass import should_use_two_pass
+            _use_two_pass, _reason = should_use_two_pass(
+                reader,
+                chunk_shape=chunk_shape,
+                shard_shape=shard_shape,
+                output_format=args.output_format,
+                no_sharding=args.no_sharding,
+            )
+            if _use_two_pass:
+                print(f"\nTwo-pass mode detected: {_reason}")
+                from .core.two_pass import run_two_pass_local
+                run_two_pass_local(
+                    reader=reader,
+                    writer=writer,
+                    args=args,
+                    chunk_shape=chunk_shape,
+                    shard_shape=shard_shape,
+                    verbose=verbose,
+                    force_order=force_order,
+                    voxel_size_override=voxel_size_override,
+                    voxel_unit=voxel_unit,
+                    is_label=is_label,
+                    expand_to_5d=expand_to_5d,
+                    bbox=bbox,
+                )
+                # Write source provenance metadata when --bbox is used
+                if bbox:
+                    from .utils.metadata_utils import write_source_metadata
+                    write_source_metadata(
+                        output_path=args.output,
+                        source_url=args.input,
+                        bbox=bbox,
+                        voxel_sizes=voxel_size_override,
+                    )
+                return
+
         # Full single-process conversion
         converter.convert(
             chunk_shape=chunk_shape,

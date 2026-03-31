@@ -10,6 +10,7 @@ from typing import Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 import os
 import json
+import threading
 import warnings
 import numpy as np
 import tensorstore as ts
@@ -565,10 +566,18 @@ class DaskReader(BaseReader):
     Design credit: Mark Kittisopikul (PR #2).
     """
 
+    # Default LRU cache size: 8 GB (matches old v1 Dask cache behavior)
+    _CHUNK_CACHE_MAX_BYTES = 8 * 1024**3
+
     def __init__(self, path: str):
         super().__init__(path)
         self._dask_array = None  # populated by _load()
         self._ts_store_cache = None
+        # LRU chunk cache for _read_fn to avoid redundant dask computes
+        self._chunk_cache = {}            # key: origin tuple -> value: numpy array
+        self._chunk_cache_order = []      # LRU order (oldest first)
+        self._chunk_cache_bytes = 0       # current cache size in bytes
+        self._chunk_cache_lock = threading.Lock()
 
     @abstractmethod
     def _load(self):
@@ -582,17 +591,48 @@ class DaskReader(BaseReader):
 
     def _read_fn(self, domain, array, read_params):
         """
-        Synchronous read callback for ts.virtual_chunked.
+        Synchronous read callback for ts.virtual_chunked with LRU caching.
 
-        Slices self._dask_array to fill the pre-allocated output buffer.
+        Caches recently computed dask chunks to avoid redundant re-reads
+        when the converter requests many small output tiles from the same
+        large source chunk (e.g., ND2 full-frame chunks).
+
         TensorStore dispatches this on a thread pool, so blocking dask
-        compute() calls are safe here.
+        compute() calls are safe here. Cache access is protected by a lock.
         """
+        key = tuple(int(domain.origin[i]) for i in range(domain.ndim))
+
+        with self._chunk_cache_lock:
+            if key in self._chunk_cache:
+                array[...] = self._chunk_cache[key]
+                # Move to end of LRU order (most recently used)
+                self._chunk_cache_order.remove(key)
+                self._chunk_cache_order.append(key)
+                return
+
+        # Cache miss — compute from dask (outside lock to avoid blocking)
         slices = tuple(
             slice(int(domain.origin[i]), int(domain.origin[i]) + int(domain.shape[i]))
             for i in range(domain.ndim)
         )
-        array[...] = self._dask_array[slices].compute()
+        data = self._dask_array[slices].compute()
+
+        with self._chunk_cache_lock:
+            chunk_bytes = data.nbytes
+            # Evict oldest entries until we have room
+            while (self._chunk_cache_bytes + chunk_bytes > self._CHUNK_CACHE_MAX_BYTES
+                   and self._chunk_cache_order):
+                evict_key = self._chunk_cache_order.pop(0)
+                evicted = self._chunk_cache.pop(evict_key, None)
+                if evicted is not None:
+                    self._chunk_cache_bytes -= evicted.nbytes
+            # Only cache if the single chunk fits within max
+            if chunk_bytes <= self._CHUNK_CACHE_MAX_BYTES:
+                self._chunk_cache[key] = data
+                self._chunk_cache_order.append(key)
+                self._chunk_cache_bytes += chunk_bytes
+
+        array[...] = data
 
     def _get_dimension_names(self):
         """
