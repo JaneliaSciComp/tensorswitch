@@ -568,6 +568,10 @@ class DaskReader(BaseReader):
 
     # Default LRU cache size: 8 GB (matches old v1 Dask cache behavior)
     _CHUNK_CACHE_MAX_BYTES = 8 * 1024**3
+    # Cap per-dim read_chunk_shape to avoid multi-GB _read_fn buffer allocations.
+    # When native dask chunks are larger, _read_fn uses a frame-level cache and
+    # slices small tiles from cached native chunks instead of copying GBs per tile.
+    _MAX_READ_CHUNK_DIM = 1024
 
     def __init__(self, path: str):
         super().__init__(path)
@@ -578,6 +582,8 @@ class DaskReader(BaseReader):
         self._chunk_cache_order = []      # LRU order (oldest first)
         self._chunk_cache_bytes = 0       # current cache size in bytes
         self._chunk_cache_lock = threading.Lock()
+        self._native_chunk_shape = None   # set by get_tensorstore()
+        self._use_frame_cache = False     # True when read chunks < native chunks
 
     @abstractmethod
     def _load(self):
@@ -593,24 +599,32 @@ class DaskReader(BaseReader):
         """
         Synchronous read callback for ts.virtual_chunked with LRU caching.
 
-        Caches recently computed dask chunks to avoid redundant re-reads
-        when the converter requests many small output tiles from the same
-        large source chunk (e.g., ND2 full-frame chunks).
+        Two modes selected by get_tensorstore():
+        - Direct: read_chunk_shape == native dask chunks. Caches at read-chunk
+          level. Used when native chunks are already small.
+        - Frame cache: read_chunk_shape < native chunks (capped at 1024/dim).
+          Caches full native dask frames and slices small tiles from them.
+          Avoids multi-GB buffer allocation + copy per tile.
 
         TensorStore dispatches this on a thread pool, so blocking dask
         compute() calls are safe here. Cache access is protected by a lock.
         """
+        if self._use_frame_cache:
+            self._read_fn_frame_cache(domain, array)
+        else:
+            self._read_fn_direct(domain, array)
+
+    def _read_fn_direct(self, domain, array):
+        """Direct read path: read chunks match native dask chunks."""
         key = tuple(int(domain.origin[i]) for i in range(domain.ndim))
 
         with self._chunk_cache_lock:
             if key in self._chunk_cache:
                 array[...] = self._chunk_cache[key]
-                # Move to end of LRU order (most recently used)
                 self._chunk_cache_order.remove(key)
                 self._chunk_cache_order.append(key)
                 return
 
-        # Cache miss — compute from dask (outside lock to avoid blocking)
         slices = tuple(
             slice(int(domain.origin[i]), int(domain.origin[i]) + int(domain.shape[i]))
             for i in range(domain.ndim)
@@ -619,20 +633,79 @@ class DaskReader(BaseReader):
 
         with self._chunk_cache_lock:
             chunk_bytes = data.nbytes
-            # Evict oldest entries until we have room
             while (self._chunk_cache_bytes + chunk_bytes > self._CHUNK_CACHE_MAX_BYTES
                    and self._chunk_cache_order):
                 evict_key = self._chunk_cache_order.pop(0)
                 evicted = self._chunk_cache.pop(evict_key, None)
                 if evicted is not None:
                     self._chunk_cache_bytes -= evicted.nbytes
-            # Only cache if the single chunk fits within max
             if chunk_bytes <= self._CHUNK_CACHE_MAX_BYTES:
                 self._chunk_cache[key] = data
                 self._chunk_cache_order.append(key)
                 self._chunk_cache_bytes += chunk_bytes
 
         array[...] = data
+
+    def _read_fn_frame_cache(self, domain, array):
+        """
+        Frame-level cache for large native chunks.
+
+        Maps each small tile to its parent native dask chunk, caches the full
+        native chunk, and slices the requested tile from it. This avoids
+        allocating and copying multi-GB buffers for each small output tile.
+
+        For example, an ND2 file with 6 GB native frames (1, 4, 22792, 33067):
+        - Old: each 2 MB tile triggered a 6 GB alloc + 6 GB memcpy = 3.3s/tile
+        - New: each tile does an 8 MB slice from the cached 6 GB frame = <1ms/tile
+        """
+        ndim = domain.ndim
+        tile_origin = tuple(int(domain.origin[i]) for i in range(ndim))
+        tile_shape = tuple(int(domain.shape[i]) for i in range(ndim))
+        native = self._native_chunk_shape
+
+        # Map tile to its parent native dask chunk origin
+        frame_key = tuple((o // n) * n for o, n in zip(tile_origin, native))
+
+        with self._chunk_cache_lock:
+            if frame_key in self._chunk_cache:
+                frame = self._chunk_cache[frame_key]
+                self._chunk_cache_order.remove(frame_key)
+                self._chunk_cache_order.append(frame_key)
+                local_slices = tuple(
+                    slice(o - fk, o - fk + s)
+                    for o, fk, s in zip(tile_origin, frame_key, tile_shape)
+                )
+                array[...] = frame[local_slices]
+                return
+
+        # Cache miss — read full native dask chunk (outside lock)
+        frame_shape = tuple(
+            min(n, self._dask_array.shape[i] - fk)
+            for i, (n, fk) in enumerate(zip(native, frame_key))
+        )
+        frame_slices = tuple(
+            slice(fk, fk + fs) for fk, fs in zip(frame_key, frame_shape)
+        )
+        frame_data = self._dask_array[frame_slices].compute()
+
+        with self._chunk_cache_lock:
+            frame_bytes = frame_data.nbytes
+            while (self._chunk_cache_bytes + frame_bytes > self._CHUNK_CACHE_MAX_BYTES
+                   and self._chunk_cache_order):
+                evict_key = self._chunk_cache_order.pop(0)
+                evicted = self._chunk_cache.pop(evict_key, None)
+                if evicted is not None:
+                    self._chunk_cache_bytes -= evicted.nbytes
+            if frame_bytes <= self._CHUNK_CACHE_MAX_BYTES:
+                self._chunk_cache[frame_key] = frame_data
+                self._chunk_cache_order.append(frame_key)
+                self._chunk_cache_bytes += frame_bytes
+
+        local_slices = tuple(
+            slice(o - fk, o - fk + s)
+            for o, fk, s in zip(tile_origin, frame_key, tile_shape)
+        )
+        array[...] = frame_data[local_slices]
 
     def _get_dimension_names(self):
         """
@@ -662,8 +735,13 @@ class DaskReader(BaseReader):
         Return a ts.TensorStore backed by the dask array via virtual_chunked.
 
         Calls _load() to ensure self._dask_array is populated, then creates
-        a virtual_chunked store whose read chunk shape matches the dask array's
-        native chunk shape.
+        a virtual_chunked store. For large native chunks, read_chunk_shape is
+        capped per-dim to avoid multi-GB buffer allocations in _read_fn.
+        The frame-level cache reads each native chunk once and slices tiles.
+
+        Capping rule: only dims where array_dim == native_dim (single native
+        chunk spans the full extent) are capped. Multi-chunk dims keep native
+        alignment to prevent tiles from spanning two native chunks.
 
         Returns:
             ts.TensorStore: Opened virtual store with correct shape, dtype, and
@@ -674,12 +752,26 @@ class DaskReader(BaseReader):
 
         self._load()
         shape = list(self._dask_array.shape)
-        native_chunk_shape = [int(c[0]) for c in self._dask_array.chunks]
+        self._native_chunk_shape = [int(c[0]) for c in self._dask_array.chunks]
+
+        # Cap read_chunk_shape for dims with a single native chunk (safe to
+        # subdivide — no cross-chunk spanning). Multi-chunk dims keep native
+        # alignment. This avoids multi-GB _read_fn buffer allocs while ensuring
+        # tiles never span two native chunks.
+        read_chunk_shape = []
+        for native_dim, array_dim in zip(self._native_chunk_shape, shape):
+            if array_dim == native_dim:
+                read_chunk_shape.append(min(native_dim, self._MAX_READ_CHUNK_DIM))
+            else:
+                read_chunk_shape.append(native_dim)
+
+        self._use_frame_cache = (read_chunk_shape != self._native_chunk_shape)
+
         store = ts.virtual_chunked(
             self._read_fn,
             dtype=ts.dtype(self._dask_array.dtype.name),
             domain=ts.IndexDomain(shape=shape, labels=self._get_dimension_names()),
-            chunk_layout=ts.ChunkLayout(read_chunk_shape=native_chunk_shape),
+            chunk_layout=ts.ChunkLayout(read_chunk_shape=read_chunk_shape),
         )
 
         self._ts_store_cache = store
