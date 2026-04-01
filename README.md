@@ -1,6 +1,6 @@
 # TensorSwitch v2
 
-**Version**: 2.0.0
+**Version**: 2.0.1
 **Status**: Production Ready
 **Branch**: `main`
 
@@ -49,6 +49,9 @@ A high-performance microscopy data conversion tool with TensorStore as the unifi
 - **LSF Cluster Support**: Auto-calculated resources (memory, wall time, cores)
 - **Preserve Source Layout**: Maintains source dimensionality (3D/4D/5D) and axis order per OME-NGFF RFC-3
 - **Compression**: zstd compression with configurable levels
+- **Frame-Based Optimization**: Auto-capped chunk/shard defaults for large ND2/TIFF files with frame-level read cache (63x speedup)
+- **Remote Sources**: Read from GCS, S3, HTTP URLs with optional bounding box subvolume extraction
+- **MCP Server**: AI/agent integration via Model Context Protocol (Claude Code, LLM agents)
 
 ---
 
@@ -112,7 +115,7 @@ pip install git+https://github.com/JaneliaSciComp/tensorswitch.git
 ```bash
 # Using pixi
 pixi run tensorswitch-v2 --version
-# Output: tensorswitch_v2 2.0.0
+# Output: tensorswitch_v2 2.0.1
 
 # Or using module syntax
 pixi run python -m tensorswitch_v2 --version
@@ -125,7 +128,7 @@ tensorswitch-v2 --version
 
 ```python
 from tensorswitch_v2 import __version__, TensorSwitchDataset, Readers, Writers
-print(__version__)  # 2.0.0
+print(__version__)  # 2.0.1
 ```
 
 ---
@@ -940,6 +943,7 @@ info         → Precomputed
 - **Zarr3 sharded** (default): inner chunk = 64, shard = 1024
 - **Zarr3 non-sharded / Zarr2**: adaptive spatial chunk based on dataset size:
   - < 20 GB → 64, 20–100 GB → 128, > 100 GB → 256
+- **Frame-based source auto-cap**: For ND2/TIFF/IMS/HDF5/CZI files where native chunks have small dims (e.g., Z=1 for full-frame ND2), default chunk and shard shapes are automatically capped to native dims. This prevents cache-thrashing defaults like shard Z=1024 on a Z=157 dataset. No `--chunk_shape` needed for most cases.
 
 ### LSF Resource Auto-Calculation
 
@@ -1119,6 +1123,8 @@ Tested on Janelia LSF cluster:
 | Lila Batch (1890 TIFFs) | 6.6 TB | 758 GB Zarr3 | 15 min | 8.7x |
 | CZI Pyramid (6 levels) | 446 GB | 571 GB total | 73 min | - |
 | Ahrens TIFF | 1.9 TB | ~800 GB Zarr3 | ~70 hrs | ~2.4x |
+| ND2 736 GB (Molly) | 736 GB | Zarr2 | ~7 hrs | - |
+| ND2 723 GB (Michael) | 723 GB | Zarr3 | ~7 hrs (est) | - |
 
 ---
 
