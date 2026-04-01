@@ -6247,8 +6247,8 @@ packages:
   requires_python: '>=3.11'
 - pypi: ./
   name: tensorswitch
-  version: 2.0.0
-  sha256: 18202abf5309afe02242f7bf2aa11d856b8955f43c62956aeafffa7d02263f34
+  version: 2.0.1
+  sha256: f525f523f9fb2b623f0bac0bad0f741591dfca0c72d36f9f628129c7b49861c8
   requires_dist:
   - tensorstore>=0.1.79,<0.2
   - psutil
