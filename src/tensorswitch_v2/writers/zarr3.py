@@ -499,12 +499,13 @@ class Zarr3Writer(BaseWriter):
         if getattr(self, '_expand_to_5d', False) and self._original_shape is not None:
             output_domain, expanded_data = self._expand_chunk_to_5d(chunk_domain, data)
         elif self._transpose_order is not None:
-            # Reorder axes (e.g., XYZC -> CXYZ for precomputed)
+            # Reorder data axes (e.g., Z,C,Y,X -> C,Z,Y,X for OME)
             # IMPORTANT: np.transpose creates a view with different strides but same memory
             # TensorStore needs contiguous memory, so we must copy to rearrange the data
             expanded_data = np.ascontiguousarray(np.transpose(data, self._transpose_order))
-            # Reorder the domain to match
-            output_domain = self._reorder_domain(chunk_domain, self._transpose_order)
+            # chunk_domain is already in output order (generated from output store),
+            # so no domain reordering needed — only the data needs transposing
+            output_domain = chunk_domain
         else:
             # Write directly without modification
             output_domain = chunk_domain
