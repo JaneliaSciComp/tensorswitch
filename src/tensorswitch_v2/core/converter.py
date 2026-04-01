@@ -243,6 +243,49 @@ class DistributedConverter:
         except Exception:
             pass
 
+        # 3b. Auto-cap chunk/shard shape for frame-based DaskReader sources.
+        # When native chunks have small dims (e.g., Z=1 for ND2 full-frame),
+        # cap output chunk/shard to native to prevent cache-thrashing reads.
+        from ..readers.base import DaskReader
+        if isinstance(self.reader, DaskReader):
+            native = getattr(self.reader, '_native_chunk_shape', None)
+            if native is not None:
+                # If channel was squeezed, remove that dim from native too
+                if self._squeeze_channel and self._squeeze_axis is not None:
+                    native = [n for i, n in enumerate(native)
+                              if i != self._squeeze_axis]
+
+                # Detect frame-based dims: native much smaller than array
+                frame_dims = [i for i, (nd, ad)
+                              in enumerate(zip(native, input_shape))
+                              if nd < ad]
+
+                if frame_dims:
+                    from ..utils.tensorstore_utils import (
+                        adaptive_spatial_chunk, build_default_shape)
+                    if chunk_shape is None:
+                        sc = adaptive_spatial_chunk(input_shape, input_dtype)
+                        default_chunk = build_default_shape(
+                            list(input_shape), axes_order, sc)
+                        chunk_shape = tuple(
+                            min(d, n) if n < a else d
+                            for d, n, a in zip(
+                                default_chunk, native, input_shape))
+                        if verbose:
+                            print(f"  Auto-capped chunk shape for frame-based "
+                                  f"source: {chunk_shape}")
+
+                    if shard_shape is None:
+                        default_shard = build_default_shape(
+                            list(input_shape), axes_order, 1024)
+                        shard_shape = tuple(
+                            min(d, n) if n < a else d
+                            for d, n, a in zip(
+                                default_shard, native, input_shape))
+                        if verbose:
+                            print(f"  Auto-capped shard shape for frame-based "
+                                  f"source: {shard_shape}")
+
         # 4. Create output spec and open store
         if verbose:
             print(f"Creating output: {self.writer}")
