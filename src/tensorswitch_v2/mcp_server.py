@@ -388,7 +388,7 @@ def generate_pyramid(
 
         for level_info in plan["levels"]:
             level_num = level_info["level"]
-            cum_factors = level_info["cumulative_factors"]
+            cum_factors = level_info["cumulative_factor"]
             output_level_path = os.path.join(parent_dir, f"s{level_num}")
 
             downsample_level(
