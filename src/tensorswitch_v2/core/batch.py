@@ -84,6 +84,12 @@ def detect_input_mode(input_path: str, output_path: str = None) -> str:
         # Local precomputed directory (has info file) - treat as single file
         return 'single_file'
     elif os.path.isdir(input_path) or input_path.endswith('/'):
+        # Check for zarr/n5 marker files — directory IS the dataset
+        if (os.path.exists(os.path.join(input_path, '.zarray')) or
+            os.path.exists(os.path.join(input_path, '.zgroup')) or
+            os.path.exists(os.path.join(input_path, 'zarr.json')) or
+            os.path.exists(os.path.join(input_path, 'attributes.json'))):
+            return 'single_file'
         # Check if directory is a TIFF Z-stack (numbered 2D TIFFs forming one volume)
         from ..utils.format_loaders import is_tiff_zstack_directory
         if is_tiff_zstack_directory(input_path):

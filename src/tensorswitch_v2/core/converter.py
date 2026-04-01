@@ -68,7 +68,6 @@ class DistributedConverter:
         is_label: bool = False,
         expand_to_5d: bool = False,
         bbox: Optional[Tuple[Tuple[int, ...], Tuple[int, ...]]] = None,
-        skip_voxel_validation: bool = False,
     ) -> Dict[str, Any]:
         """Convert data from reader to writer.
 
@@ -76,9 +75,6 @@ class DistributedConverter:
             bbox: Optional (origin, size) tuple for subvolume extraction.
                   origin and size are 3-tuples in source dimension order.
                   Spatial dimensions are auto-detected from domain labels.
-            skip_voxel_validation: If True, skip the check that raises ValueError
-                  when voxel sizes are all 1.0. Used by two-pass conversion for
-                  the intermediate pass where metadata is not needed.
         """
         start_time = time.time()
 
@@ -217,7 +213,7 @@ class DistributedConverter:
             source_unit = target_unit  # override already in target unit
             if verbose:
                 print(f"  Using voxel size override ({source_unit}): {voxel_sizes}")
-        elif not skip_voxel_validation and voxel_sizes and all(v == 1.0 for v in voxel_sizes.values()):
+        elif voxel_sizes and all(v == 1.0 for v in voxel_sizes.values()):
             # Default placeholder [1,1,1] — no real voxel metadata in source.
             # Refuse to guess; require user to specify explicitly.
             raise ValueError(

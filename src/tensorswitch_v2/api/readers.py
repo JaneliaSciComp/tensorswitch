@@ -132,8 +132,23 @@ class Readers:
             except ImportError:
                 return Readers.bioio(path)
 
-        # Directory containing TIFF Z-stack → TiffReader (Tier 2)
+        # Directory: check for zarr/n5 marker files before TIFF fallback
         elif os.path.isdir(path):
+            # Zarr2 array (has .zarray at root)
+            if os.path.exists(os.path.join(path, '.zarray')):
+                return Readers.zarr2(path)
+            # Zarr2 group (has .zgroup) — detect zarr3 vs zarr2
+            if os.path.exists(os.path.join(path, '.zgroup')):
+                if _is_zarr3(path):
+                    return Readers.zarr3(path)
+                return Readers.zarr2(path)
+            # Zarr3 (has zarr.json)
+            if os.path.exists(os.path.join(path, 'zarr.json')):
+                return Readers.zarr3(path)
+            # N5 (has attributes.json)
+            if os.path.exists(os.path.join(path, 'attributes.json')):
+                return Readers.n5(path)
+            # TIFF Z-stack directory
             from ..utils.format_loaders import is_tiff_zstack_directory
             if is_tiff_zstack_directory(path):
                 return Readers.tiff(path)

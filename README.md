@@ -48,7 +48,6 @@ A high-performance microscopy data conversion tool with TensorStore as the unifi
 - **Batch Processing**: Convert thousands of files with LSF job arrays
 - **LSF Cluster Support**: Auto-calculated resources (memory, wall time, cores)
 - **Preserve Source Layout**: Maintains source dimensionality (3D/4D/5D) and axis order per OME-NGFF RFC-3
-- **Two-Pass Conversion**: Auto-detected for large file-decoded sources (ND2, TIFF, etc.) — avoids read amplification
 - **Compression**: zstd compression with configurable levels
 
 ---
@@ -241,7 +240,6 @@ pixi run python -m tensorswitch_v2 -i input.tif -o output.zarr --preset webknoss
 | `--view_index` | CZI view index (None = all views as 5D) |
 | `--use_bioio` | Force BIOIO adapter (Tier 3, Python plugins) |
 | `--use_bioformats` | Force Bio-Formats reader (Tier 4, Java-backed, 150+ formats) |
-| `--no_two_pass` | Disable auto two-pass conversion for large source chunks |
 | `--dataset_path` | Path within container (e.g., `s0` for N5) |
 
 ### Layout Preservation
@@ -1086,7 +1084,6 @@ tensorswitch_v2/
 ├── core/
 │   ├── __init__.py          # Core exports
 │   ├── converter.py         # DistributedConverter
-│   ├── two_pass.py          # Two-pass conversion for large DaskReader sources
 │   ├── downsampler.py       # Downsampler, cumulative factors
 │   ├── pyramid.py           # PyramidPlanner, chained submission
 │   └── batch.py             # BatchConverter, LSF job arrays
