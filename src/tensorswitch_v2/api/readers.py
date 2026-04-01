@@ -4,6 +4,7 @@ Readers factory class with static methods for creating format-specific readers.
 Provides both auto-detection and explicit reader selection via static methods.
 """
 
+import os
 from typing import Optional
 from ..readers.base import BaseReader, is_local_precomputed as _is_local_precomputed
 
@@ -130,6 +131,28 @@ class Readers:
                 return CZIReader(path)
             except ImportError:
                 return Readers.bioio(path)
+
+        # Directory: check for zarr/n5 marker files before TIFF fallback
+        elif os.path.isdir(path):
+            # Zarr2 array (has .zarray at root)
+            if os.path.exists(os.path.join(path, '.zarray')):
+                return Readers.zarr2(path)
+            # Zarr2 group (has .zgroup) — detect zarr3 vs zarr2
+            if os.path.exists(os.path.join(path, '.zgroup')):
+                if _is_zarr3(path):
+                    return Readers.zarr3(path)
+                return Readers.zarr2(path)
+            # Zarr3 (has zarr.json)
+            if os.path.exists(os.path.join(path, 'zarr.json')):
+                return Readers.zarr3(path)
+            # N5 (has attributes.json)
+            if os.path.exists(os.path.join(path, 'attributes.json')):
+                return Readers.n5(path)
+            # TIFF Z-stack directory
+            from ..utils.format_loaders import is_tiff_zstack_directory
+            if is_tiff_zstack_directory(path):
+                return Readers.tiff(path)
+            return Readers.bioio(path)
 
         # Tier 3: BIOIO Adapter (broad compatibility)
         else:

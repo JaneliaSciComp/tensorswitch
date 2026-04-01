@@ -1,10 +1,12 @@
 # TensorSwitch v2
 
-**Version**: 2.0.0
+**Version**: 2.0.1
 **Status**: Production Ready
 **Branch**: `main`
 
 A high-performance microscopy data conversion tool with TensorStore as the unified intermediate format. Supports 200+ input formats, automatic multi-scale pyramid generation, and distributed processing on LSF clusters.
+
+> **Active development** happens on the [`unified` branch](https://github.com/JaneliaSciComp/tensorswitch/tree/unified). The `main` branch receives periodic merges from `unified`.
 
 > **Looking for v1?** The original task-based TensorSwitch (v1) is on the [`v1` branch](https://github.com/JaneliaSciComp/tensorswitch/tree/v1). Use `git checkout v1` to access it.
 
@@ -47,6 +49,9 @@ A high-performance microscopy data conversion tool with TensorStore as the unifi
 - **LSF Cluster Support**: Auto-calculated resources (memory, wall time, cores)
 - **Preserve Source Layout**: Maintains source dimensionality (3D/4D/5D) and axis order per OME-NGFF RFC-3
 - **Compression**: zstd compression with configurable levels
+- **Frame-Based Optimization**: Auto-capped chunk/shard defaults for large ND2/TIFF files with frame-level read cache (63x speedup)
+- **Remote Sources**: Read from GCS, S3, HTTP URLs with optional bounding box subvolume extraction
+- **MCP Server**: AI/agent integration via Model Context Protocol (Claude Code, LLM agents)
 
 ---
 
@@ -110,7 +115,7 @@ pip install git+https://github.com/JaneliaSciComp/tensorswitch.git
 ```bash
 # Using pixi
 pixi run tensorswitch-v2 --version
-# Output: tensorswitch_v2 2.0.0
+# Output: tensorswitch_v2 2.0.1
 
 # Or using module syntax
 pixi run python -m tensorswitch_v2 --version
@@ -123,7 +128,7 @@ tensorswitch-v2 --version
 
 ```python
 from tensorswitch_v2 import __version__, TensorSwitchDataset, Readers, Writers
-print(__version__)  # 2.0.0
+print(__version__)  # 2.0.1
 ```
 
 ---
@@ -264,18 +269,55 @@ Use `--expand-to-5d` for compatibility with tools requiring strict 5D TCZYX form
 
 **Default behavior**: Source order is auto-detected and preserved. Use these flags only to override.
 
+### Remote Sources & Subvolume Extraction
+
+| Argument | Description |
+|----------|-------------|
+| `--bbox` | Bounding box for subvolume extraction: `origin_0,origin_1,origin_2,size_0,size_1,size_2`. Values are voxel indices in source dimension order. |
+
+**Remote URL support**: Tier 1 readers (Neuroglancer precomputed, Zarr2/3, N5) accept remote URLs as input — GCS (`gs://`), S3 (`s3://`), and HTTP/HTTPS. Prefix with `precomputed://` for Neuroglancer precomputed format.
+
+```bash
+# Extract a subvolume from a remote dataset (MICRONS on GCS)
+pixi run python -m tensorswitch_v2 \
+  -i "precomputed://gs://iarpa_microns/minnie/minnie65/em" \
+  -o /output/microns-crop.zarr --output_format zarr2 \
+  --bbox 116316,87591,21337,10240,10240,1024 \
+  --voxel_size 8,8,40
+
+# Remote read without bbox (full volume — use with caution on large datasets)
+pixi run python -m tensorswitch_v2 \
+  -i "precomputed://https://storage.googleapis.com/iarpa_microns/minnie/minnie65/em" \
+  -o /output/microns.zarr --output_format zarr2 \
+  --voxel_size 8,8,40
+```
+
+**Bbox coordinates** are always in voxel indices (integers), in the source's dimension order:
+- For Neuroglancer precomputed: X, Y, Z order
+- For Zarr/N5: Z, Y, X order (or whatever the source axes are)
+
 ### Metadata Override
 
 | Argument | Description |
 |----------|-------------|
-| `--voxel_size` | Override voxel size in nanometers, comma-separated X,Y,Z (e.g., `160,160,400`) |
+| `--voxel_size` | Override voxel size, comma-separated X,Y,Z (e.g., `160,160,400`). Values are in nanometers by default, or in the unit specified by `--voxel_unit`. |
+| `--voxel_unit` | Override spatial unit in OME metadata: `nanometer`, `micrometer`, `millimeter`. When set, voxel sizes are written as-is in this unit. |
+| `--no-translation` | Disable translation transforms in OME-NGFF multiscale metadata. Default: translation ON (for Neuroglancer alignment). |
 
-**Use case**: When source files lack embedded voxel size metadata (e.g., raw TIFF stacks, BigStitcher output).
+**Use case**: When source files lack embedded voxel size metadata (e.g., raw TIFF stacks, flat Zarr arrays). If a source file has no voxel metadata and `--voxel_size` is not provided, the converter will error rather than silently guessing.
 
 ```bash
-# Example: Set voxel size for a TIFF without embedded metadata (160nm x 160nm x 400nm)
+# Set voxel size in nanometers (default unit)
 pixi run python -m tensorswitch_v2 -i input.tif -o output.zarr \
   --voxel_size 160,160,400
+
+# Set voxel size in micrometers
+pixi run python -m tensorswitch_v2 -i input.tif -o output.zarr \
+  --voxel_size 0.108,0.108,0.268 --voxel_unit micrometer
+
+# Disable translation transforms (e.g., for tools that don't use them)
+pixi run python -m tensorswitch_v2 --auto_multiscale \
+  -i output.zarr/s0 -o output.zarr --no-translation --submit -P scicompsoft
 ```
 
 ### Unit Handling
@@ -284,11 +326,13 @@ TensorSwitch v2 follows these rules for spatial units:
 
 | Operation | Unit Behavior |
 |-----------|---------------|
-| **New conversions** (TIFF/ND2/CZI → Zarr) | Always converts to **nanometers**. Source units (µm, mm, etc.) are auto-detected and converted. |
+| **New conversions** (TIFF/ND2/CZI → Zarr) | Converts to **nanometers** by default. Use `--voxel_unit` to write in a different unit. |
 | **Downsampling/Pyramid** (existing Zarr → pyramid levels) | **Preserves source s0 unit** (micrometer, nanometer, etc.) for consistency. |
+| **`--voxel_unit` override** | Values from `--voxel_size` are written as-is in the specified unit (no conversion). |
 
 **Examples:**
 - TIFF with 0.116 µm voxels → Zarr with `"unit": "nanometer"` and scale `[116.0, 116.0, 400.0]`
+- `--voxel_size 0.108,0.108,0.268 --voxel_unit micrometer` → Zarr with `"unit": "micrometer"` and scale `[0.268, 0.108, 0.108]`
 - BigStitcher Zarr2 with `"unit": "micrometer"` → Pyramid levels keep `"unit": "micrometer"`
 
 ---
@@ -334,8 +378,8 @@ reader = Readers.zarr3("/path/to/data.zarr")    # Tier 1
 reader = Readers.bioio("/path/to/data.lif")     # Tier 3
 reader = Readers.bioformats("/path/to/data.vsi")  # Tier 4 (Java)
 
-# Get TensorStore spec
-spec = reader.get_tensorstore_spec()
+# Get TensorStore array (unified API — all tiers return ts.TensorStore)
+store = reader.get_tensorstore()
 metadata = reader.get_metadata()
 ```
 
@@ -899,6 +943,7 @@ info         → Precomputed
 - **Zarr3 sharded** (default): inner chunk = 64, shard = 1024
 - **Zarr3 non-sharded / Zarr2**: adaptive spatial chunk based on dataset size:
   - < 20 GB → 64, 20–100 GB → 128, > 100 GB → 256
+- **Frame-based source auto-cap**: For ND2/TIFF/IMS/HDF5/CZI files where native chunks have small dims (e.g., Z=1 for full-frame ND2), default chunk and shard shapes are automatically capped to native dims. This prevents cache-thrashing defaults like shard Z=1024 on a Z=157 dataset. No `--chunk_shape` needed for most cases.
 
 ### LSF Resource Auto-Calculation
 
@@ -992,6 +1037,43 @@ converter.convert(
 
 ---
 
+## MCP Server (AI/Agent Integration)
+
+TensorSwitch v2 includes an MCP (Model Context Protocol) server that allows Claude and other LLM agents to directly inspect, convert, and generate pyramids for microscopy data.
+
+### Available Tools
+
+| Tool | Description |
+|------|-------------|
+| `inspect_dataset` | Returns shape, dtype, voxel sizes, axes, pyramid levels, OME metadata |
+| `discover_datasets` | Scans a directory for image/segmentation layers |
+| `convert` | Converts between formats (HDF5/TIFF/N5/Zarr → Zarr3/Zarr2/N5) |
+| `generate_pyramid` | Creates multiscale pyramid with anisotropic handling |
+| `list_formats` | Lists all supported input/output formats |
+
+### Setup (Claude Code)
+
+```bash
+# One-time registration
+claude mcp add --transport stdio tensorswitch -- pixi run python -m tensorswitch_v2.mcp_server
+
+# Start Claude Code — server auto-starts
+claude
+```
+
+Then ask Claude natural language questions like:
+- "Inspect /path/to/dataset.zarr"
+- "Convert my HDF5 to Zarr3 with sharding"
+- "What formats does TensorSwitch support?"
+
+### Requirements
+
+```bash
+pixi run pip install "mcp[cli]"
+```
+
+---
+
 ## Module Structure
 
 ```
@@ -1041,6 +1123,8 @@ Tested on Janelia LSF cluster:
 | Lila Batch (1890 TIFFs) | 6.6 TB | 758 GB Zarr3 | 15 min | 8.7x |
 | CZI Pyramid (6 levels) | 446 GB | 571 GB total | 73 min | - |
 | Ahrens TIFF | 1.9 TB | ~800 GB Zarr3 | ~70 hrs | ~2.4x |
+| ND2 736 GB (Molly) | 736 GB | Zarr2 | ~7 hrs | - |
+| ND2 723 GB (Michael) | 723 GB | Zarr3 | ~7 hrs (est) | - |
 
 ---
 

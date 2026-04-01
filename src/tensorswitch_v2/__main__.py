@@ -45,6 +45,7 @@ os.umask(0o0002)  # Team permissions: rwxrwxr-x
 __version__ = "2.0.0-beta"
 
 from .utils.pyramid_utils import resolve_downsample_method
+from .utils import get_dtype_name
 
 
 def find_base_level(input_path: str, verbose: bool = False) -> tuple:
@@ -259,8 +260,16 @@ Supported output formats:
     # Voxel size override
     parser.add_argument(
         "--voxel_size", default=None,
-        help="Override voxel size in nanometers, comma-separated X,Y,Z (e.g., '9,9,12'). "
+        help="Override voxel size, comma-separated X,Y,Z (e.g., '9,9,12'). "
+             "Values are in nanometers by default, or in the unit specified by --voxel_unit. "
              "Use when source file lacks embedded voxel size metadata.",
+    )
+    parser.add_argument(
+        "--voxel_unit", default=None,
+        choices=["nanometer", "micrometer", "millimeter"],
+        help="Override the spatial unit in OME metadata. "
+             "When set, voxel sizes are written as-is in this unit (no nm conversion). "
+             "Without --voxel_size, defaults to scale [1,1,1] in the specified unit.",
     )
 
     # Label/segmentation mode
@@ -363,6 +372,21 @@ Supported output formats:
         help="Downsampling method: auto (default, detects from filename), "
              "mean (intensity images), mode (labels/segmentation), "
              "median (noise reduction), stride (fastest), min, max.",
+    )
+
+    parser.add_argument(
+        "--no-translation", action="store_true",
+        help="Disable translation transforms in OME-NGFF multiscale metadata. "
+             "By default, translation offsets are included for Neuroglancer compatibility.",
+    )
+
+    # Subvolume extraction
+    parser.add_argument(
+        "--bbox", type=str, default=None,
+        help="Bounding box for subvolume extraction: origin_0,origin_1,origin_2,size_0,size_1,size_2 "
+             "(in source voxel coordinates, source dimension order). "
+             "For Neuroglancer precomputed: x,y,z order. For Zarr/N5: z,y,x order. "
+             "Example: --bbox 116316,87591,20800,10240,10240,1024",
     )
 
     # Output control
@@ -478,11 +502,39 @@ Supported output formats:
     return parser.parse_args(argv)
 
 
+def parse_bbox(bbox_str):
+    """Parse bbox string into (origin, size) tuples.
+
+    Args:
+        bbox_str: Comma-separated string 'origin_0,origin_1,origin_2,size_0,size_1,size_2'
+                  Coordinates are in source voxel coordinates, source dimension order.
+                  For Neuroglancer precomputed: x,y,z order.
+                  For Zarr/N5: z,y,x order.
+
+    Returns:
+        Tuple of (origin, size) where each is a 3-tuple of ints.
+
+    Raises:
+        ValueError: If format is invalid.
+    """
+    values = [int(v.strip()) for v in bbox_str.split(',')]
+    if len(values) != 6:
+        raise ValueError(
+            f"--bbox requires 6 comma-separated integers: origin_0,origin_1,origin_2,size_0,size_1,size_2\n"
+            f"Got {len(values)} values: {bbox_str}"
+        )
+    origin = tuple(values[:3])
+    size = tuple(values[3:])
+    if any(s <= 0 for s in size):
+        raise ValueError(f"--bbox size values must be positive, got: {size}")
+    return origin, size
+
+
 def validate_input_path(path: str, allow_directory: bool = True) -> None:
     """Validate that input path exists and is readable.
 
     Args:
-        path: Input file or directory path
+        path: Input file or directory path (local or remote URL)
         allow_directory: If True, directories are allowed (batch mode)
 
     Raises:
@@ -490,6 +542,12 @@ def validate_input_path(path: str, allow_directory: bool = True) -> None:
         PermissionError: If path is not readable
         ValueError: If path is a directory but not allowed
     """
+    from .readers.base import is_remote_path
+
+    # Skip local filesystem checks for remote URLs — reader handles connectivity
+    if is_remote_path(path) or path.startswith('precomputed://'):
+        return
+
     if not os.path.exists(path):
         raise FileNotFoundError(
             f"Input path does not exist: {path}\n"
@@ -711,28 +769,18 @@ def _get_input_metadata(args):
         tuple: (shape, dtype_str, axes_order) where axes_order may be None
     """
     reader = create_reader(args)
-    spec = reader.get_tensorstore_spec()
-    if spec.get('driver') == 'array' and 'array' in spec:
-        arr = spec['array']
-        # Try to get axes from spec schema
-        axes_order = spec.get('schema', {}).get('dimension_names')
-        return tuple(arr.shape), str(arr.dtype), axes_order
-    else:
-        import tensorstore as ts
-        from .utils import get_tensorstore_context
-        spec['context'] = get_tensorstore_context()
-        store = ts.open(spec, read=True).result()
-        # Get axes from TensorStore domain labels (e.g., precomputed has ['x','y','z','channel'])
-        axes_order = None
-        if hasattr(store, 'domain') and hasattr(store.domain, 'labels'):
-            labels = store.domain.labels
-            if labels and all(labels):
-                # Normalize 'channel' to 'c'
-                axes_order = ['c' if l.lower() == 'channel' else l.lower() for l in labels]
-        # Fallback to spec schema if available
-        if not axes_order:
-            axes_order = spec.get('schema', {}).get('dimension_names')
-        return tuple(store.shape), store.dtype.name, axes_order
+    store = reader.get_tensorstore()
+
+    # Get axes from TensorStore domain labels (works for all tiers now)
+    axes_order = None
+    if hasattr(store, 'domain') and hasattr(store.domain, 'labels'):
+        labels = store.domain.labels
+        if labels and all(labels):
+            # Normalize 'channel' to 'c'
+            axes_order = ['c' if l.lower() == 'channel' else l.lower() for l in labels]
+
+    dtype_name = get_dtype_name(store.dtype)
+    return tuple(store.shape), dtype_name, axes_order
 
 
 def _estimate_shard_info(args, volume_shape, dtype_str, axes_order=None):
@@ -758,6 +806,7 @@ def _estimate_shard_info(args, volume_shape, dtype_str, axes_order=None):
 # Import resource calculation functions from utils (shared with batch.py)
 from .utils.resource_utils import calculate_memory as _calculate_memory
 from .utils.resource_utils import calculate_wall_time as _calculate_wall_time
+from .utils.resource_utils import calculate_job_resources as _calculate_job_resources
 
 
 def submit_job(args, return_job_id=False):
@@ -790,6 +839,17 @@ def submit_job(args, return_job_id=False):
     if needs_auto:
         print("Reading input metadata for resource estimation...")
         volume_shape, dtype_str, axes_order = _get_input_metadata(args)
+
+        # When --bbox is used, estimate resources from the bbox subvolume, not the full source
+        if getattr(args, 'bbox', None):
+            bbox_origin, bbox_size = parse_bbox(args.bbox)
+            # bbox_size has same number of spatial dims; squeeze singleton channel if present
+            if len(volume_shape) == len(bbox_size) + 1:
+                volume_shape = bbox_size
+            else:
+                volume_shape = bbox_size[:len(volume_shape)]
+            print(f"  Bbox applied for resource estimation: size={bbox_size}")
+
         shard_shape, total_shards = _estimate_shard_info(args, volume_shape, dtype_str, axes_order)
         # Both BIOIO and BioFormats use Dask and have similar overhead
         use_bioio = getattr(args, 'use_bioio', False) or getattr(args, 'use_bioformats', False)
@@ -805,6 +865,13 @@ def submit_job(args, return_job_id=False):
             mode_name = "Bio-Formats" if getattr(args, 'use_bioformats', False) else "BioIO"
             print(f"  {mode_name} mode: applying 10x wall time and 3x memory multipliers")
 
+        # Detect source type: TensorStore-native (fast) vs file-decoded (slower)
+        _NATIVE_EXTENSIONS = {'.zarr', '.n5'}
+        _input_ext = os.path.splitext(args.input)[1].lower()
+        is_native = _input_ext in _NATIVE_EXTENSIONS or '://' in args.input
+        if not is_native:
+            print(f"  Source type: file-decoded ({_input_ext})")
+
         if memory_gb is None:
             memory_gb = _calculate_memory(volume_shape, dtype_str, shard_shape, total_shards, use_bioio=use_bioio, output_format=args.output_format)
 
@@ -812,8 +879,11 @@ def submit_job(args, return_job_id=False):
     # Non-sharded (Zarr2 / Zarr3 --no_sharding): min 4 cores — many small chunk files
     #   benefit from I/O parallelism + compression threads
     # Zarr3 sharded: based on memory (large shard buffers need more cores)
+    # Single-shard: 1 core (no parallelism benefit)
     if args.cores is not None:
         cores = args.cores
+    elif use_sharding and total_shards == 1:
+        cores = 1
     elif not use_sharding and dataset_size_gb is not None:
         cores = min(8, max(4, int(math.ceil(dataset_size_gb / 25)) * 2))
     else:
@@ -823,7 +893,7 @@ def submit_job(args, return_job_id=False):
     if needs_auto and wall_time is None:
         wall_time = _calculate_wall_time(volume_shape, dtype_str, shard_shape, total_shards, use_bioio=use_bioio,
                                          output_format=args.output_format, no_sharding=args.no_sharding,
-                                         cores=cores)
+                                         cores=cores, is_native_source=is_native)
 
     # Enforce cluster policy: 15 GB per core minimum
     memory_gb = max(memory_gb, cores * 15)
@@ -884,11 +954,22 @@ def submit_job(args, return_job_id=False):
         reinvoke.append("--force_f_order")
     if getattr(args, 'voxel_size', None):
         reinvoke += ["--voxel_size", args.voxel_size]
+    if getattr(args, 'voxel_unit', None):
+        reinvoke += ["--voxel_unit", args.voxel_unit]
     if getattr(args, 'is_label', False):
         reinvoke.append("--is-label")
     if getattr(args, 'expand_to_5d', False):
         reinvoke.append("--expand-to-5d")
-
+    if getattr(args, 'data_type', 'auto') != 'auto':
+        reinvoke += ["--data-type", args.data_type]
+    if getattr(args, 'label_key', 'segmentation') != 'segmentation':
+        reinvoke += ["--label-key", args.label_key]
+    if getattr(args, 'image_key', 'raw') != 'raw':
+        reinvoke += ["--image-key", args.image_key]
+    if getattr(args, 'use_nested_structure', True) is False:
+        reinvoke.append("--no-nested-structure")
+    if getattr(args, 'bbox', None):
+        reinvoke += ["--bbox", args.bbox]
     # Convert to properly quoted shell command string
     # This handles paths with spaces correctly when bsub creates its wrapper
     reinvoke_str = shlex.join(reinvoke)
@@ -1077,22 +1158,18 @@ def show_conversion_spec(reader, writer, args, chunk_shape, shard_shape):
     if voxel_sizes:
         print(f"Voxel sizes: {voxel_sizes}")
 
-    # Try to get TensorStore spec (may not be available for all readers)
+    # Try to get TensorStore info
     try:
-        input_spec = reader.get_tensorstore_spec()
-        print(f"\nTensorStore spec:")
-        # Simplify for display
-        display_spec = {
-            "driver": input_spec.get("driver"),
-            "dtype": input_spec.get("dtype"),
-        }
-        if "kvstore" in input_spec:
-            kvstore = input_spec["kvstore"]
-            if isinstance(kvstore, dict):
-                display_spec["kvstore"] = kvstore.get("driver", kvstore)
-        print(json.dumps(display_spec, indent=2, default=str))
+        input_store = reader.get_tensorstore()
+        print(f"\nTensorStore info:")
+        print(f"  shape: {list(input_store.shape)}")
+        dtype_name = get_dtype_name(input_store.dtype)
+        print(f"  dtype: {dtype_name}")
+        labels = list(input_store.domain.labels) if input_store.domain.labels else []
+        if labels:
+            print(f"  domain labels: {labels}")
     except Exception as e:
-        print(f"(TensorStore spec not available: {e})")
+        print(f"(TensorStore info not available: {e})")
 
     # Output spec
     print("\n--- OUTPUT ---")
@@ -1277,7 +1354,7 @@ def main(argv=None):
             submit_discovered_folder_lsf,
         )
 
-        input_mode = detect_input_mode(args.input)
+        input_mode = detect_input_mode(args.input, output_path=args.output)
 
         if input_mode == 'discovered_folder':
             # Discovered folder mode: convert image and/or segmentation datasets
@@ -1360,19 +1437,52 @@ def main(argv=None):
                 if not args.project:
                     raise ValueError("--project is required with --submit")
 
+                # Auto-calculate resources from first discovered file when not overridden
+                memory_gb = args.memory
+                wall_time = args.wall_time
+                cores = args.cores
+
+                if not (memory_gb and wall_time and cores):
+                    first_file = files[0].input_path
+                    print(f"Reading sample file for resource estimation: {os.path.basename(first_file)}")
+                    original_input = args.input
+                    args.input = first_file
+                    try:
+                        volume_shape, dtype_str, axes_order = _get_input_metadata(args)
+                    finally:
+                        args.input = original_input
+
+                    _NATIVE_EXTENSIONS = {'.zarr', '.n5'}
+                    _ext = os.path.splitext(first_file)[1].lower()
+                    is_native = _ext in _NATIVE_EXTENSIONS or '://' in first_file
+
+                    auto_mem, auto_wall, auto_cores = _calculate_job_resources(
+                        shape=list(volume_shape), dtype=dtype_str,
+                        output_format=args.output_format,
+                        chunk_shape_str=args.chunk_shape, shard_shape_str=args.shard_shape,
+                        axes_order=axes_order, no_sharding=args.no_sharding,
+                        is_native_source=is_native,
+                    )
+                    memory_gb = memory_gb or auto_mem
+                    wall_time = wall_time or auto_wall
+                    cores = cores or auto_cores
+                    print(f"  Auto-calculated: {memory_gb} GB, {wall_time}, {cores} cores")
+
                 result = batch.submit_lsf(
                     project=args.project,
                     chunk_shape=args.chunk_shape,
                     shard_shape=args.shard_shape,
                     compression=args.compression,
                     compression_level=args.compression_level,
-                    memory_gb=args.memory or 30,
-                    wall_time=args.wall_time or "1:00",
-                    cores=args.cores or 2,
+                    memory_gb=memory_gb,
+                    wall_time=wall_time,
+                    cores=cores,
                     max_concurrent=args.max_concurrent,
                     job_group=args.job_group,
                     skip_existing=skip_existing,
                     dry_run=args.dry_run,
+                    voxel_size=args.voxel_size,
+                    voxel_unit=args.voxel_unit,
                 )
             else:
                 # Run locally (sequential)
@@ -1483,6 +1593,7 @@ def main(argv=None):
                         dry_run=False,
                         verbose=False,  # Reduce output in batch mode
                         custom_per_level_factors=custom_per_level_factors,
+                        include_translation=not args.no_translation,
                     )
                     coordinator_jid = result.get('coordinator_job_id')
                     num_levels = result.get('pyramid_plan', {}).get('num_levels', 0)
@@ -1528,6 +1639,7 @@ def main(argv=None):
                 dry_run=False,
                 verbose=verbose,
                 custom_per_level_factors=custom_per_level_factors,
+                include_translation=not args.no_translation,
             )
             num_levels = result.get('pyramid_plan', {}).get('num_levels', 0)
             coordinator_job_id = result.get('coordinator_job_id')
@@ -1541,7 +1653,9 @@ def main(argv=None):
             # Local mode: run downsampling directly for each level
             from .core.downsampler import downsample_level
 
-            planner = PyramidPlanner(s0_path)
+            resolved_method = resolve_downsample_method(args.downsample_method, s0_path)
+
+            planner = PyramidPlanner(s0_path, include_translation=not args.no_translation, downsample_method=resolved_method)
             plan = planner.calculate_pyramid_plan(custom_per_level_factors=custom_per_level_factors)
             planner.print_pyramid_plan(plan)
 
@@ -1565,12 +1679,13 @@ def main(argv=None):
                     use_shard=use_shard,
                     custom_shard_shape=level_info.get('shard_shape'),
                     custom_chunk_shape=level_info.get('chunk_shape'),
+                    downsample_method=resolved_method,
                     verbose=verbose,
                 )
 
             # Update root metadata
             print("\nUpdating root metadata...")
-            update_ome_metadata_if_needed(root_path, use_ome_structure=True)
+            update_ome_metadata_if_needed(root_path, use_ome_structure=True, include_translation=not args.no_translation, downsample_method=resolved_method)
 
             print(f"\n{'='*60}")
             print(f"AUTO-MULTISCALE COMPLETE: {root_path}")
@@ -1643,15 +1758,8 @@ def main(argv=None):
         # Auto-detect based on dtype
         resolved_data_type = 'image'  # Default
         try:
-            spec = reader.get_tensorstore_spec()
-            if spec.get('driver') == 'array' and 'array' in spec:
-                dtype_str = str(spec['array'].dtype)
-            else:
-                import tensorstore as ts
-                from .utils import get_tensorstore_context
-                spec['context'] = get_tensorstore_context()
-                store = ts.open(spec, read=True).result()
-                dtype_str = store.dtype.name
+            store = reader.get_tensorstore()
+            dtype_str = get_dtype_name(store.dtype)
 
             from .utils.metadata_utils import is_segmentation_dtype
             if is_segmentation_dtype(dtype_str):
@@ -1678,6 +1786,7 @@ def main(argv=None):
 
     # Parse voxel_size override if provided
     voxel_size_override = None
+    voxel_unit = getattr(args, 'voxel_unit', None)
     if args.voxel_size:
         parts = args.voxel_size.split(',')
         if len(parts) == 3:
@@ -1695,6 +1804,9 @@ def main(argv=None):
     # Get expand_to_5d flag (default False = preserve source layout)
     expand_to_5d = getattr(args, 'expand_to_5d', False)
 
+    # Parse bbox for subvolume extraction
+    bbox = parse_bbox(args.bbox) if getattr(args, 'bbox', None) else None
+
     if args.start_idx is not None:
         # Manual chunk-range mode (for bsub workers)
         converter.convert(
@@ -1707,8 +1819,10 @@ def main(argv=None):
             verbose=verbose,
             force_order=force_order,
             voxel_size_override=voxel_size_override,
+            voxel_unit=voxel_unit,
             is_label=is_label,
             expand_to_5d=expand_to_5d,
+            bbox=bbox,
         )
     else:
         # Full single-process conversion
@@ -1719,8 +1833,20 @@ def main(argv=None):
             verbose=verbose,
             force_order=force_order,
             voxel_size_override=voxel_size_override,
+            voxel_unit=voxel_unit,
             is_label=is_label,
             expand_to_5d=expand_to_5d,
+            bbox=bbox,
+        )
+
+    # Write source provenance metadata when --bbox is used
+    if bbox:
+        from .utils.metadata_utils import write_source_metadata
+        write_source_metadata(
+            output_path=args.output,
+            source_url=args.input,
+            bbox=bbox,
+            voxel_sizes=voxel_size_override,
         )
 
 

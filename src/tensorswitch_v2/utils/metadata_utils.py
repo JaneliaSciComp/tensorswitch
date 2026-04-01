@@ -181,7 +181,7 @@ def extract_omero_channels(ome_xml: str) -> list:
     return channels if channels else None
 
 
-def create_zarr3_ome_metadata(ome_xml, array_shape, image_name, pixel_sizes=None, axes_order=None, include_omero=False, is_label=False, label_colors=None, level_path="s0"):
+def create_zarr3_ome_metadata(ome_xml, array_shape, image_name, pixel_sizes=None, axes_order=None, include_omero=False, is_label=False, label_colors=None, level_path="s0", spatial_unit='nanometer'):
     """
     Create OME-ZARR metadata structure for zarr3 format.
 
@@ -217,7 +217,7 @@ def create_zarr3_ome_metadata(ome_xml, array_shape, image_name, pixel_sizes=None
 
     def get_axis_unit(axis_name):
         if axis_name in ['x', 'y', 'z']:
-            return 'nanometer'
+            return spatial_unit
         elif axis_name == 't':
             return 'millisecond'
         return None
@@ -240,25 +240,25 @@ def create_zarr3_ome_metadata(ome_xml, array_shape, image_name, pixel_sizes=None
         if array_shape[0] <= 10:
             axes = [
                 {"name": "c", "type": "channel"},
-                {"name": "y", "type": "space", "unit": "nanometer"},
-                {"name": "x", "type": "space", "unit": "nanometer"}
+                {"name": "y", "type": "space", "unit": spatial_unit},
+                {"name": "x", "type": "space", "unit": spatial_unit}
             ]
             if pixel_sizes:
                 scale_factors = [1.0, pixel_sizes.get('y', 1.0), pixel_sizes.get('x', 1.0)]
         else:
             axes = [
-                {"name": "z", "type": "space", "unit": "nanometer"},
-                {"name": "y", "type": "space", "unit": "nanometer"},
-                {"name": "x", "type": "space", "unit": "nanometer"}
+                {"name": "z", "type": "space", "unit": spatial_unit},
+                {"name": "y", "type": "space", "unit": spatial_unit},
+                {"name": "x", "type": "space", "unit": spatial_unit}
             ]
             if pixel_sizes:
                 scale_factors = [pixel_sizes.get('z', 1.0), pixel_sizes.get('y', 1.0), pixel_sizes.get('x', 1.0)]
     elif ndim == 4:
         axes = [
             {"name": "c", "type": "channel"},
-            {"name": "z", "type": "space", "unit": "nanometer"},
-            {"name": "y", "type": "space", "unit": "nanometer"},
-            {"name": "x", "type": "space", "unit": "nanometer"}
+            {"name": "z", "type": "space", "unit": spatial_unit},
+            {"name": "y", "type": "space", "unit": spatial_unit},
+            {"name": "x", "type": "space", "unit": spatial_unit}
         ]
         if pixel_sizes:
             scale_factors = [1.0, pixel_sizes.get('z', 1.0), pixel_sizes.get('y', 1.0), pixel_sizes.get('x', 1.0)]
@@ -266,9 +266,9 @@ def create_zarr3_ome_metadata(ome_xml, array_shape, image_name, pixel_sizes=None
         axes = [
             {"name": "t", "type": "time", "unit": "millisecond"},
             {"name": "c", "type": "channel"},
-            {"name": "z", "type": "space", "unit": "nanometer"},
-            {"name": "y", "type": "space", "unit": "nanometer"},
-            {"name": "x", "type": "space", "unit": "nanometer"}
+            {"name": "z", "type": "space", "unit": spatial_unit},
+            {"name": "y", "type": "space", "unit": spatial_unit},
+            {"name": "x", "type": "space", "unit": spatial_unit}
         ]
         if pixel_sizes:
             scale_factors = [1.0, 1.0, pixel_sizes.get('z', 1.0), pixel_sizes.get('y', 1.0), pixel_sizes.get('x', 1.0)]
@@ -380,7 +380,72 @@ def auto_detect_max_level(output_path):
     return max(levels), prefix
 
 
-def update_ome_multiscale_metadata(zarr_path, max_level=4, prefix=None):
+def _compute_scale_rounded_ratio(level0_scale_factors, level0_shape, level_shape):
+    """
+    Compute scale by rounding the shape ratio to the nearest integer.
+
+    Infers the cumulative downsampling factor from actual array dimensions:
+        factor = round(s0_shape / sN_shape)
+        scale  = s0_voxel * factor
+
+    This handles ceiling division noise (e.g. 627/314 = 1.997 → rounds to 2)
+    and works for any downsampling pattern without assumptions.
+    """
+    level_scale = []
+    for i in range(len(level0_shape)):
+        ratio = level0_shape[i] / level_shape[i]
+        factor = round(ratio)
+        level_scale.append(level0_scale_factors[i] * factor)
+    return level_scale
+
+
+def _compute_translation(level_scale, level0_scale_factors, downsample_method=None):
+    """
+    Compute per-axis translation for a downsampled level.
+
+    For block-based methods (mean, mode, median, min, max), each output pixel
+    covers a block of input pixels.  The output pixel's center is shifted by
+    half the difference between the new and original voxel sizes:
+
+        translation[i] = 0.5 * (scale_sN[i] - scale_s0[i])
+
+    For stride, the output pixel IS the input pixel at position j*f — its
+    center already aligns with the original grid, so translation = 0.
+
+    For unknown methods, translation is skipped with a warning since the
+    correct offset is unknown and applying the wrong value is worse than
+    omitting it.
+
+    Args:
+        level_scale: Scale factors for this level (e.g., [800, 232, 232] nm)
+        level0_scale_factors: Scale factors for level 0 (e.g., [400, 116, 116] nm)
+        downsample_method: Downsample method used ('mean', 'mode', 'stride', etc.)
+                           None defaults to block-method behavior.
+
+    Returns:
+        list of float: Per-axis translation values (physical units)
+    """
+    # Block methods: symmetric window — output center shifted by 0.5*(sN - s0)
+    BLOCK_METHODS = {'mean', 'mode', 'median', 'min', 'max'}
+    # Stride: output pixel = input pixel at j*f — no shift
+    STRIDE_METHODS = {'stride'}
+
+    if downsample_method in STRIDE_METHODS:
+        return [0.0] * len(level_scale)
+
+    if downsample_method is not None and downsample_method not in BLOCK_METHODS:
+        print(
+            f"WARNING: Unknown downsample method '{downsample_method}' — "
+            f"cannot determine correct translation offset (only 0.5 is supported "
+            f"for block methods). Skipping translation to avoid incorrect metadata."
+        )
+        return [0.0] * len(level_scale)
+
+    # Block methods (or None/default): 0.5 * (sN - s0) per axis
+    return [0.5 * (scale - level0_scale_factors[i]) for i, scale in enumerate(level_scale)]
+
+
+def update_ome_multiscale_metadata(zarr_path, max_level=4, prefix=None, include_translation=True, downsample_method=None):
     """
     Update OME-ZARR metadata to include all multiscale levels.
 
@@ -394,8 +459,6 @@ def update_ome_multiscale_metadata(zarr_path, max_level=4, prefix=None):
     multiscales = metadata["attributes"]["ome"]["multiscales"][0]
     level0_scale_factors = multiscales["datasets"][0]["coordinateTransformations"][0]["scale"]
 
-    downsampling_factors = metadata.get("attributes", {}).get("custom", {}).get("downsampling_factors", None)
-
     # Detect level naming format if not provided
     if prefix is None:
         prefix = detect_level_format(zarr_path)
@@ -405,14 +468,6 @@ def update_ome_multiscale_metadata(zarr_path, max_level=4, prefix=None):
     with open(level0_metadata_path, 'r') as f:
         level0_meta = json.load(f)
     level0_shape = level0_meta.get('shape')
-
-    if downsampling_factors:
-        print("Using downsampling factors from custom metadata (incremental method)")
-        use_factors = True
-        previous_scale = level0_scale_factors
-    else:
-        print("No downsampling factors found - using dimension ratio method")
-        use_factors = False
 
     datasets = []
 
@@ -436,29 +491,23 @@ def update_ome_multiscale_metadata(zarr_path, max_level=4, prefix=None):
         level_shape = level_meta.get('shape')
 
         # Preferred: use cumulative_factor stored in the level's zarr.json during downsampling
-        level_cumulative_factor = level_meta.get('attributes', {}).get('custom', {}).get('cumulative_factor')
+        level_cumulative_factor = level_meta.get('attributes', {}).get('tensorswitch', {}).get('cumulative_factor')
 
         if level_cumulative_factor:
             level_scale = [s0 * f for s0, f in zip(level0_scale_factors, level_cumulative_factor)]
-        elif use_factors:
-            prev_level_name = get_level_name(level - 1, prefix)
-            factor_key = f"{prev_level_name}_to_{level_name}"
-            level_factors = downsampling_factors.get(factor_key)
-            if level_factors:
-                level_scale = [prev * factor for prev, factor in zip(previous_scale, level_factors)]
-            else:
-                print(f"Warning: Missing factors for {factor_key}, falling back to ratio method")
-                level_scale = [level0_scale_factors[i] * (level0_shape[i] / level_shape[i]) for i in range(len(level0_shape))]
-            previous_scale = level_scale
         else:
-            level_scale = [level0_scale_factors[i] * (level0_shape[i] / level_shape[i]) for i in range(len(level0_shape))]
+            print(f"Warning: No cumulative_factor for {level_name}, inferring from shape ratio (rounded)")
+            level_scale = _compute_scale_rounded_ratio(level0_scale_factors, level0_shape, level_shape)
 
         coordinate_transformations = [{"type": "scale", "scale": level_scale}]
 
         # Add translation transform for Neuroglancer compatibility
-        translation = [0.5 * (scale - level0_scale_factors[i]) for i, scale in enumerate(level_scale)]
-        if any(t != 0 for t in translation):
-            coordinate_transformations.append({"type": "translation", "translation": translation})
+        if include_translation:
+            translation = _compute_translation(level_scale, level0_scale_factors, downsample_method)
+            if any(t != 0 for t in translation):
+                coordinate_transformations.append({"type": "translation", "translation": translation})
+                method_label = downsample_method or 'block'
+                print(f"  {level_name}: translation={[round(t, 4) for t in translation]} (method={method_label})")
 
         datasets.append({
             "path": level_name,
@@ -473,7 +522,7 @@ def update_ome_multiscale_metadata(zarr_path, max_level=4, prefix=None):
     print(f"Updated OME metadata with {len(datasets)} levels")
 
 
-def update_ome_multiscale_metadata_zarr2(zarr_path, max_level=4, prefix=None):
+def update_ome_multiscale_metadata_zarr2(zarr_path, max_level=4, prefix=None, include_translation=True, downsample_method=None):
     """
     Update OME-ZARR metadata for zarr2 format (.zattrs).
 
@@ -524,19 +573,23 @@ def update_ome_multiscale_metadata_zarr2(zarr_path, max_level=4, prefix=None):
         if os.path.exists(level_zattrs_path):
             with open(level_zattrs_path, 'r') as f:
                 level_zattrs = json.load(f)
-            level_cumulative_factor = level_zattrs.get('custom', {}).get('cumulative_factor')
+            level_cumulative_factor = level_zattrs.get('tensorswitch', {}).get('cumulative_factor')
 
         if level_cumulative_factor:
             level_scale = [s0 * f for s0, f in zip(level0_scale_factors, level_cumulative_factor)]
         else:
-            level_scale = [level0_scale_factors[i] * (level0_shape[i] / level_shape[i]) for i in range(len(level0_shape))]
+            print(f"Warning: No cumulative_factor for {level_name}, inferring from shape ratio (rounded)")
+            level_scale = _compute_scale_rounded_ratio(level0_scale_factors, level0_shape, level_shape)
 
         coordinate_transformations = [{"type": "scale", "scale": level_scale}]
 
         # Add translation transform for Neuroglancer compatibility (same as Zarr3)
-        translation = [0.5 * (scale - level0_scale_factors[i]) for i, scale in enumerate(level_scale)]
-        if any(t != 0 for t in translation):
-            coordinate_transformations.append({"type": "translation", "translation": translation})
+        if include_translation:
+            translation = _compute_translation(level_scale, level0_scale_factors, downsample_method)
+            if any(t != 0 for t in translation):
+                coordinate_transformations.append({"type": "translation", "translation": translation})
+                method_label = downsample_method or 'block'
+                print(f"  {level_name}: translation={[round(t, 4) for t in translation]} (method={method_label})")
 
         datasets.append({
             "path": level_name,
@@ -697,6 +750,19 @@ def _update_parent_zarr3_json(inner_path, parent_path, image_key):
         parent_metadata = json.load(f)
 
     parent_ome = parent_metadata.get('attributes', {}).get('ome', {})
+
+    # If parent is a pure labels container (has 'labels' but no 'multiscales'),
+    # don't write multiscales — just ensure label is listed.
+    # Root containers can have BOTH 'labels' and 'multiscales' — must update multiscales.
+    if 'labels' in parent_ome and 'multiscales' not in parent_ome:
+        existing_labels = parent_ome['labels']
+        if image_key not in existing_labels:
+            existing_labels.append(image_key)
+            with open(parent_zarr_json, 'w') as f:
+                json.dump(parent_metadata, f, indent=2)
+        print(f"Updated labels container with label '{image_key}' (total: {len(existing_labels)} labels)")
+        return
+
     parent_ms_list = parent_ome.get('multiscales', [])
 
     if parent_ms_list:
@@ -722,6 +788,9 @@ def _update_parent_zarr2_zattrs(inner_path, parent_path, image_key):
     """
     Update parent .zattrs to reflect inner path's multiscale levels with image_key prefix.
 
+    If the parent is a labels container (has "labels" key in .zattrs), only ensures
+    the label name is in the labels list — does NOT write multiscales there.
+
     Args:
         inner_path: Path to the inner group (e.g., <name>.zarr/raw/)
         parent_path: Path to the parent zarr root (e.g., <name>.zarr/)
@@ -729,6 +798,21 @@ def _update_parent_zarr2_zattrs(inner_path, parent_path, image_key):
     """
     inner_zattrs = os.path.join(inner_path, '.zattrs')
     parent_zattrs = os.path.join(parent_path, '.zattrs')
+
+    with open(parent_zattrs, 'r') as f:
+        parent_metadata = json.load(f)
+
+    # If parent is a pure labels container (has 'labels' but no 'multiscales'),
+    # don't write multiscales — just ensure label is listed.
+    # Root containers can have BOTH 'labels' and 'multiscales' — must update multiscales.
+    if 'labels' in parent_metadata and 'multiscales' not in parent_metadata:
+        existing_labels = parent_metadata['labels']
+        if image_key not in existing_labels:
+            existing_labels.append(image_key)
+            with open(parent_zattrs, 'w') as f:
+                json.dump(parent_metadata, f, indent=2)
+        print(f"Updated labels container with label '{image_key}' (total: {len(existing_labels)} labels)")
+        return
 
     with open(inner_zattrs, 'r') as f:
         inner_metadata = json.load(f)
@@ -745,9 +829,6 @@ def _update_parent_zarr2_zattrs(inner_path, parent_path, image_key):
         new_ds = ds.copy()
         new_ds['path'] = f"{image_key}/{ds['path']}"
         adjusted_datasets.append(new_ds)
-
-    with open(parent_zattrs, 'r') as f:
-        parent_metadata = json.load(f)
 
     parent_ms_list = parent_metadata.get('multiscales', [])
 
@@ -767,7 +848,7 @@ def _update_parent_zarr2_zattrs(inner_path, parent_path, image_key):
     print(f"Updated parent zarr2 metadata with {len(adjusted_datasets)} levels")
 
 
-def update_ome_metadata_if_needed(output_path, use_ome_structure):
+def update_ome_metadata_if_needed(output_path, use_ome_structure, include_translation=True, downsample_method=None):
     """
     Update OME-Zarr metadata if OME structure is used and multiscale levels exist.
     Supports both zarr2 (.zattrs) and zarr3 (zarr.json) formats.
@@ -775,6 +856,13 @@ def update_ome_metadata_if_needed(output_path, use_ome_structure):
     Also updates the parent zarr.json/zattrs if this path is a nested image group
     (e.g., raw/ inside <name>.zarr/), propagating all pyramid levels with the
     image_key prefix (e.g., raw/s0, raw/s1, ...).
+
+    Args:
+        output_path: Path to zarr root
+        use_ome_structure: Whether OME structure is used
+        include_translation: Include translation transforms in metadata
+        downsample_method: Downsample method used ('mean', 'mode', 'stride', etc.)
+                          Controls translation computation.
     """
     if not use_ome_structure:
         return
@@ -796,7 +884,7 @@ def update_ome_metadata_if_needed(output_path, use_ome_structure):
     try:
         if os.path.exists(zarr3_metadata):
             print(f"Updating zarr3 OME metadata for {output_path} with levels {level0_name}-{max_level_name}")
-            update_ome_multiscale_metadata(output_path, max_level=max_level, prefix=prefix)
+            update_ome_multiscale_metadata(output_path, max_level=max_level, prefix=prefix, include_translation=include_translation, downsample_method=downsample_method)
             print("OME metadata updated successfully!")
 
             # Also update parent zarr.json if this is a nested image group (e.g., raw/)
@@ -812,7 +900,7 @@ def update_ome_metadata_if_needed(output_path, use_ome_structure):
 
         elif os.path.exists(zarr2_metadata):
             print(f"Updating zarr2 OME metadata for {output_path} with levels {level0_name}-{max_level_name}")
-            update_ome_multiscale_metadata_zarr2(output_path, max_level=max_level, prefix=prefix)
+            update_ome_multiscale_metadata_zarr2(output_path, max_level=max_level, prefix=prefix, include_translation=include_translation, downsample_method=downsample_method)
             print("OME metadata updated successfully!")
 
             # Also update parent .zattrs if this is a nested image group (e.g., raw/)
@@ -830,6 +918,107 @@ def update_ome_metadata_if_needed(output_path, use_ome_structure):
             print("Warning: No zarr metadata file found (.zattrs or zarr.json) - skipping metadata update")
     except Exception as e:
         print(f"Warning: Failed to update OME metadata: {e}")
+
+
+def write_source_metadata(output_path, source_url, bbox, voxel_sizes=None, source_format=None):
+    """
+    Write source provenance metadata to root zarr.json or .zattrs.
+
+    Records where the data came from when --bbox subvolume extraction is used.
+    Supports both Zarr3 (zarr.json) and Zarr2 (.zattrs).
+
+    Args:
+        output_path: Path to the zarr root directory
+        source_url: Input URL or path (e.g., "precomputed://gs://bucket/path")
+        bbox: Tuple of (origin, size) where each is a 3-tuple of ints
+        voxel_sizes: Optional dict {"x": nm, "y": nm, "z": nm} or list [x, y, z]
+        source_format: Optional string describing input format (e.g., "neuroglancer_precomputed")
+    """
+    from datetime import date
+
+    origin, size = bbox
+
+    # Auto-detect format and coordinate order from source URL
+    if source_format is None:
+        url_lower = source_url.lower()
+        if url_lower.startswith('precomputed://'):
+            source_format = "neuroglancer_precomputed"
+        elif url_lower.endswith('.n5') or '/n5' in url_lower:
+            source_format = "n5"
+        elif url_lower.endswith('.zarr'):
+            source_format = "zarr"
+
+    # Precomputed uses XYZ, Zarr/N5 use ZYX
+    if source_format == "neuroglancer_precomputed":
+        coord_order = "XYZ"
+    else:
+        coord_order = "ZYX"
+
+    # Detect Zarr3 vs Zarr2 and read existing source metadata
+    zarr3_path = os.path.join(output_path, 'zarr.json')
+    zarr2_path = os.path.join(output_path, '.zattrs')
+    existing_source = {}
+
+    if os.path.exists(zarr3_path):
+        with open(zarr3_path, 'r') as f:
+            metadata = json.load(f)
+        existing_source = metadata.get('attributes', {}).get('source', {})
+    elif os.path.exists(zarr2_path):
+        with open(zarr2_path, 'r') as f:
+            metadata = json.load(f)
+        existing_source = metadata.get('source', {})
+    else:
+        print(f"Warning: No root metadata file found at {output_path} — skipping source metadata")
+        return
+
+    # Merge source_urls: append this invocation's URL, keyed by data type
+    source_urls = existing_source.get("source_urls", {})
+    # Derive key from URL path components (e.g., "em", "seg_v1300")
+    clean_url = source_url.rstrip('/')
+    if clean_url.startswith('precomputed://'):
+        clean_url = clean_url[len('precomputed://'):]
+    parts = clean_url.rstrip('/').split('/')
+    # Use last component, or last two joined with _ if last is a version-like string
+    url_key = parts[-1]
+    if len(parts) >= 2 and (url_key.startswith('v') or url_key.isdigit()):
+        url_key = f"{parts[-2]}_{parts[-1]}"
+    source_urls[url_key] = source_url
+
+    source = {
+        "source_urls": source_urls,
+        "bbox_origin_voxel": list(origin),
+        "bbox_size_voxel": list(size),
+    }
+
+    if source_format:
+        source["format"] = source_format
+        source["bbox_coordinate_order"] = coord_order
+
+    # Add voxel size and physical extent if available
+    if voxel_sizes:
+        if isinstance(voxel_sizes, dict):
+            vs = [voxel_sizes.get('x', 0), voxel_sizes.get('y', 0), voxel_sizes.get('z', 0)]
+        else:
+            vs = list(voxel_sizes)
+        source["voxel_size_nm"] = vs
+        # Compute physical extent in micrometers
+        if all(v > 0 for v in vs):
+            source["physical_extent_um"] = [round(s * v / 1000.0, 2) for s, v in zip(size, vs)]
+
+    source["conversion_tool"] = "TensorSwitch v2"
+    source["conversion_date"] = str(date.today())
+
+    # Write back
+    if os.path.exists(zarr3_path):
+        metadata.setdefault('attributes', {})['source'] = source
+        with open(zarr3_path, 'w') as f:
+            json.dump(metadata, f, indent=2)
+    else:
+        metadata['source'] = source
+        with open(zarr2_path, 'w') as f:
+            json.dump(metadata, f, indent=2)
+
+    print(f"Wrote source provenance metadata to {output_path}")
 
 
 def precreate_shard_directories(output_path, level, output_shape, shard_shape, use_ome_structure=True, level_prefix=None):

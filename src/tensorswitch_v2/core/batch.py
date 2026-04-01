@@ -55,20 +55,25 @@ OUTPUT_EXTENSIONS = {
 }
 
 
-def detect_input_mode(input_path: str) -> str:
+def detect_input_mode(input_path: str, output_path: str = None) -> str:
     """
     Determine if input is single file, batch directory, or discovered folder.
 
     Args:
         input_path: Input path from CLI
+        output_path: Output path from CLI (used to disambiguate batch vs Z-stack)
 
     Returns:
         'single_file': Single file or single dataset (e.g., one Precomputed dir)
         'batch_directory': Directory with multiple files to batch process
         'discovered_folder': Directory with discoverable datasets (image/segmentation)
     """
-    from ..readers.base import is_local_precomputed
+    from ..readers.base import is_local_precomputed, is_remote_path
     from ..utils.folder_discovery import discover_datasets, is_neuroglancer_precomputed
+
+    # Remote URLs (gs://, s3://, http://, precomputed://) are always single-file mode
+    if is_remote_path(input_path) or input_path.startswith('precomputed://'):
+        return 'single_file'
 
     # Check if path ends with known format extension
     ext = os.path.splitext(input_path)[1].lower()
@@ -79,6 +84,22 @@ def detect_input_mode(input_path: str) -> str:
         # Local precomputed directory (has info file) - treat as single file
         return 'single_file'
     elif os.path.isdir(input_path) or input_path.endswith('/'):
+        # Check for zarr/n5 marker files — directory IS the dataset
+        if (os.path.exists(os.path.join(input_path, '.zarray')) or
+            os.path.exists(os.path.join(input_path, '.zgroup')) or
+            os.path.exists(os.path.join(input_path, 'zarr.json')) or
+            os.path.exists(os.path.join(input_path, 'attributes.json'))):
+            return 'single_file'
+        # Check if directory is a TIFF Z-stack (numbered 2D TIFFs forming one volume)
+        from ..utils.format_loaders import is_tiff_zstack_directory
+        if is_tiff_zstack_directory(input_path):
+            # If output path looks like a directory (no .zarr/.n5 extension),
+            # the user likely wants batch mode even with 2D TIFFs
+            if output_path:
+                out_ext = os.path.splitext(output_path)[1].lower()
+                if out_ext not in ('.zarr', '.n5'):
+                    return 'batch_directory'
+            return 'single_file'
         # Check if directory contains discoverable datasets (e.g., image + segmentation)
         # This takes priority over batch_directory mode
         result = discover_datasets(input_path, verbose=False)
@@ -347,6 +368,8 @@ class BatchConverter:
         job_group: Optional[str] = None,
         skip_existing: bool = True,
         dry_run: bool = False,
+        voxel_size: Optional[str] = None,
+        voxel_unit: Optional[str] = None,
     ) -> BatchResult:
         """
         Submit batch conversion as LSF job array.
@@ -434,6 +457,10 @@ class BatchConverter:
             worker_cmd_list += ["--chunk_shape", chunk_shape]
         if shard_shape:
             worker_cmd_list += ["--shard_shape", shard_shape]
+        if voxel_size:
+            worker_cmd_list += ["--voxel_size", voxel_size]
+        if voxel_unit:
+            worker_cmd_list += ["--voxel_unit", voxel_unit]
 
         # Convert to properly quoted shell command string
         # This handles paths with spaces correctly when bsub creates its wrapper

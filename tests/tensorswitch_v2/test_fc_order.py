@@ -302,12 +302,11 @@ def main():
     # Load real IMS data subset
     print("\nLoading IMS data...")
     reader = IMSReader(input_path)
-    spec = reader.get_tensorstore_spec()
-    dask_array = spec['array']
+    store = reader.get_tensorstore()
 
     # Extract a 64-slice subset for testing (keeps test fast)
     test_slices = 64
-    test_data = dask_array[:test_slices, :512, :512].compute()
+    test_data = store[:test_slices, :512, :512].read().result()
     print(f"Test subset shape: {test_data.shape}")
     print(f"Test subset dtype: {test_data.dtype}")
     print(f"Test subset size: {test_data.nbytes / 1024 / 1024:.1f} MB")

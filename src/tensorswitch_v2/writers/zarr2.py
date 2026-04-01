@@ -501,12 +501,13 @@ class Zarr2Writer(BaseWriter):
         if getattr(self, '_expand_to_5d', False) and self._original_shape is not None:
             output_domain, expanded_data = self._expand_chunk_to_5d(chunk_domain, data)
         elif self._transpose_order is not None:
-            # Reorder axes (e.g., XYZC -> CXYZ for precomputed)
+            # Reorder data axes (e.g., Z,C,Y,X -> C,Z,Y,X for OME)
             # IMPORTANT: np.transpose creates a view with different strides but same memory
             # TensorStore needs contiguous memory, so we must copy to rearrange the data
             expanded_data = np.ascontiguousarray(np.transpose(data, self._transpose_order))
-            # Reorder the domain to match
-            output_domain = self._reorder_domain(chunk_domain, self._transpose_order)
+            # chunk_domain is already in output order (generated from output store),
+            # so no domain reordering needed — only the data needs transposing
+            output_domain = chunk_domain
         else:
             # Write directly without modification
             output_domain = chunk_domain
@@ -674,6 +675,7 @@ class Zarr2Writer(BaseWriter):
         print(f"Zarr2 metadata: using 5D expanded axes: {axes_order}")
 
         # Handle nested structure metadata (like Zarr3Writer)
+        voxel_unit = kwargs.get('voxel_unit', 'nanometer')
         if self.use_nested_structure and self._ome_structure:
             self._write_nested_metadata(
                 array_shape=array_shape,
@@ -681,7 +683,8 @@ class Zarr2Writer(BaseWriter):
                 voxel_sizes=voxel_sizes,
                 image_name=image_name,
                 ome_xml=ome_xml,
-                is_label=is_label
+                is_label=is_label,
+                voxel_unit=voxel_unit,
             )
             return
 
@@ -690,7 +693,8 @@ class Zarr2Writer(BaseWriter):
             array_shape=array_shape,
             voxel_sizes=voxel_sizes,
             image_name=image_name,
-            axes_order=axes_order
+            axes_order=axes_order,
+            voxel_unit=voxel_unit,
         )
 
         # Add image-label metadata for segmentation data
@@ -737,7 +741,8 @@ class Zarr2Writer(BaseWriter):
         voxel_sizes: Optional[Dict[str, float]],
         image_name: str,
         ome_xml: Optional[str],
-        is_label: bool
+        is_label: bool,
+        voxel_unit: str = 'nanometer',
     ) -> None:
         """
         Write metadata for OME-NGFF nested structure (Zarr2 format).
@@ -752,7 +757,7 @@ class Zarr2Writer(BaseWriter):
         for axis_name in axes_order:
             axis_lower = axis_name.lower()
             if axis_lower in ['x', 'y', 'z']:
-                axes.append({'name': axis_lower, 'type': 'space', 'unit': 'nanometer'})
+                axes.append({'name': axis_lower, 'type': 'space', 'unit': voxel_unit})
             elif axis_lower in ['c', 'channel']:
                 axes.append({'name': 'c', 'type': 'channel'})
             elif axis_lower in ['t', 'v']:
@@ -825,7 +830,8 @@ class Zarr2Writer(BaseWriter):
         array_shape: Tuple[int, ...],
         voxel_sizes: Optional[Dict[str, float]],
         image_name: str,
-        axes_order: Optional[List[str]]
+        axes_order: Optional[List[str]],
+        voxel_unit: str = 'nanometer',
     ) -> Dict:
         """Build OME-NGFF v0.4 metadata structure with proper axis detection.
 
@@ -883,7 +889,7 @@ class Zarr2Writer(BaseWriter):
             """Get unit for axis if applicable."""
             axis_lower = axis_name.lower()
             if axis_lower in ['x', 'y', 'z']:
-                return "nanometer"
+                return voxel_unit
             elif axis_lower == 't':
                 return "second"
             return None

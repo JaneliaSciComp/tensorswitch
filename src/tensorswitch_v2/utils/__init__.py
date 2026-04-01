@@ -16,6 +16,7 @@ Modules:
 """
 
 from .tensorstore_utils import (
+    get_dtype_name,
     get_tensorstore_context,
     get_kvstore_spec,
     get_input_driver,
@@ -47,6 +48,7 @@ from .metadata_utils import (
     precreate_zarr3_metadata_safely,
     extract_omero_channels,
     generate_default_label_colors,
+    write_source_metadata,
 )
 
 from .pyramid_utils import (
@@ -58,6 +60,7 @@ from .pyramid_utils import (
 from .format_loaders import (
     load_tiff_stack,
     extract_tiff_ome_metadata,
+    is_tiff_zstack_directory,
     load_nd2_stack,
     extract_nd2_ome_metadata,
     load_ims_stack,
@@ -122,6 +125,7 @@ __all__ = [
     'precreate_zarr3_metadata_safely',
     'extract_omero_channels',
     'generate_default_label_colors',
+    'write_source_metadata',
     # Pyramid utilities
     'calculate_pyramid_plan',
     'calculate_anisotropic_downsample_factors',
@@ -129,6 +133,7 @@ __all__ = [
     # Format loaders
     'load_tiff_stack',
     'extract_tiff_ome_metadata',
+    'is_tiff_zstack_directory',
     'load_nd2_stack',
     'extract_nd2_ome_metadata',
     'load_ims_stack',

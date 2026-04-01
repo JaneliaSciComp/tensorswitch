@@ -411,13 +411,29 @@ class OMEStructure:
         label_names: Optional[List[str]] = None
     ) -> None:
         """
-        Write labels container metadata.
+        Write labels container metadata, merging with existing labels.
 
         Args:
             label_names: List of label image names
         """
-        metadata = self.create_labels_container_metadata(label_names)
         path = os.path.join(self.get_labels_container_path(), 'zarr.json')
+
+        # Read existing labels to merge (avoid clobbering previous label entries)
+        existing_labels = []
+        if os.path.exists(path):
+            try:
+                with open(path, 'r') as f:
+                    existing_metadata = json.load(f)
+                existing_labels = existing_metadata.get('attributes', {}).get('ome', {}).get('labels', [])
+            except (json.JSONDecodeError, IOError):
+                pass
+
+        # Merge: union of existing + new label names, preserving order
+        new_labels = label_names or [self.config.label_name]
+        merged = list(dict.fromkeys(existing_labels + new_labels))
+
+        metadata = self.create_base_group_metadata()
+        metadata['attributes']['ome']['labels'] = merged
         self.write_metadata(path, metadata)
 
     def write_label_image_metadata(
@@ -502,6 +518,11 @@ class OMEStructure:
             new_ome['labels'] = existing_ome['labels']
 
         metadata['attributes']['ome'] = new_ome
+
+        # Preserve existing non-ome attributes (e.g., source provenance)
+        for key, value in existing_metadata.get('attributes', {}).items():
+            if key not in metadata['attributes']:
+                metadata['attributes'][key] = value
 
         # Preserve or set ome_xml at attributes level (consistent with legacy non-nested mode)
         final_ome_xml = ome_xml or existing_metadata.get('attributes', {}).get('ome_xml')
@@ -866,10 +887,26 @@ class OMEStructureZarr2:
         self,
         label_names: Optional[List[str]] = None
     ) -> None:
-        """Write labels container metadata."""
+        """Write labels container metadata, merging with existing labels."""
         path = self.get_labels_container_path()
         self._write_zgroup(path)
-        metadata = self.create_labels_container_metadata(label_names)
+
+        # Read existing labels to merge (avoid clobbering previous label entries)
+        existing_labels = []
+        zattrs_path = os.path.join(path, '.zattrs')
+        if os.path.exists(zattrs_path):
+            try:
+                with open(zattrs_path, 'r') as f:
+                    existing_metadata = json.load(f)
+                existing_labels = existing_metadata.get('labels', [])
+            except (json.JSONDecodeError, IOError):
+                pass
+
+        # Merge: union of existing + new label names, preserving order
+        new_labels = label_names or [self.config.label_name]
+        merged = list(dict.fromkeys(existing_labels + new_labels))
+
+        metadata = {"labels": merged}
         self._write_zattrs(path, metadata)
 
     def write_label_image_metadata(
@@ -934,6 +971,11 @@ class OMEStructureZarr2:
             metadata['labels'] = list(existing_labels | new_labels)
         elif 'labels' in existing_metadata and 'labels' not in metadata:
             metadata['labels'] = existing_metadata['labels']
+
+        # Preserve existing non-ome attributes (e.g., source provenance)
+        for key, value in existing_metadata.items():
+            if key not in metadata:
+                metadata[key] = value
 
         # Preserve or set ome_xml (consistent with non-nested Zarr2 mode)
         final_ome_xml = ome_xml or existing_metadata.get('ome_xml')

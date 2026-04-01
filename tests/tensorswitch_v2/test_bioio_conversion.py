@@ -42,12 +42,12 @@ def main():
     # Create BIOIO reader (forces Tier 3)
     print("\nCreating BIOIO reader...")
     reader = BIOIOReader(args.input)
-    spec = reader.get_tensorstore_spec()
+    store = reader.get_tensorstore()
     voxels = reader.get_voxel_sizes()
 
-    print(f"  Shape: {spec['schema']['shape']}")
-    print(f"  Dtype: {spec['schema']['dtype']}")
-    print(f"  Dims: {spec['schema']['dimension_names']}")
+    print(f"  Shape: {store.shape}")
+    print(f"  Dtype: {store.dtype}")
+    print(f"  Dims: {store.domain.labels}")
     print(f"  Voxels: {voxels}")
 
     # Create writer

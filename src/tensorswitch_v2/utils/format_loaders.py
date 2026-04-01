@@ -74,6 +74,77 @@ def convert_to_nanometers(value: float, unit: str) -> float:
     return float(value)
 
 
+def _find_tiff_files(directory):
+    """Find TIFF files in a directory with natural numeric sorting.
+
+    Supports .tif and .tiff extensions (case-insensitive).
+
+    Args:
+        directory: Path to directory containing TIFF files
+
+    Returns:
+        List of absolute file paths, naturally sorted
+
+    Raises:
+        ValueError: If no TIFF files found
+    """
+    import re
+    files = []
+    for entry in os.scandir(directory):
+        if entry.is_file() and entry.name.lower().endswith(('.tif', '.tiff')):
+            files.append(entry.path)
+    if not files:
+        raise ValueError(
+            f"No TIFF files (.tif/.tiff) found in: {directory}"
+        )
+    def natural_sort_key(path):
+        return [int(s) if s.isdigit() else s.lower()
+                for s in re.split(r'(\d+)', os.path.basename(path))]
+    files.sort(key=natural_sort_key)
+    return files
+
+
+def is_tiff_zstack_directory(path):
+    """Check if a directory contains a TIFF Z-stack (2D TIFF slices forming one volume).
+
+    Distinguishes between:
+    - Z-stack directory: multiple 2D TIFFs (each is a single Z-plane)
+    - Batch directory: multiple 3D TIFFs (each is an independent volume)
+
+    A TIFF is considered 2D if it has only 1 page (single image plane).
+
+    Args:
+        path: Path to check
+
+    Returns:
+        True if directory contains 2+ 2D TIFF files (a Z-stack)
+    """
+    if not os.path.isdir(path):
+        return False
+
+    tiff_files = []
+    for entry in os.scandir(path):
+        if entry.is_file() and entry.name.lower().endswith(('.tif', '.tiff')):
+            tiff_files.append(entry.path)
+            if len(tiff_files) >= 2:
+                break
+
+    if len(tiff_files) < 2:
+        return False
+
+    # Sample the first TIFF to check if it's 2D (single page) or 3D (multi-page)
+    import tifffile
+    try:
+        with tifffile.TiffFile(tiff_files[0]) as tif:
+            # A 2D slice has exactly 1 page; a 3D volume has many pages
+            if len(tif.pages) > 1:
+                return False  # 3D TIFFs → batch directory, not Z-stack
+    except Exception:
+        pass  # If we can't read it, fall back to old behavior (assume Z-stack)
+
+    return True
+
+
 def load_tiff_stack(folder_or_file):
     """
     Load TIFF data lazily to avoid memory issues with large files.
@@ -91,9 +162,17 @@ def load_tiff_stack(folder_or_file):
         # Single TIFF file - use lazy loading
         tiff_store = tifffile.imread(folder_or_file, aszarr=True)
         return da.from_zarr(tiff_store, zarr_format=2)
+    elif os.path.isdir(folder_or_file):
+        # Directory of TIFFs - try .tiff first (original behavior), then .tif
+        import glob as glob_module
+        for ext in ['*.tiff', '*.tif', '*.TIFF', '*.TIF']:
+            pattern = os.path.join(folder_or_file, ext)
+            if glob_module.glob(pattern):
+                print(f"Loading Z-stack from {folder_or_file} (pattern: {ext})")
+                return dask_imread.imread(pattern)
+        raise ValueError(f"No TIFF files (.tif/.tiff) found in: {folder_or_file}")
     else:
-        # Multiple TIFF files
-        return dask_imread.imread(folder_or_file + "/*.tiff")
+        raise ValueError(f"Path does not exist: {folder_or_file}")
 
 
 def extract_tiff_ome_metadata(tiff_file):
@@ -110,7 +189,11 @@ def extract_tiff_ome_metadata(tiff_file):
     """
     import tifffile
 
-    if not os.path.isfile(tiff_file):
+    # If path is a directory, use the first TIFF file for metadata
+    if os.path.isdir(tiff_file):
+        tiff_files = _find_tiff_files(tiff_file)
+        tiff_file = tiff_files[0]
+    elif not os.path.isfile(tiff_file):
         raise ValueError(f"TIFF file does not exist: {tiff_file}")
 
     try:

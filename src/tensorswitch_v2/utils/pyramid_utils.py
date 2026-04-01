@@ -13,6 +13,7 @@ Reference: https://github.com/janelia-cellmap/zarrify
 
 import os
 import json
+import warnings
 import numpy as np
 import math
 
@@ -55,6 +56,37 @@ def calculate_anisotropic_downsample_factors(voxel_sizes, axes_names, min_ratio=
         for i, dim in enumerate(dimensions):
             dim_ratios = tuple(dim / dimensions[j] for j in range(len(dimensions)) if j != i)
             ratios.append(dim_ratios)
+
+        # Check for ambiguous anisotropy ratios (log2 approach)
+        # Warn once when the max voxel ratio is in the middle zone between powers of 2:
+        # 0.25 < frac(log2(ratio)) < 0.75  (middle half of log2 range)
+        max_ratio_val = 1.0
+        coarse_axis, fine_axis = "", ""
+        for i in range(len(dimensions)):
+            for j in range(i + 1, len(dimensions)):
+                ratio = max(dimensions[i], dimensions[j]) / min(dimensions[i], dimensions[j])
+                if ratio > max_ratio_val:
+                    max_ratio_val = ratio
+                    if dimensions[i] >= dimensions[j]:
+                        coarse_axis = axes[i] if i < len(axes) else f"dim{i}"
+                        fine_axis = axes[j] if j < len(axes) else f"dim{j}"
+                    else:
+                        coarse_axis = axes[j] if j < len(axes) else f"dim{j}"
+                        fine_axis = axes[i] if i < len(axes) else f"dim{i}"
+        if max_ratio_val > 1.0:
+            frac_part = math.log2(max_ratio_val) % 1
+            if 0.25 < frac_part < 0.75:
+                lower_pow2 = 2 ** int(math.log2(max_ratio_val))
+                upper_pow2 = lower_pow2 * 2
+                warnings.warn(
+                    f"\nAmbiguous anisotropy ratio: {coarse_axis}/{fine_axis} voxel ratio = {max_ratio_val:.2f}, "
+                    f"which is between {lower_pow2}x and {upper_pow2}x (neither clearly one nor the other).\n"
+                    f"The default algorithm will treat this as ~{lower_pow2}x (fewer Z-skips).\n"
+                    f"If you want more isotropic voxel shapes, consider using "
+                    f"--per_level_factors to manually specify the downsampling factors.\n"
+                    f"Tip: Load your data in Fiji to inspect voxel shape and decide.",
+                    stacklevel=2,
+                )
 
         factors = []
         for (i, dim_ratios) in enumerate(ratios):
