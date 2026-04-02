@@ -98,6 +98,10 @@ def get_tensorstore_context(num_cores=None):
     if num_cores is None:
         num_cores = int(os.getenv("LSB_DJOB_NUMPROC", 1))
 
+    # Minimum 2 to prevent deadlock when TensorStore needs concurrent
+    # read + write (e.g., downsample driver reading source while writing output)
+    num_cores = max(num_cores, 2)
+
     context = {
         "data_copy_concurrency": {"limit": num_cores},
         "file_io_concurrency": {"limit": num_cores}
