@@ -1129,6 +1129,24 @@ Tested on Janelia LSF cluster:
 
 ---
 
+## Citation
+
+If you use TensorSwitch in your research, please cite it:
+
+```bibtex
+@software{chen2026tensorswitch,
+  author = {Chen, Diyi},
+  title = {TensorSwitch},
+  version = {2.0.1},
+  year = {2026},
+  url = {https://github.com/JaneliaSciComp/tensorswitch}
+}
+```
+
+GitHub also provides a "Cite this repository" button on the repo page via [`CITATION.cff`](CITATION.cff).
+
+---
+
 ## License
 
 Internal Janelia Research Campus tool.
@@ -1137,7 +1155,7 @@ Internal Janelia Research Campus tool.
 
 ## Authors
 
-- Diyi Chen (SciComp)
+- Diyi Chen (SciComp, Janelia Research Campus, HHMI)
 
 ---
 
