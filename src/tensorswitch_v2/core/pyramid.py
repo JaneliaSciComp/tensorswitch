@@ -82,21 +82,23 @@ def _calculate_downsample_memory(
     level_shape: List[int],
     shard_shape: List[int],
     dtype_size: int = 2,
+    zarr_format: str = 'zarr3',
 ) -> int:
     """
     Calculate memory in GB for a downsampling job (chained mode).
 
     In chained mode, each level reads from the previous level (not s0).
-    Memory needed:
-    - Read buffer: portion of source that maps to output shard (~8x for 2x downsample)
-    - Write buffer: output shard
-    - Processing overhead
+
+    Uses two models based on shard/chunk size:
+    - Small units (<50 MB): memory dominated by overhead, not data buffers
+    - Large units (>=50 MB): need shard-sized read/write buffers
 
     Args:
         source_shape: Shape of source array (previous level, e.g., s1 shape for s2 job)
         level_shape: Shape of target level
         shard_shape: Shard shape for output
         dtype_size: Bytes per element (default: 2 for uint16)
+        zarr_format: 'zarr3' or 'zarr2' (used for logging, not model selection)
 
     Returns:
         Memory in GB (rounded to nearest 5, min 8, max 128)
@@ -106,9 +108,21 @@ def _calculate_downsample_memory(
     # Calculate source data size
     source_size_gb = (np.prod(source_shape) * dtype_size) / (1024 ** 3)
 
-    # Calculate output shard size
+    # Calculate output shard/chunk size
     shard_size_gb = (np.prod(shard_shape) * dtype_size) / (1024 ** 3)
 
+    if shard_size_gb < 0.05:
+        # Small chunks (<50 MB): zarr2 or zarr3 non-sharded.
+        # TensorStore downsample reads a few source chunks per output chunk.
+        # Memory is dominated by Python/TensorStore overhead, not data buffers.
+        base_overhead = 4  # GB for Python, TensorStore, etc.
+        # Read amplification: ~8 source chunks per output chunk (2x2x2 spatial)
+        read_buffer_gb = min(shard_size_gb * 8, source_size_gb * 0.1)
+        total_gb = read_buffer_gb + base_overhead
+        recommended = int(math.ceil(total_gb * 1.5 / 5) * 5)
+        return max(8, min(recommended, 128))
+
+    # Large shards (>=50 MB): zarr3 sharded — need shard-sized buffers.
     # In chained mode, per-level factor is small (typically 2x per spatial dim)
     # Each output voxel needs ~8 input voxels (2x2x2 for 3D spatial)
     per_level_factor = [source_shape[i] / level_shape[i] if level_shape[i] > 0 else 1
@@ -137,6 +151,7 @@ def _calculate_downsample_wall_time(
     level_shape: List[int],
     shard_shape: List[int],
     dtype_size: int = 2,
+    zarr_format: str = 'zarr3',
 ) -> str:
     """
     Calculate wall time for a downsampling job (chained mode).
@@ -144,11 +159,16 @@ def _calculate_downsample_wall_time(
     In chained mode, each level reads from the previous level which is
     much smaller than s0, so wall time is more predictable.
 
+    Uses two models based on shard/chunk size:
+    - Small units (<50 MB): throughput model — zarr2 chunks, zarr3 non-sharded
+    - Large units (>=50 MB): per-shard model — zarr3 sharded (few large shards)
+
     Args:
         source_shape: Shape of source array (previous level)
         level_shape: Shape of target level
         shard_shape: Shard shape for output
         dtype_size: Bytes per element
+        zarr_format: 'zarr3' or 'zarr2' (used for logging, not model selection)
 
     Returns:
         Wall time string in H:MM format
@@ -160,33 +180,69 @@ def _calculate_downsample_wall_time(
     level_size_gb = (np.prod(level_shape) * dtype_size) / (1024 ** 3)
     shard_size_gb = (np.prod(shard_shape) * dtype_size) / (1024 ** 3)
 
-    # Calculate total shards
+    # Calculate total shards/chunks
     total_shards = int(np.prod(np.ceil(np.array(level_shape) / np.array(shard_shape)).astype(int)))
 
-    # Time estimation (recalibrated from H01/MICRONS benchmarks, Mar 2026):
-    # Pyramid source is always the previous Zarr level (TensorStore-native, local).
-    # TensorStore's internal thread pool pipelines reads/writes/compression efficiently.
-    # - Small shards (<1 GB): ~3 sec each
-    # - Large shards (>=1 GB): ~5 sec each
-    if shard_size_gb < 1.0:
-        minutes_per_shard = 0.05     # ~3 sec
+    # Select model based on shard/chunk size:
+    # - Small (<50 MB): many small units — zarr2 chunks OR zarr3 non-sharded
+    # - Large (>=50 MB): few large shards — zarr3 sharded
+    use_throughput_model = shard_size_gb < 0.05
+
+    if use_throughput_model:
+        # Many small chunks. Use throughput model.
+        # Pyramid is native zarr → native zarr (no format decode on either side).
+        # NFS sequential zarr read: ~150 MB/s with TensorStore async I/O.
+        read_size_gb = min(source_size_gb, level_size_gb * 8)  # read amplification
+        total_io_gb = read_size_gb + level_size_gb
+        throughput_mb_s = 150  # native zarr → native zarr on local NFS
+        throughput_minutes = (total_io_gb * 1024) / throughput_mb_s / 60
+
+        # Per-chunk overhead for pyramid (native zarr source, not external format).
+        # TensorStore reads ~4 source chunks (2x2 spatial), computes mean, writes 1 chunk.
+        # Much faster than s0 conversion which decodes ND2/TIFF/CZI.
+        if shard_size_gb < 0.001:       # < 1 MB
+            sec_per_chunk = 0.05
+        elif shard_size_gb < 0.01:      # < 10 MB (typical: 2 MB zarr2 chunks)
+            sec_per_chunk = 0.1
+        else:                           # >= 10 MB (zarr3 non-sharded with larger chunks)
+            sec_per_chunk = 0.3
+        chunk_minutes = total_shards * sec_per_chunk / 60
+
+        base_minutes = max(throughput_minutes, chunk_minutes)
+
+        # Overhead
+        if source_size_gb > 100:
+            read_overhead = 5
+        elif source_size_gb > 10:
+            read_overhead = 3
+        else:
+            read_overhead = 1
+
+        # 2x safety, round to 15 min, cap at 12 hours
+        total_minutes = int(math.ceil((base_minutes + read_overhead) * 2 / 15) * 15)
+        total_minutes = max(15, min(total_minutes, 12 * 60))
     else:
-        minutes_per_shard = 0.083    # ~5 sec
+        # Few large shards (zarr3 sharded). Per-shard time estimate.
+        # Recalibrated from H01/MICRONS benchmarks, Mar 2026.
+        # TensorStore's internal thread pool pipelines reads/writes/compression.
+        if shard_size_gb < 1.0:
+            minutes_per_shard = 0.05     # ~3 sec
+        else:
+            minutes_per_shard = 0.083    # ~5 sec
 
-    # Base time for processing
-    base_minutes = minutes_per_shard * total_shards
+        base_minutes = minutes_per_shard * total_shards
 
-    # Add overhead for source reading (based on source size, not s0)
-    if source_size_gb > 100:
-        read_overhead = 5
-    elif source_size_gb > 10:
-        read_overhead = 3
-    else:
-        read_overhead = 1
+        # Overhead for source reading
+        if source_size_gb > 100:
+            read_overhead = 5
+        elif source_size_gb > 10:
+            read_overhead = 3
+        else:
+            read_overhead = 1
 
-    # 1.5x safety margin, round to 15 min, cap at 12 hours
-    total_minutes = int(math.ceil((base_minutes + read_overhead) * 1.5 / 15) * 15)
-    total_minutes = max(15, min(total_minutes, 12 * 60))  # 15 min to 12 hours
+        # 1.5x safety margin, round to 15 min, cap at 12 hours
+        total_minutes = int(math.ceil((base_minutes + read_overhead) * 1.5 / 15) * 15)
+        total_minutes = max(15, min(total_minutes, 12 * 60))
 
     hours = total_minutes // 60
     minutes = total_minutes % 60
@@ -194,19 +250,26 @@ def _calculate_downsample_wall_time(
     return f"{hours}:{minutes:02d}"
 
 
-def _calculate_downsample_cores(memory_gb: int) -> int:
+def _calculate_downsample_cores(memory_gb: int, zarr_format: str = 'zarr3',
+                                shard_size_gb: float = 1.0) -> int:
     """
-    Calculate number of cores based on memory allocation.
+    Calculate number of cores for a pyramid downsampling job.
 
-    LSF typically allocates ~15GB per core, so we scale accordingly.
+    Small chunks (<50 MB, zarr2/zarr3 non-sharded): 1 core — I/O-bound on
+    network FS, no benefit from multiple cores. Keeps memory floor at 15 GB.
+    Large shards (>=50 MB, zarr3 sharded): scale with memory.
 
     Args:
         memory_gb: Memory in GB
+        zarr_format: 'zarr3' or 'zarr2' (unused, kept for backward compat)
+        shard_size_gb: Size of each shard/chunk in GB
 
     Returns:
         Number of cores (min 1, max 8)
     """
     import math
+    if shard_size_gb < 0.05:
+        return 1
     cores = max(1, int(math.ceil(memory_gb / 15)) * 2)
     return min(cores, 8)
 
@@ -1070,7 +1133,8 @@ echo "=========================================="
 
             if wall_time is None:
                 level_wall_time = _calculate_downsample_wall_time(
-                    source_shape, level_shape, level_shard_shape, dtype_size
+                    source_shape, level_shape, level_shard_shape, dtype_size,
+                    zarr_format=pyramid_plan.get('format', 'zarr3')
                 )
             else:
                 level_wall_time = wall_time
@@ -1316,22 +1380,29 @@ submit_and_wait() {{
             chunk_shape_str = ",".join(map(str, level_chunk_shape))
 
             # Auto-calculate resources based on source level (not s0!)
+            zarr_fmt = pyramid_plan.get('format', 'zarr3')
+            level_shard_size_gb = (np.prod(level_shard_shape) * dtype_size) / (1024 ** 3)
             if memory is None:
                 level_memory = _calculate_downsample_memory(
-                    source_shape, level_shape, level_shard_shape, dtype_size
+                    source_shape, level_shape, level_shard_shape, dtype_size,
+                    zarr_format=zarr_fmt
                 )
             else:
                 level_memory = memory
 
             if wall_time is None:
                 level_wall_time = _calculate_downsample_wall_time(
-                    source_shape, level_shape, level_shard_shape, dtype_size
+                    source_shape, level_shape, level_shard_shape, dtype_size,
+                    zarr_format=zarr_fmt
                 )
             else:
                 level_wall_time = wall_time
 
             if cores is None:
-                level_cores = _calculate_downsample_cores(level_memory)
+                level_cores = _calculate_downsample_cores(
+                    level_memory, zarr_format=zarr_fmt,
+                    shard_size_gb=level_shard_size_gb
+                )
             else:
                 level_cores = cores
 
