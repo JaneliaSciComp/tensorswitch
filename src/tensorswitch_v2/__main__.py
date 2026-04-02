@@ -443,6 +443,14 @@ Supported output formats:
         help="Force F-order (column-major) output, overriding auto-detected source order",
     )
 
+    # Spatial axis reorder
+    parser.add_argument(
+        "--axes_order", type=str, default=None,
+        help="Override output spatial axis order. Accepts any permutation of x,y,z "
+             "(e.g., 'xyz', 'zyx', 'xzy'). Default: preserve source order. "
+             "Example: ND2 source is ZYX, --axes_order xyz transposes to XYZ.",
+    )
+
     # Layout control
     parser.add_argument(
         "--expand-to-5d", action="store_true",
@@ -970,6 +978,8 @@ def submit_job(args, return_job_id=False):
         reinvoke.append("--no-nested-structure")
     if getattr(args, 'bbox', None):
         reinvoke += ["--bbox", args.bbox]
+    if getattr(args, 'axes_order', None):
+        reinvoke += ["--axes_order", args.axes_order]
     # Convert to properly quoted shell command string
     # This handles paths with spaces correctly when bsub creates its wrapper
     reinvoke_str = shlex.join(reinvoke)
@@ -1804,6 +1814,16 @@ def main(argv=None):
     # Get expand_to_5d flag (default False = preserve source layout)
     expand_to_5d = getattr(args, 'expand_to_5d', False)
 
+    # Parse --axes_order override
+    axes_order_override = None
+    if getattr(args, 'axes_order', None):
+        axes_order_override = list(args.axes_order.lower().replace(',', ''))
+        valid_spatial = {'x', 'y', 'z'}
+        if not all(a in valid_spatial for a in axes_order_override):
+            raise ValueError(f"--axes_order must contain only x, y, z, got: {args.axes_order}")
+        if len(axes_order_override) != len(set(axes_order_override)):
+            raise ValueError(f"--axes_order must not have duplicates, got: {args.axes_order}")
+
     # Parse bbox for subvolume extraction
     bbox = parse_bbox(args.bbox) if getattr(args, 'bbox', None) else None
 
@@ -1823,6 +1843,7 @@ def main(argv=None):
             is_label=is_label,
             expand_to_5d=expand_to_5d,
             bbox=bbox,
+            axes_order_override=axes_order_override,
         )
     else:
         # Full single-process conversion
@@ -1837,6 +1858,7 @@ def main(argv=None):
             is_label=is_label,
             expand_to_5d=expand_to_5d,
             bbox=bbox,
+            axes_order_override=axes_order_override,
         )
 
     # Write source provenance metadata when --bbox is used

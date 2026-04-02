@@ -68,6 +68,7 @@ class DistributedConverter:
         is_label: bool = False,
         expand_to_5d: bool = False,
         bbox: Optional[Tuple[Tuple[int, ...], Tuple[int, ...]]] = None,
+        axes_order_override: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """Convert data from reader to writer.
 
@@ -197,6 +198,30 @@ class DistributedConverter:
                     input_shape = squeezed_shape
                     axes_order = squeezed_axes
 
+        # 2c. Compute spatial axis transpose for --axes_order override
+        spatial_transpose = None
+        _target_axes_order = None
+        if axes_order_override and axes_order:
+            source_spatial = [a for a in axes_order if a.lower() in {'x', 'y', 'z'}]
+            if sorted(axes_order_override) != sorted(source_spatial):
+                raise ValueError(
+                    f"--axes_order {axes_order_override} doesn't match "
+                    f"source spatial axes {source_spatial}")
+            if axes_order_override != source_spatial:
+                # Build full target axes (non-spatial stay in place, spatial reordered)
+                target_axes = []
+                spatial_iter = iter(axes_order_override)
+                for a in axes_order:
+                    if a.lower() in {'x', 'y', 'z'}:
+                        target_axes.append(next(spatial_iter))
+                    else:
+                        target_axes.append(a)
+                perm = [axes_order.index(a) for a in target_axes]
+                spatial_transpose = tuple(perm)
+                _target_axes_order = target_axes
+                if verbose:
+                    print(f"  Axes reorder: {axes_order} -> {target_axes} (transpose: {perm})")
+
         # 3. Get metadata from reader
         # Readers return voxel sizes in nanometers when real metadata exists.
         # When no metadata, _default_voxel_sizes() returns {x:1.0, y:1.0, z:1.0} placeholder.
@@ -286,7 +311,18 @@ class DistributedConverter:
                             print(f"  Auto-capped shard shape for frame-based "
                                   f"source: {shard_shape}")
 
-        # 4. Create output spec and open store
+        # 4. Apply spatial axis reorder (--axes_order)
+        if spatial_transpose:
+            input_shape = tuple(input_shape[p] for p in spatial_transpose)
+            if chunk_shape:
+                chunk_shape = tuple(chunk_shape[p] for p in spatial_transpose)
+            if shard_shape:
+                shard_shape = tuple(shard_shape[p] for p in spatial_transpose)
+            axes_order = _target_axes_order
+            if verbose:
+                print(f"  Reordered shape: {input_shape}")
+
+        # 5. Create output spec and open store
         if verbose:
             print(f"Creating output: {self.writer}")
 
@@ -297,7 +333,8 @@ class DistributedConverter:
             shard_shape=shard_shape,
             use_fortran_order=use_fortran_order,
             axes_order=axes_order,
-            expand_to_5d=expand_to_5d
+            expand_to_5d=expand_to_5d,
+            spatial_transpose=spatial_transpose,
         )
         _delete = delete_existing if delete_existing is not None else (start_idx == 0)
         self._output_store = self.writer.open_store(

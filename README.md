@@ -250,12 +250,21 @@ pixi run python -m tensorswitch_v2 -i input.tif -o output.zarr --preset webknoss
 
 | Argument | Description |
 |----------|-------------|
+| `--axes_order` | Override output spatial axis order (e.g., `xyz`, `zyx`, `xzy`). Default: preserve source order. |
 | `--expand-to-5d` | Force 5D TCZYX expansion (legacy behavior) |
 
 **Default behavior (RFC-3 compliant)**: Source dimensionality and axis order are preserved:
 - 3D XYZ → 3D XYZ (not expanded to 5D)
 - 4D CZYX → 4D CZYX
 - Axis order preserved (XYZ stays XYZ, ZYX stays ZYX)
+
+**Axis reorder**: Use `--axes_order` when the output tool expects a specific spatial axis order different from the source. Accepts any permutation of x, y, z. Data is transposed during conversion; voxel sizes (indexed by axis name) are unaffected.
+
+```bash
+# ND2 source is ZYX, transpose to XYZ for WebKnossos
+pixi run python -m tensorswitch_v2 -i input.nd2 -o output.zarr \
+  --preset webknossos --axes_order xyz --voxel_size 160,160,400
+```
 
 **Singleton channel squeeze**: When reading neuroglancer precomputed format with `num_channels=1`, the implicit 4th channel dimension is automatically squeezed out to preserve true 3D output.
 

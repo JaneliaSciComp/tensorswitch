@@ -174,11 +174,25 @@ class Zarr3Writer(BaseWriter):
                 self._reorder_axes_for_ome(source_axes, shape_list, chunk_shape, shard_shape)
 
             self._expanded_axes = reordered_axes
-            self._transpose_order = transpose_order
 
-            if transpose_order:
-                print(f"Zarr3 reordering axes: {source_axes} -> {reordered_axes}")
-                print(f"  Shape: {shape_list} -> {reordered_shape}")
+            # Compose spatial axis reorder with OME axis reorder
+            spatial_transpose = kwargs.get('spatial_transpose')
+            if spatial_transpose:
+                if transpose_order is None:
+                    self._transpose_order = spatial_transpose
+                else:
+                    # Compose: first spatial transpose (source→intermediate),
+                    # then OME reorder (intermediate→final)
+                    self._transpose_order = tuple(
+                        spatial_transpose[transpose_order[i]]
+                        for i in range(len(transpose_order))
+                    )
+            else:
+                self._transpose_order = transpose_order
+
+            if self._transpose_order:
+                print(f"Zarr3 reordering axes: {reordered_axes}, transpose: {self._transpose_order}")
+                print(f"  Output shape: {reordered_shape}")
             else:
                 print(f"Zarr3 preserving layout: shape={shape_list}, axes={source_axes}")
 
