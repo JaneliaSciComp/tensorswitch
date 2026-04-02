@@ -366,7 +366,8 @@ def calculate_pyramid_plan(s0_path, min_array_nbytes=None, min_array_shape=None)
         factor = calculate_anisotropic_downsample_factors(current_voxel_sizes, axes_names)
 
         predicted_voxel_sizes = [v * f for v, f in zip(current_voxel_sizes, factor)]
-        predicted_shape = [max(1, s // f) for s, f in zip(current_shape, factor)]
+        # Use ceiling division to match TensorStore downsample driver behavior
+        predicted_shape = [max(1, (s + f - 1) // f) for s, f in zip(current_shape, factor)]
 
         # For Zarr3 with sharding: use inner_chunk_shape
         # For Zarr2 (no sharding): fall back to chunk_shape from source
