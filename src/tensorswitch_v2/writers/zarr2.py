@@ -917,6 +917,7 @@ class Zarr2Writer(BaseWriter):
             else:
                 scale_factors.append(1.0)
 
+        from ..utils.metadata_utils import get_software_metadata
         return {
             "multiscales": [{
                 "version": "0.4",
@@ -929,7 +930,8 @@ class Zarr2Writer(BaseWriter):
                         "scale": scale_factors
                     }]
                 }]
-            }]
+            }],
+            "_software": get_software_metadata()
         }
 
     def get_chunk_shape(self) -> Optional[Tuple[int, ...]]:

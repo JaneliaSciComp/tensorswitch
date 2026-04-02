@@ -347,6 +347,9 @@ class OMEStructure:
         if has_labels:
             metadata['attributes']['ome']['labels'] = [self.config.labels_container]
 
+        from .metadata_utils import get_software_metadata
+        metadata['attributes']['_software'] = get_software_metadata()
+
         return metadata
 
     def _adjust_dataset_paths(
@@ -861,6 +864,9 @@ class OMEStructureZarr2:
 
         if has_labels:
             metadata['labels'] = [self.config.labels_container]
+
+        from .metadata_utils import get_software_metadata
+        metadata['_software'] = get_software_metadata()
 
         return metadata
 

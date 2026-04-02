@@ -17,6 +17,16 @@ import re
 from typing import Optional, Tuple
 
 
+def get_software_metadata():
+    """Return TensorSwitch software attribution metadata."""
+    from tensorswitch_v2 import __version__
+    return {
+        "name": "TensorSwitch",
+        "version": __version__,
+        "url": "https://github.com/JaneliaSciComp/tensorswitch"
+    }
+
+
 # ============================================================================
 # Level Format Detection Utilities
 # ============================================================================
@@ -297,7 +307,8 @@ def create_zarr3_ome_metadata(ome_xml, array_shape, image_name, pixel_sizes=None
             "ome": {
                 "version": "0.5",
                 "multiscales": multiscales
-            }
+            },
+            "_software": get_software_metadata()
         }
     }
 
@@ -515,6 +526,7 @@ def update_ome_multiscale_metadata(zarr_path, max_level=4, prefix=None, include_
         })
 
     multiscales["datasets"] = datasets
+    metadata["attributes"]["_software"] = get_software_metadata()
 
     with open(zarr_json_path, 'w') as f:
         json.dump(metadata, f, indent=2)
@@ -598,6 +610,7 @@ def update_ome_multiscale_metadata_zarr2(zarr_path, max_level=4, prefix=None, in
 
     multiscales["datasets"] = datasets
     metadata["multiscales"] = [multiscales]
+    metadata["_software"] = get_software_metadata()
 
     with open(zattrs_path, 'w') as f:
         json.dump(metadata, f, indent=2)

@@ -313,6 +313,9 @@ class N5Writer(BaseWriter):
         if axes_order:
             attrs["axes"] = axes_order
 
+        from ..utils.metadata_utils import get_software_metadata
+        attrs["_software"] = get_software_metadata()
+
         return attrs
 
     def get_chunk_shape(self) -> Optional[Tuple[int, ...]]:
