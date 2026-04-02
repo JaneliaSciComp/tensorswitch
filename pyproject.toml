@@ -48,7 +48,7 @@ allow-direct-references = true
 [tool.hatch.build.targets.wheel]
 packages = ["src/tensorswitch_v2"]
 
-[tool.pixi.project]
+[tool.pixi.workspace]
 channels = ["conda-forge"]
 platforms = ["linux-64"]
 
