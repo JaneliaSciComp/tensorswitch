@@ -368,8 +368,10 @@ def generate_pyramid(
     """
     try:
         from tensorswitch_v2.core.pyramid import PyramidPlanner
+        from tensorswitch_v2.utils.pyramid_utils import resolve_downsample_method
 
         s0_path = s0_path.strip()
+        downsample_method = resolve_downsample_method(downsample_method, s0_path)
         planner = PyramidPlanner(
             s0_path,
             include_translation=True,
@@ -389,11 +391,10 @@ def generate_pyramid(
         for level_info in plan["levels"]:
             level_num = level_info["level"]
             cum_factors = level_info["cumulative_factor"]
-            output_level_path = os.path.join(parent_dir, f"s{level_num}")
 
             downsample_level(
                 s0_path=s0_path,
-                output_path=output_level_path,
+                output_path=parent_dir,
                 target_level=level_num,
                 cumulative_factors=cum_factors,
                 downsample_method=downsample_method,
@@ -402,7 +403,7 @@ def generate_pyramid(
             levels_created.append({
                 "level": f"s{level_num}",
                 "factors": cum_factors,
-                "shape": level_info["shape"],
+                "shape": level_info["predicted_shape"],
             })
 
         # Update metadata
