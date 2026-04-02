@@ -1,0 +1,21 @@
+cff-version: 1.2.0
+message: "If you use TensorSwitch, please cite it using the metadata from this file."
+type: software
+title: "TensorSwitch"
+version: "2.0.1"
+date-released: "2026-04-01"
+url: "https://github.com/JaneliaSciComp/tensorswitch"
+repository-code: "https://github.com/JaneliaSciComp/tensorswitch"
+license: BSD-3-Clause
+abstract: "A high-performance microscopy data conversion tool with TensorStore as the unified intermediate format. Supports 200+ input formats, automatic multi-scale pyramid generation, and distributed processing on LSF clusters."
+keywords:
+  - microscopy
+  - image-conversion
+  - zarr
+  - ome-ngff
+  - tensorstore
+  - bioimaging
+authors:
+  - family-names: "Chen"
+    given-names: "Diyi"
+    affiliation: "Janelia Research Campus, Howard Hughes Medical Institute"
