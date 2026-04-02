@@ -169,11 +169,13 @@ def test_real_ims_to_zarr3(chunk_count=5):
 
         print(f"\nStats: {stats}")
 
-        # Validate output - for partial processing, check that s0 array was created
-        # (zarr.json is only written when all chunks are processed)
-        s0_path = os.path.join(output_path, 's0')
-        assert os.path.exists(s0_path), f"s0 directory not created: {s0_path}"
-        assert os.path.exists(os.path.join(s0_path, 'zarr.json')), "s0/zarr.json not created"
+        # Validate output - nested OME structure puts data under raw/s0
+        s0_path = os.path.join(output_path, 'raw', 's0')
+        if not os.path.exists(s0_path):
+            # Fall back to flat structure
+            s0_path = os.path.join(output_path, 's0')
+        assert os.path.exists(s0_path), f"s0 directory not created: {output_path}/[raw/]s0"
+        assert os.path.exists(os.path.join(s0_path, 'zarr.json')), "zarr.json not created"
         assert stats['chunks_processed'] == chunk_count
 
         print("PASS: IMS -> Zarr3 (real data, partial)")
@@ -262,14 +264,17 @@ def test_real_tiff_to_zarr3(chunk_count=3):
             stop_idx=stop_idx,
             chunk_shape=(1, 512, 512),
             write_metadata=True,
-            verbose=True
+            verbose=True,
+            voxel_size_override={'x': 1.0, 'y': 1.0, 'z': 1.0},
         )
 
         print(f"\nStats: {stats}")
 
-        # Validate output
-        s0_path = os.path.join(output_path, 's0')
-        assert os.path.exists(s0_path), f"s0 directory not created: {s0_path}"
+        # Validate output - nested OME structure puts data under raw/s0
+        s0_path = os.path.join(output_path, 'raw', 's0')
+        if not os.path.exists(s0_path):
+            s0_path = os.path.join(output_path, 's0')
+        assert os.path.exists(s0_path), f"s0 directory not created: {output_path}/[raw/]s0"
         assert stats['chunks_processed'] == chunk_count
 
         print("PASS: TIFF -> Zarr3 (real data, partial)")
