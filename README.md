@@ -51,6 +51,7 @@ A high-performance microscopy data conversion tool with TensorStore as the unifi
 - **Compression**: zstd compression with configurable levels
 - **Frame-Based Optimization**: Auto-capped chunk/shard defaults for large ND2/TIFF files with frame-level read cache (63x speedup)
 - **Remote Sources**: Read from GCS, S3, HTTP URLs with optional bounding box subvolume extraction
+- **Software Attribution**: All output metadata includes `_software` field with TensorSwitch version and GitHub link
 - **MCP Server**: AI/agent integration via Model Context Protocol (Claude Code, LLM agents)
 
 ---
