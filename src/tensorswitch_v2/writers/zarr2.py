@@ -676,6 +676,8 @@ class Zarr2Writer(BaseWriter):
 
         # Handle nested structure metadata (like Zarr3Writer)
         voxel_unit = kwargs.get('voxel_unit', 'nanometer')
+        source_format = kwargs.get('source_format')
+        no_ome_meta_export = kwargs.get('no_ome_meta_export', False)
         if self.use_nested_structure and self._ome_structure:
             self._write_nested_metadata(
                 array_shape=array_shape,
@@ -685,6 +687,8 @@ class Zarr2Writer(BaseWriter):
                 ome_xml=ome_xml,
                 is_label=is_label,
                 voxel_unit=voxel_unit,
+                source_format=source_format,
+                no_ome_meta_export=no_ome_meta_export,
             )
             return
 
@@ -734,6 +738,17 @@ class Zarr2Writer(BaseWriter):
 
         print(f"Zarr2 metadata written to {self.output_path}")
 
+        # Write OME/METADATA.ome.xml (or .czi.xml) for non-nested mode
+        if ome_xml and not no_ome_meta_export:
+            from ..utils.ome_structure import write_xml_metadata_file
+            write_xml_metadata_file(
+                output_path=self.output_path,
+                xml_string=ome_xml,
+                source_format=source_format,
+                zarr_format=2,
+                image_key='',
+            )
+
     def _write_nested_metadata(
         self,
         array_shape: Tuple[int, ...],
@@ -743,6 +758,8 @@ class Zarr2Writer(BaseWriter):
         ome_xml: Optional[str],
         is_label: bool,
         voxel_unit: str = 'nanometer',
+        source_format: Optional[str] = None,
+        no_ome_meta_export: bool = False,
     ) -> None:
         """
         Write metadata for OME-NGFF nested structure (Zarr2 format).
@@ -804,7 +821,9 @@ class Zarr2Writer(BaseWriter):
                 image_multiscales=None,
                 has_labels=True,
                 image_name=image_name,
-                ome_xml=ome_xml
+                ome_xml=ome_xml,
+                source_format=source_format,
+                no_ome_meta_export=no_ome_meta_export,
             )
 
             print(f"Wrote nested labels metadata to {self.output_path}")
@@ -820,7 +839,9 @@ class Zarr2Writer(BaseWriter):
                 image_multiscales=multiscales,
                 has_labels=False,
                 image_name=image_name,
-                ome_xml=ome_xml
+                ome_xml=ome_xml,
+                source_format=source_format,
+                no_ome_meta_export=no_ome_meta_export,
             )
 
             print(f"Wrote nested image metadata to {self.output_path}")

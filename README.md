@@ -52,6 +52,7 @@ A high-performance microscopy data conversion tool with TensorStore as the unifi
 - **Frame-Based Optimization**: Auto-capped chunk/shard defaults for large ND2/TIFF files with frame-level read cache (63x speedup)
 - **Remote Sources**: Read from GCS, S3, HTTP URLs with optional bounding box subvolume extraction
 - **Software Attribution**: All output metadata includes `_software` field with TensorSwitch version and GitHub link
+- **OME XML Export**: Writes `OME/METADATA.ome.xml` (or `.czi.xml`) as standalone file for easy access and tool compatibility
 - **MCP Server**: AI/agent integration via Model Context Protocol (Claude Code, LLM agents)
 
 ---
@@ -225,6 +226,7 @@ pixi run python -m tensorswitch_v2 -i input.tif -o output.zarr --preset webknoss
 | `--wall_time` | Wall time (H:MM) | Auto-calculated |
 | `--cores` | Number of cores | Auto-calculated |
 | `--job_group` | LSF job group | `/scicompsoft/chend/tensorstore` |
+| `--log_dir` | Directory for LSF log files | `{output_parent}/output/` |
 
 ### Batch Processing
 
@@ -313,6 +315,7 @@ pixi run python -m tensorswitch_v2 \
 | `--voxel_size` | Override voxel size, comma-separated X,Y,Z (e.g., `160,160,400`). Values are in nanometers by default, or in the unit specified by `--voxel_unit`. |
 | `--voxel_unit` | Override spatial unit in OME metadata: `nanometer`, `micrometer`, `millimeter`. When set, voxel sizes are written as-is in this unit. |
 | `--no-translation` | Disable translation transforms in OME-NGFF multiscale metadata. Default: translation ON (for Neuroglancer alignment). |
+| `--no_ome_meta_export` | Disable writing `OME/METADATA.ome.xml` (or `.czi.xml`) file. Default: ON when source has XML metadata. |
 
 **Use case**: When source files lack embedded voxel size metadata (e.g., raw TIFF stacks, flat Zarr arrays). If a source file has no voxel metadata and `--voxel_size` is not provided, the converter will error rather than silently guessing.
 
@@ -571,6 +574,9 @@ Zarr3 output uses OME-NGFF spec-compliant nested structure:
 ```
 output.zarr/
 ├── zarr.json                 # Root metadata
+├── OME/                      # XML metadata (when source has XML)
+│   ├── zarr.json             # Zarr group with "series" attribute
+│   └── METADATA.ome.xml      # Standalone OME-XML file
 ├── raw/                      # Image data (for --data-type image)
 │   ├── zarr.json
 │   └── s0/, s1/...
@@ -580,6 +586,8 @@ output.zarr/
         ├── zarr.json         # Includes image-label colors
         └── s0/, s1/...
 ```
+
+**OME XML Export**: When the source file contains XML metadata, TensorSwitch writes it as a standalone file under `OME/` for easy access by tools like raw2ometiff and OMERO. For OME XML sources (ND2, TIFF, Bio-Formats), writes `METADATA.ome.xml`. For CZI sources (Zeiss proprietary XML), writes `METADATA.czi.xml`. Use `--no_ome_meta_export` to disable.
 
 **CLI Options:**
 

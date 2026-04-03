@@ -476,7 +476,9 @@ class OMEStructure:
         image_multiscales: Optional[Dict] = None,
         has_labels: bool = False,
         image_name: str = 'image',
-        ome_xml: Optional[str] = None
+        ome_xml: Optional[str] = None,
+        source_format: Optional[str] = None,
+        no_ome_meta_export: bool = False,
     ) -> None:
         """
         Write root zarr.json metadata, merging with existing if present.
@@ -486,6 +488,8 @@ class OMEStructure:
             has_labels: Whether labels directory exists
             image_name: Name for image multiscales
             ome_xml: Raw OME-XML string from source data (stored at attributes.ome_xml)
+            source_format: Source format identifier (e.g., 'czi', 'nd2', 'tiff')
+            no_ome_meta_export: If True, skip writing OME/METADATA.ome.xml file
         """
         path = os.path.join(self.output_path, 'zarr.json')
 
@@ -533,6 +537,16 @@ class OMEStructure:
             metadata['attributes']['ome_xml'] = final_ome_xml
 
         self.write_metadata(path, metadata)
+
+        # Write OME/METADATA.ome.xml (or .czi.xml) file
+        if final_ome_xml and not no_ome_meta_export:
+            write_xml_metadata_file(
+                output_path=self.output_path,
+                xml_string=final_ome_xml,
+                source_format=source_format,
+                zarr_format=3,
+                image_key=self.config.image_key,
+            )
 
     def write_all_metadata(
         self,
@@ -943,7 +957,9 @@ class OMEStructureZarr2:
         image_multiscales: Optional[Dict] = None,
         has_labels: bool = False,
         image_name: str = 'image',
-        ome_xml: Optional[str] = None
+        ome_xml: Optional[str] = None,
+        source_format: Optional[str] = None,
+        no_ome_meta_export: bool = False,
     ) -> None:
         """Write root .zattrs metadata, merging with existing if present."""
         self._write_zgroup(self.output_path)
@@ -989,3 +1005,98 @@ class OMEStructureZarr2:
             metadata['ome_xml'] = final_ome_xml
 
         self._write_zattrs(self.output_path, metadata)
+
+        # Write OME/METADATA.ome.xml (or .czi.xml) file
+        if final_ome_xml and not no_ome_meta_export:
+            write_xml_metadata_file(
+                output_path=self.output_path,
+                xml_string=final_ome_xml,
+                source_format=source_format,
+                zarr_format=2,
+                image_key=self.config.image_key,
+            )
+
+
+# ============================================================================
+# Standalone XML Metadata File Writer
+# ============================================================================
+
+def write_xml_metadata_file(
+    output_path: str,
+    xml_string: str,
+    source_format: Optional[str],
+    zarr_format: int = 3,
+    image_key: str = 'raw',
+) -> None:
+    """
+    Write OME/METADATA.ome.xml (or OME/METADATA.czi.xml) as a standalone file.
+
+    Creates an OME/ zarr group with a "series" attribute listing image paths,
+    and writes the XML metadata as a separate file for easy access.
+
+    For true OME XML sources (ND2, TIFF, Bio-Formats): writes METADATA.ome.xml
+    For CZI sources (Zeiss proprietary XML): writes METADATA.czi.xml
+
+    Args:
+        output_path: Root path of the zarr container (e.g., /data/output.zarr)
+        xml_string: The XML metadata string to write
+        source_format: Source format identifier (e.g., 'czi', 'nd2', 'tiff')
+        zarr_format: Zarr format version (2 or 3)
+        image_key: Image group name for nested structure (e.g., 'raw', or ''
+                   for non-nested)
+    """
+    ome_dir = os.path.join(output_path, "OME")
+    os.makedirs(ome_dir, exist_ok=True)
+
+    # Determine filename based on source format
+    if source_format and source_format.lower() == 'czi':
+        xml_filename = "METADATA.czi.xml"
+    else:
+        xml_filename = "METADATA.ome.xml"
+
+    # Write zarr group marker for the OME directory
+    series_value = [image_key] if image_key else [""]
+    if zarr_format == 3:
+        zarr_json = {
+            "zarr_format": 3,
+            "node_type": "group",
+            "attributes": {
+                "series": series_value
+            }
+        }
+        with open(os.path.join(ome_dir, "zarr.json"), 'w') as f:
+            json.dump(zarr_json, f, indent=2)
+    else:
+        # Zarr2: .zgroup + .zattrs
+        with open(os.path.join(ome_dir, ".zgroup"), 'w') as f:
+            json.dump({"zarr_format": 2}, f, indent=2)
+        with open(os.path.join(ome_dir, ".zattrs"), 'w') as f:
+            json.dump({"series": series_value}, f, indent=2)
+
+    # Pretty-print XML if possible
+    formatted_xml = xml_string
+    try:
+        from xml.dom.minidom import parseString
+        dom = parseString(xml_string)
+        pretty = dom.toprettyxml(indent="  ", encoding="UTF-8")
+        # toprettyxml with encoding returns bytes; decode to str
+        formatted_xml = pretty.decode('utf-8')
+        # Remove duplicate XML declaration if the original already had one
+        # toprettyxml always adds one, so if there are two, remove the first
+        lines = formatted_xml.split('\n')
+        xml_decl_count = sum(1 for l in lines if l.strip().startswith('<?xml'))
+        if xml_decl_count > 1:
+            # Remove the first XML declaration (added by toprettyxml)
+            for i, line in enumerate(lines):
+                if line.strip().startswith('<?xml'):
+                    lines.pop(i)
+                    break
+            formatted_xml = '\n'.join(lines)
+    except Exception:
+        pass  # Fall back to raw XML string
+
+    xml_path = os.path.join(ome_dir, xml_filename)
+    with open(xml_path, 'w', encoding='utf-8') as f:
+        f.write(formatted_xml)
+
+    print(f"Wrote {xml_filename} to {ome_dir}")

@@ -69,6 +69,7 @@ class DistributedConverter:
         expand_to_5d: bool = False,
         bbox: Optional[Tuple[Tuple[int, ...], Tuple[int, ...]]] = None,
         axes_order_override: Optional[List[str]] = None,
+        no_ome_meta_export: bool = False,
     ) -> Dict[str, Any]:
         """Convert data from reader to writer.
 
@@ -76,6 +77,7 @@ class DistributedConverter:
             bbox: Optional (origin, size) tuple for subvolume extraction.
                   origin and size are 3-tuples in source dimension order.
                   Spatial dimensions are auto-detected from domain labels.
+            no_ome_meta_export: If True, skip writing OME/METADATA.ome.xml file.
         """
         start_time = time.time()
 
@@ -262,9 +264,12 @@ class DistributedConverter:
             ome_metadata = None
 
         ome_xml = None
+        source_format = None
         try:
             raw_metadata = self.reader.get_metadata()
             ome_xml = raw_metadata.get('ome_xml') or raw_metadata.get('raw_xml')
+            source_format = raw_metadata.get('source_format',
+                                             self.reader.__class__.__name__.replace('Reader', '').lower())
         except Exception:
             pass
 
@@ -441,7 +446,9 @@ class DistributedConverter:
                     axes_order=axes_order,
                     ome_xml=ome_xml,
                     image_name=image_name,
-                    is_label=is_label
+                    is_label=is_label,
+                    source_format=source_format,
+                    no_ome_meta_export=no_ome_meta_export,
                 )
                 root_path = os.path.dirname(self.writer.output_path)
                 if root_path and os.path.basename(self.writer.output_path) == 's0':

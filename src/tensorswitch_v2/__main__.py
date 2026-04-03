@@ -427,6 +427,10 @@ Supported output formats:
         help="Directory for LSF log files (default: output/ next to the output path)",
     )
     parser.add_argument(
+        "--no_ome_meta_export", action="store_true",
+        help="Disable writing OME/METADATA.ome.xml (or .czi.xml) file",
+    )
+    parser.add_argument(
         "--use_bioio", action="store_true",
         help="Force BIOIO adapter (Tier 3) instead of auto-detected Tier 2 reader",
     )
@@ -986,6 +990,8 @@ def submit_job(args, return_job_id=False):
         reinvoke += ["--axes_order", args.axes_order]
     if args.log_dir:
         reinvoke += ["--log_dir", args.log_dir]
+    if getattr(args, 'no_ome_meta_export', False):
+        reinvoke.append("--no_ome_meta_export")
     # Convert to properly quoted shell command string
     # This handles paths with spaces correctly when bsub creates its wrapper
     reinvoke_str = shlex.join(reinvoke)
@@ -1101,6 +1107,8 @@ def submit_downsample_job(args, cumulative_factors):
         reinvoke.append("--quiet")
     if args.log_dir:
         reinvoke += ["--log_dir", args.log_dir]
+    if getattr(args, 'no_ome_meta_export', False):
+        reinvoke.append("--no_ome_meta_export")
 
     # Convert to properly quoted shell command string
     # This handles paths with spaces correctly when bsub creates its wrapper
@@ -1837,6 +1845,8 @@ def main(argv=None):
     # Parse bbox for subvolume extraction
     bbox = parse_bbox(args.bbox) if getattr(args, 'bbox', None) else None
 
+    no_ome_meta_export = getattr(args, 'no_ome_meta_export', False)
+
     if args.start_idx is not None:
         # Manual chunk-range mode (for bsub workers)
         converter.convert(
@@ -1854,6 +1864,7 @@ def main(argv=None):
             expand_to_5d=expand_to_5d,
             bbox=bbox,
             axes_order_override=axes_order_override,
+            no_ome_meta_export=no_ome_meta_export,
         )
     else:
         # Full single-process conversion
@@ -1869,6 +1880,7 @@ def main(argv=None):
             expand_to_5d=expand_to_5d,
             bbox=bbox,
             axes_order_override=axes_order_override,
+            no_ome_meta_export=no_ome_meta_export,
         )
 
     # Write source provenance metadata when --bbox is used
