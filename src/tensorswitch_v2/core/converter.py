@@ -414,6 +414,9 @@ class DistributedConverter:
                           f"({rate:.1f} chunks/s, ETA: {eta/60:.1f}m)")
                     last_report_time = time.time()
 
+            except KeyboardInterrupt:
+                print(f"\nInterrupted at chunk {idx}. Exiting...")
+                raise
             except Exception as e:
                 if verbose:
                     print(f"  Warning: Skipping chunk {idx}: {e}")
