@@ -423,6 +423,10 @@ Supported output formats:
         help="LSF job group path (default: /scicompsoft/chend/tensorstore)",
     )
     parser.add_argument(
+        "--log_dir", type=str, default=None,
+        help="Directory for LSF log files (default: output/ next to the output path)",
+    )
+    parser.add_argument(
         "--use_bioio", action="store_true",
         help="Force BIOIO adapter (Tier 3) instead of auto-detected Tier 2 reader",
     )
@@ -913,9 +917,9 @@ def submit_job(args, return_job_id=False):
     job_name = f"tsv2_{input_ext}_to_{args.output_format}_{input_stem}"
     job_name = job_name.replace(" ", "_")[:128]
 
-    # Log directory next to output
+    # Log directory: user-specified or default next to output
     output_parent = os.path.dirname(os.path.abspath(args.output))
-    log_dir = os.path.join(output_parent, "output")
+    log_dir = args.log_dir or os.path.join(output_parent, "output")
     os.makedirs(log_dir, exist_ok=True)
 
     log_path = os.path.join(log_dir, f"output__{job_name}_%J.log")
@@ -980,6 +984,8 @@ def submit_job(args, return_job_id=False):
         reinvoke += ["--bbox", args.bbox]
     if getattr(args, 'axes_order', None):
         reinvoke += ["--axes_order", args.axes_order]
+    if args.log_dir:
+        reinvoke += ["--log_dir", args.log_dir]
     # Convert to properly quoted shell command string
     # This handles paths with spaces correctly when bsub creates its wrapper
     reinvoke_str = shlex.join(reinvoke)
@@ -1061,9 +1067,9 @@ def submit_downsample_job(args, cumulative_factors):
     job_name = f"tsv2_ds_s{args.target_level}_{input_name}"
     job_name = job_name.replace(" ", "_")[:128]
 
-    # Log directory next to output
+    # Log directory: user-specified or default next to output
     output_parent = os.path.dirname(os.path.abspath(args.output))
-    log_dir = os.path.join(output_parent, "output")
+    log_dir = args.log_dir or os.path.join(output_parent, "output")
     os.makedirs(log_dir, exist_ok=True)
 
     log_path = os.path.join(log_dir, f"output__{job_name}_%J.log")
@@ -1093,6 +1099,8 @@ def submit_downsample_job(args, cumulative_factors):
         reinvoke += ["--downsample_method", resolved_method]
     if args.quiet:
         reinvoke.append("--quiet")
+    if args.log_dir:
+        reinvoke += ["--log_dir", args.log_dir]
 
     # Convert to properly quoted shell command string
     # This handles paths with spaces correctly when bsub creates its wrapper
@@ -1604,6 +1612,7 @@ def main(argv=None):
                         verbose=False,  # Reduce output in batch mode
                         custom_per_level_factors=custom_per_level_factors,
                         include_translation=not args.no_translation,
+                        log_dir=getattr(args, 'log_dir', None),
                     )
                     coordinator_jid = result.get('coordinator_job_id')
                     num_levels = result.get('pyramid_plan', {}).get('num_levels', 0)
@@ -1650,6 +1659,7 @@ def main(argv=None):
                 verbose=verbose,
                 custom_per_level_factors=custom_per_level_factors,
                 include_translation=not args.no_translation,
+                log_dir=getattr(args, 'log_dir', None),
             )
             num_levels = result.get('pyramid_plan', {}).get('num_levels', 0)
             coordinator_job_id = result.get('coordinator_job_id')

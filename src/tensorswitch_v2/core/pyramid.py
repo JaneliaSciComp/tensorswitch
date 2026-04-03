@@ -927,6 +927,7 @@ echo "================================================================"
         level_job_ids: List[str],
         project: str,
         verbose: bool = True,
+        log_dir: Optional[str] = None,
     ) -> Optional[str]:
         """
         Submit a coordinator job that waits for all level jobs and updates metadata.
@@ -961,7 +962,8 @@ echo "================================================================"
         job_name = f"tsv2_coord_{dataset_name}"[:128]
 
         # Log/script directory - use shared filesystem
-        log_dir = os.path.join(os.path.dirname(self.root_path), "output")
+        if not log_dir:
+            log_dir = os.path.join(os.path.dirname(self.root_path), "output")
         os.makedirs(log_dir, exist_ok=True)
         log_path = os.path.join(log_dir, f"output__{job_name}_%J.log")
         error_path = os.path.join(log_dir, f"error__{job_name}_%J.log")
@@ -1052,6 +1054,7 @@ echo "=========================================="
         downsample_method: str = "auto",
         dry_run: bool = False,
         verbose: bool = True,
+        log_dir: Optional[str] = None,
     ) -> str:
         """
         Submit chained pyramid generation via a coordinator job.
@@ -1096,10 +1099,12 @@ echo "=========================================="
             cores=cores,
             use_shard=use_shard,
             downsample_method=downsample_method,
+            log_dir=log_dir,
         )
 
         # Write script to shared filesystem
-        log_dir = os.path.join(os.path.dirname(self.root_path), "output")
+        if not log_dir:
+            log_dir = os.path.join(os.path.dirname(self.root_path), "output")
         os.makedirs(log_dir, exist_ok=True)
 
         dataset_name = os.path.basename(self.root_path)
@@ -1207,6 +1212,7 @@ echo "=========================================="
         cores: Optional[int] = None,
         use_shard: bool = True,
         downsample_method: str = "auto",
+        log_dir: Optional[str] = None,
     ) -> str:
         """
         Generate bash script for chained pyramid generation.
@@ -1295,7 +1301,8 @@ submit_and_wait() {{
         -P {project} \\
         --memory $mem \\
         --wall_time $wtime \\
-        --cores $ncores \\
+        --cores $ncores \\{f"""
+        --log_dir {shlex.quote(log_dir)} \\""" if log_dir else ""}
         2>&1)
 
     job_ids=$(echo "$output" | extract_job_ids | tr '\\n' ' ')
@@ -1510,6 +1517,7 @@ def create_pyramid_parallel(
     verbose: bool = True,
     custom_per_level_factors: Optional[List[List[int]]] = None,
     include_translation: bool = True,
+    log_dir: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Convenience function to create full pyramid with chained job submission.
@@ -1583,7 +1591,8 @@ def create_pyramid_parallel(
         use_shard=use_shard,
         downsample_method=resolved_method,
         dry_run=dry_run,
-        verbose=verbose
+        verbose=verbose,
+        log_dir=log_dir,
     )
 
     return {
