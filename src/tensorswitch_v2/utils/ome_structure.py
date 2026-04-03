@@ -479,6 +479,7 @@ class OMEStructure:
         ome_xml: Optional[str] = None,
         source_format: Optional[str] = None,
         no_ome_meta_export: bool = False,
+        no_ome_xml_attr: bool = False,
     ) -> None:
         """
         Write root zarr.json metadata, merging with existing if present.
@@ -490,6 +491,7 @@ class OMEStructure:
             ome_xml: Raw OME-XML string from source data (stored at attributes.ome_xml)
             source_format: Source format identifier (e.g., 'czi', 'nd2', 'tiff')
             no_ome_meta_export: If True, skip writing OME/METADATA.ome.xml file
+            no_ome_xml_attr: If True, skip embedding OME/CZI XML in zarr.json
         """
         path = os.path.join(self.output_path, 'zarr.json')
 
@@ -533,7 +535,7 @@ class OMEStructure:
 
         # Preserve or set ome_xml at attributes level (consistent with legacy non-nested mode)
         final_ome_xml = ome_xml or existing_metadata.get('attributes', {}).get('ome_xml')
-        if final_ome_xml:
+        if final_ome_xml and not no_ome_xml_attr:
             metadata['attributes']['ome_xml'] = final_ome_xml
 
         self.write_metadata(path, metadata)
@@ -960,6 +962,7 @@ class OMEStructureZarr2:
         ome_xml: Optional[str] = None,
         source_format: Optional[str] = None,
         no_ome_meta_export: bool = False,
+        no_ome_xml_attr: bool = False,
     ) -> None:
         """Write root .zattrs metadata, merging with existing if present."""
         self._write_zgroup(self.output_path)
@@ -1001,7 +1004,7 @@ class OMEStructureZarr2:
 
         # Preserve or set ome_xml (consistent with non-nested Zarr2 mode)
         final_ome_xml = ome_xml or existing_metadata.get('ome_xml')
-        if final_ome_xml:
+        if final_ome_xml and not no_ome_xml_attr:
             metadata['ome_xml'] = final_ome_xml
 
         self._write_zattrs(self.output_path, metadata)

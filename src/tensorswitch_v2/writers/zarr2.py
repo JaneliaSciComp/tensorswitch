@@ -678,6 +678,7 @@ class Zarr2Writer(BaseWriter):
         voxel_unit = kwargs.get('voxel_unit', 'nanometer')
         source_format = kwargs.get('source_format')
         no_ome_meta_export = kwargs.get('no_ome_meta_export', False)
+        no_ome_xml_attr = kwargs.get('no_ome_xml_attr', False)
         if self.use_nested_structure and self._ome_structure:
             self._write_nested_metadata(
                 array_shape=array_shape,
@@ -689,6 +690,7 @@ class Zarr2Writer(BaseWriter):
                 voxel_unit=voxel_unit,
                 source_format=source_format,
                 no_ome_meta_export=no_ome_meta_export,
+                no_ome_xml_attr=no_ome_xml_attr,
             )
             return
 
@@ -723,7 +725,7 @@ class Zarr2Writer(BaseWriter):
                 }
 
         # Add ome_xml to metadata if provided
-        if ome_xml:
+        if ome_xml and not no_ome_xml_attr:
             ome_metadata['ome_xml'] = ome_xml
 
         # Write root .zgroup
@@ -760,6 +762,7 @@ class Zarr2Writer(BaseWriter):
         voxel_unit: str = 'nanometer',
         source_format: Optional[str] = None,
         no_ome_meta_export: bool = False,
+        no_ome_xml_attr: bool = False,
     ) -> None:
         """
         Write metadata for OME-NGFF nested structure (Zarr2 format).
@@ -824,6 +827,7 @@ class Zarr2Writer(BaseWriter):
                 ome_xml=ome_xml,
                 source_format=source_format,
                 no_ome_meta_export=no_ome_meta_export,
+                no_ome_xml_attr=no_ome_xml_attr,
             )
 
             print(f"Wrote nested labels metadata to {self.output_path}")
@@ -842,6 +846,7 @@ class Zarr2Writer(BaseWriter):
                 ome_xml=ome_xml,
                 source_format=source_format,
                 no_ome_meta_export=no_ome_meta_export,
+                no_ome_xml_attr=no_ome_xml_attr,
             )
 
             print(f"Wrote nested image metadata to {self.output_path}")

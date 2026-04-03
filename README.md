@@ -316,6 +316,7 @@ pixi run python -m tensorswitch_v2 \
 | `--voxel_unit` | Override spatial unit in OME metadata: `nanometer`, `micrometer`, `millimeter`. When set, voxel sizes are written as-is in this unit. |
 | `--no-translation` | Disable translation transforms in OME-NGFF multiscale metadata. Default: translation ON (for Neuroglancer alignment). |
 | `--no_ome_meta_export` | Disable writing `OME/METADATA.ome.xml` (or `.czi.xml`) file. Default: ON when source has XML metadata. |
+| `--no_ome_xml_attr` | Do not embed OME/CZI XML in zarr.json/.zattrs. Keeps standalone XML file. Reduces metadata size for faster loading. |
 
 **Use case**: When source files lack embedded voxel size metadata (e.g., raw TIFF stacks, flat Zarr arrays). If a source file has no voxel metadata and `--voxel_size` is not provided, the converter will error rather than silently guessing.
 
@@ -587,7 +588,7 @@ output.zarr/
         └── s0/, s1/...
 ```
 
-**OME XML Export**: When the source file contains XML metadata, TensorSwitch writes it as a standalone file under `OME/` for easy access by tools like raw2ometiff and OMERO. For OME XML sources (ND2, TIFF, Bio-Formats), writes `METADATA.ome.xml`. For CZI sources (Zeiss proprietary XML), writes `METADATA.czi.xml`. Use `--no_ome_meta_export` to disable.
+**OME XML Export**: When the source file contains XML metadata, TensorSwitch writes it as a standalone file under `OME/` for easy access by tools like raw2ometiff and OMERO. For OME XML sources (ND2, TIFF, Bio-Formats), writes `METADATA.ome.xml`. For CZI sources (Zeiss proprietary XML), writes `METADATA.czi.xml`. Use `--no_ome_meta_export` to disable. Use `--no_ome_xml_attr` to skip embedding XML in zarr.json/.zattrs (reduces metadata size for faster loading).
 
 **CLI Options:**
 

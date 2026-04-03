@@ -431,6 +431,10 @@ Supported output formats:
         help="Disable writing OME/METADATA.ome.xml (or .czi.xml) file",
     )
     parser.add_argument(
+        "--no_ome_xml_attr", action="store_true",
+        help="Do not embed OME/CZI XML in zarr.json/.zattrs (keeps standalone XML file)",
+    )
+    parser.add_argument(
         "--use_bioio", action="store_true",
         help="Force BIOIO adapter (Tier 3) instead of auto-detected Tier 2 reader",
     )
@@ -992,6 +996,8 @@ def submit_job(args, return_job_id=False):
         reinvoke += ["--log_dir", args.log_dir]
     if getattr(args, 'no_ome_meta_export', False):
         reinvoke.append("--no_ome_meta_export")
+    if getattr(args, 'no_ome_xml_attr', False):
+        reinvoke.append("--no_ome_xml_attr")
     # Convert to properly quoted shell command string
     # This handles paths with spaces correctly when bsub creates its wrapper
     reinvoke_str = shlex.join(reinvoke)
@@ -1109,6 +1115,8 @@ def submit_downsample_job(args, cumulative_factors):
         reinvoke += ["--log_dir", args.log_dir]
     if getattr(args, 'no_ome_meta_export', False):
         reinvoke.append("--no_ome_meta_export")
+    if getattr(args, 'no_ome_xml_attr', False):
+        reinvoke.append("--no_ome_xml_attr")
 
     # Convert to properly quoted shell command string
     # This handles paths with spaces correctly when bsub creates its wrapper
@@ -1846,6 +1854,7 @@ def main(argv=None):
     bbox = parse_bbox(args.bbox) if getattr(args, 'bbox', None) else None
 
     no_ome_meta_export = getattr(args, 'no_ome_meta_export', False)
+    no_ome_xml_attr = getattr(args, 'no_ome_xml_attr', False)
 
     if args.start_idx is not None:
         # Manual chunk-range mode (for bsub workers)
@@ -1865,6 +1874,7 @@ def main(argv=None):
             bbox=bbox,
             axes_order_override=axes_order_override,
             no_ome_meta_export=no_ome_meta_export,
+            no_ome_xml_attr=no_ome_xml_attr,
         )
     else:
         # Full single-process conversion
@@ -1881,6 +1891,7 @@ def main(argv=None):
             bbox=bbox,
             axes_order_override=axes_order_override,
             no_ome_meta_export=no_ome_meta_export,
+            no_ome_xml_attr=no_ome_xml_attr,
         )
 
     # Write source provenance metadata when --bbox is used

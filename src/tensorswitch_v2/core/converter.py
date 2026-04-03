@@ -70,6 +70,7 @@ class DistributedConverter:
         bbox: Optional[Tuple[Tuple[int, ...], Tuple[int, ...]]] = None,
         axes_order_override: Optional[List[str]] = None,
         no_ome_meta_export: bool = False,
+        no_ome_xml_attr: bool = False,
     ) -> Dict[str, Any]:
         """Convert data from reader to writer.
 
@@ -78,6 +79,7 @@ class DistributedConverter:
                   origin and size are 3-tuples in source dimension order.
                   Spatial dimensions are auto-detected from domain labels.
             no_ome_meta_export: If True, skip writing OME/METADATA.ome.xml file.
+            no_ome_xml_attr: If True, skip embedding OME/CZI XML in zarr.json/.zattrs.
         """
         start_time = time.time()
 
@@ -449,6 +451,7 @@ class DistributedConverter:
                     is_label=is_label,
                     source_format=source_format,
                     no_ome_meta_export=no_ome_meta_export,
+                    no_ome_xml_attr=no_ome_xml_attr,
                 )
                 root_path = os.path.dirname(self.writer.output_path)
                 if root_path and os.path.basename(self.writer.output_path) == 's0':

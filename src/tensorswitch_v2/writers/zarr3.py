@@ -690,6 +690,7 @@ class Zarr3Writer(BaseWriter):
         voxel_unit = kwargs.get('voxel_unit', 'nanometer')
         source_format = kwargs.get('source_format')
         no_ome_meta_export = kwargs.get('no_ome_meta_export', False)
+        no_ome_xml_attr = kwargs.get('no_ome_xml_attr', False)
         if self.use_nested_structure and self._ome_structure:
             self._write_nested_metadata(
                 array_shape=array_shape,
@@ -701,6 +702,7 @@ class Zarr3Writer(BaseWriter):
                 voxel_unit=voxel_unit,
                 source_format=source_format,
                 no_ome_meta_export=no_ome_meta_export,
+                no_ome_xml_attr=no_ome_xml_attr,
             )
         else:
             # Legacy: write single metadata file at root
@@ -714,6 +716,8 @@ class Zarr3Writer(BaseWriter):
                 is_label=is_label,
                 spatial_unit=voxel_unit,
             )
+            if no_ome_xml_attr:
+                full_metadata.get('attributes', {}).pop('ome_xml', None)
             write_zarr3_group_metadata(self.output_path, full_metadata)
 
             # Write OME/METADATA.ome.xml (or .czi.xml) for non-nested mode
@@ -738,6 +742,7 @@ class Zarr3Writer(BaseWriter):
         voxel_unit: str = 'nanometer',
         source_format: Optional[str] = None,
         no_ome_meta_export: bool = False,
+        no_ome_xml_attr: bool = False,
     ) -> None:
         """
         Write metadata for OME-NGFF nested structure.
@@ -804,6 +809,7 @@ class Zarr3Writer(BaseWriter):
                 ome_xml=ome_xml,
                 source_format=source_format,
                 no_ome_meta_export=no_ome_meta_export,
+                no_ome_xml_attr=no_ome_xml_attr,
             )
 
             print(f"Wrote nested labels metadata to {self.output_path}")
@@ -822,6 +828,7 @@ class Zarr3Writer(BaseWriter):
                 ome_xml=ome_xml,
                 source_format=source_format,
                 no_ome_meta_export=no_ome_meta_export,
+                no_ome_xml_attr=no_ome_xml_attr,
             )
 
             print(f"Wrote nested image metadata to {self.output_path}")
