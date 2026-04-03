@@ -27,6 +27,35 @@ def get_software_metadata():
     }
 
 
+def validate_axis_voxel_consistency(axes, scale_factors):
+    """Warn if axis labels appear inconsistent with voxel sizes.
+
+    For anisotropic data where exactly 2 of 3 spatial voxel sizes are equal,
+    those two should be x and y, and the different one should be z.
+    This catches a common mislabeling error (e.g. writing z,y,x when data is x,y,z).
+    """
+    if not axes or not scale_factors:
+        return
+    spatial = []
+    for ax, s in zip(axes, scale_factors):
+        name = ax.get("name", ax) if isinstance(ax, dict) else ax
+        ax_type = ax.get("type", "space") if isinstance(ax, dict) else "space"
+        if name.lower() in ("x", "y", "z") and ax_type == "space":
+            spatial.append((name.lower(), s))
+    if len(spatial) != 3:
+        return
+    sizes = [s for _, s in spatial]
+    if len(set(sizes)) != 2:
+        return  # isotropic or all-different — can't validate
+    vs = {name: size for name, size in spatial}
+    vx, vy, vz = vs.get("x"), vs.get("y"), vs.get("z")
+    if vx == vy and vx != vz:
+        return  # correct: x=y, z different
+    print(f"WARNING: Axis labels may be incorrect — voxel sizes x={vx}, y={vy}, z={vz}. "
+          f"For anisotropic data, x and y should have equal voxel size and z should differ. "
+          f"Check if axis labels are swapped.")
+
+
 # ============================================================================
 # Level Format Detection Utilities
 # ============================================================================
@@ -470,6 +499,9 @@ def update_ome_multiscale_metadata(zarr_path, max_level=4, prefix=None, include_
     multiscales = metadata["attributes"]["ome"]["multiscales"][0]
     level0_scale_factors = multiscales["datasets"][0]["coordinateTransformations"][0]["scale"]
 
+    # Validate axis labels vs voxel sizes before propagating to pyramid levels
+    validate_axis_voxel_consistency(multiscales.get("axes", []), level0_scale_factors)
+
     # Detect level naming format if not provided
     if prefix is None:
         prefix = detect_level_format(zarr_path)
@@ -547,6 +579,9 @@ def update_ome_multiscale_metadata_zarr2(zarr_path, max_level=4, prefix=None, in
 
     multiscales = metadata.get("multiscales", [{}])[0]
     level0_scale_factors = multiscales.get("datasets", [{}])[0].get("coordinateTransformations", [{}])[0].get("scale", [1.0, 1.0, 1.0])
+
+    # Validate axis labels vs voxel sizes before propagating to pyramid levels
+    validate_axis_voxel_consistency(multiscales.get("axes", []), level0_scale_factors)
 
     # Detect level naming format if not provided
     if prefix is None:
