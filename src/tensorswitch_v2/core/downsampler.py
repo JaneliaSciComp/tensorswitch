@@ -108,11 +108,11 @@ class Downsampler:
         ...     output_path="/data/dataset.zarr",
         ...     target_level=2
         ... )
-        >>> downsampler.downsample(cumulative_factors=[1, 4, 4])
+        >>> downsampler.downsample(factors=[1, 4, 4])
 
     Example (LSF worker processing chunk range):
         >>> downsampler.downsample(
-        ...     cumulative_factors=[1, 4, 4],
+        ...     factors=[1, 4, 4],
         ...     start_idx=0,
         ...     stop_idx=100
         ... )
@@ -212,26 +212,32 @@ class Downsampler:
 
     def downsample(
         self,
-        cumulative_factors: List[int],
+        factors: List[int],
         start_idx: int = 0,
         stop_idx: Optional[int] = None,
         shard_coord: Optional[List[int]] = None,
         use_fortran_order: bool = False,
         progress_interval: int = 100,
         verbose: bool = True,
+        cumulative_factor_for_metadata: Optional[List[int]] = None,
     ) -> Dict[str, Any]:
         """
-        Downsample s0 directly to target level using cumulative factors.
+        Downsample source to target level using the given factors.
 
         Args:
-            cumulative_factors: Cumulative downsampling factors from s0.
-                Example: [1, 4, 4] for direct s0→s2 (4x in Y,X)
+            factors: Downsampling factors to apply to the source array.
+                In parallel mode (source=s0): these are cumulative factors from s0.
+                In chained mode (source=previous level): these are per-level factors.
+                Example: [1, 2, 2] for 2x in Y,X
             start_idx: Starting chunk index (for LSF multi-job mode)
             stop_idx: Ending chunk index (None = process all remaining)
             shard_coord: Optional 3D shard coordinate [z, y, x] for shard-based processing
             use_fortran_order: Whether to use Fortran (F) order for output
             progress_interval: Report progress every N chunks
             verbose: Print progress messages
+            cumulative_factor_for_metadata: True cumulative factors from s0 to store
+                in level metadata. If None, uses ``factors``. Required in chained
+                mode where ``factors`` are per-level but metadata needs cumulative.
 
         Returns:
             dict: Processing statistics (chunks_processed, elapsed_time, etc.)
@@ -248,7 +254,7 @@ class Downsampler:
             print(f"{'='*60}")
             print(f"Source: {self.s0_path}")
             print(f"Output: {self._get_output_level_path()}")
-            print(f"Cumulative factors: {cumulative_factors}")
+            print(f"Factors: {factors}")
             print(f"Downsample method: {self.downsample_method}")
             print(f"Dimension names: {dimension_names}")
 
@@ -272,7 +278,7 @@ class Downsampler:
             s0_spec,
             s0_shape,
             dimension_names,
-            custom_factors=cumulative_factors,
+            custom_factors=factors,
             method=self.downsample_method
         )
         downsampled_spec['context'] = get_tensorstore_context()
@@ -455,14 +461,16 @@ class Downsampler:
         # Store cumulative_factor in level metadata so update_ome_multiscale_metadata
         # can compute exact nominal voxel sizes (s0_voxel * factor) instead of the
         # shape-ratio fallback which gives non-power-of-2 results due to ceiling rounding.
-        self._store_cumulative_factor(output_level_path, output_format, cumulative_factors)
+        metadata_factors = cumulative_factor_for_metadata if cumulative_factor_for_metadata is not None else factors
+        self._store_cumulative_factor(output_level_path, output_format, metadata_factors)
 
         return {
             'target_level': self.target_level,
             'chunks_processed': chunks_processed,
             'total_chunks': total_chunks,
             'elapsed_time': elapsed_time,
-            'cumulative_factors': cumulative_factors,
+            'factors': factors,
+            'cumulative_factor_for_metadata': metadata_factors,
             'output_shape': downsampled_shape,
         }
 
@@ -528,7 +536,7 @@ def downsample_level(
     s0_path: str,
     output_path: str,
     target_level: int,
-    cumulative_factors: List[int],
+    factors: List[int] = None,
     start_idx: int = 0,
     stop_idx: Optional[int] = None,
     use_shard: bool = True,
@@ -536,6 +544,8 @@ def downsample_level(
     custom_chunk_shape: Optional[List[int]] = None,
     downsample_method: str = "mean",
     verbose: bool = True,
+    cumulative_factor_for_metadata: Optional[List[int]] = None,
+    cumulative_factors: List[int] = None,  # backward-compat alias for factors
 ) -> Dict[str, Any]:
     """
     Convenience function to downsample a single level.
@@ -543,31 +553,50 @@ def downsample_level(
     This is the main entry point for CLI and job scripts.
 
     Args:
-        s0_path: Path to s0 array
+        s0_path: Path to source array (s0 in parallel mode, previous level
+            in chained mode)
         output_path: Root output path
         target_level: Target level to create (1 = s1, 2 = s2, etc.)
-        cumulative_factors: Cumulative downsampling factors from s0
+        factors: Downsampling factors to apply to the source array.
+            In parallel mode: cumulative from s0. In chained mode: per-level.
         start_idx: Starting chunk index (for LSF multi-job mode)
         stop_idx: Ending chunk index
         use_shard: Whether to use sharding
         custom_shard_shape: Override shard shape
         custom_chunk_shape: Override chunk shape
-        downsample_method: TensorStore downsample method (default: "mode").
+        downsample_method: TensorStore downsample method.
             Options: "mean", "mode", "median", "stride", "min", "max".
         verbose: Print progress messages
+        cumulative_factor_for_metadata: True cumulative factors from s0 for
+            metadata. If None, uses ``factors``.
+        cumulative_factors: Deprecated alias for ``factors``.
 
     Returns:
         dict: Processing statistics
 
     Example:
-        >>> # Downsample s0 directly to s2 with 4x factor in Y,X
+        >>> # Parallel mode: downsample s0 directly to s2
         >>> stats = downsample_level(
         ...     s0_path="/data/dataset.zarr/s0",
         ...     output_path="/data/dataset.zarr",
         ...     target_level=2,
-        ...     cumulative_factors=[1, 4, 4]
+        ...     factors=[1, 4, 4]
+        ... )
+        >>> # Chained mode: downsample s1 to s2
+        >>> stats = downsample_level(
+        ...     s0_path="/data/dataset.zarr/s1",
+        ...     output_path="/data/dataset.zarr",
+        ...     target_level=2,
+        ...     factors=[1, 2, 2],
+        ...     cumulative_factor_for_metadata=[1, 4, 4]
         ... )
     """
+    # Backward compat: support old cumulative_factors parameter name
+    if factors is None:
+        factors = cumulative_factors
+    if factors is None:
+        raise ValueError("factors is required")
+
     downsampler = Downsampler(
         s0_path=s0_path,
         output_path=output_path,
@@ -579,8 +608,9 @@ def downsample_level(
     )
 
     return downsampler.downsample(
-        cumulative_factors=cumulative_factors,
+        factors=factors,
         start_idx=start_idx,
         stop_idx=stop_idx,
         verbose=verbose,
+        cumulative_factor_for_metadata=cumulative_factor_for_metadata,
     )

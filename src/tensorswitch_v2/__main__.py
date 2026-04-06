@@ -357,6 +357,10 @@ Supported output formats:
         help=argparse.SUPPRESS,  # Hidden: backward compatibility alias for --single_level_factor
     )
     parser.add_argument(
+        "--cumulative_factor_for_metadata", type=str, default=None,
+        help=argparse.SUPPRESS,  # Internal: true cumulative factor from s0 for metadata (chained mode)
+    )
+    parser.add_argument(
         "--use_shard", type=int, default=1,
         help="Use sharding for output (1=yes, 0=no, default: 1)",
     )
@@ -1117,6 +1121,8 @@ def submit_downsample_job(args, cumulative_factors):
         reinvoke.append("--no_ome_meta_export")
     if getattr(args, 'no_ome_xml_attr', False):
         reinvoke.append("--no_ome_xml_attr")
+    if getattr(args, 'cumulative_factor_for_metadata', None):
+        reinvoke += ["--cumulative_factor_for_metadata", args.cumulative_factor_for_metadata]
 
     # Convert to properly quoted shell command string
     # This handles paths with spaces correctly when bsub creates its wrapper
@@ -1700,23 +1706,34 @@ def main(argv=None):
             # Pre-create all levels first
             planner.precreate_all_levels(plan, use_shard=use_shard, verbose=verbose)
 
-            # Process each level
+            # Process each level using chained downsampling
+            # (each level reads from previous level, not from s0)
+            from .utils.metadata_utils import detect_level_format, get_level_name
+            prefix = detect_level_format(root_path)
+
             for level_info in plan['levels']:
                 level = level_info['level']
+                per_level_factor = level_info['per_level_factor']
                 cumulative_factors = level_info['cumulative_factor']
 
-                print(f"\n--- Downsampling s{level} (cumulative factor: {cumulative_factors}) ---")
+                # Source is the previous level
+                source_level = level - 1
+                source_level_name = get_level_name(source_level, prefix)
+                source_path = os.path.join(root_path, source_level_name)
+
+                print(f"\n--- Downsampling {source_level_name} -> {get_level_name(level, prefix)} (per-level factor: {per_level_factor}, cumulative: {cumulative_factors}) ---")
 
                 downsample_level(
-                    s0_path=s0_path,
+                    s0_path=source_path,
                     output_path=root_path,
                     target_level=level,
-                    cumulative_factors=cumulative_factors,
+                    factors=per_level_factor,
                     use_shard=use_shard,
                     custom_shard_shape=level_info.get('shard_shape'),
                     custom_chunk_shape=level_info.get('chunk_shape'),
                     downsample_method=resolved_method,
                     verbose=verbose,
+                    cumulative_factor_for_metadata=cumulative_factors,
                 )
 
             # Update root metadata
@@ -1741,11 +1758,17 @@ def main(argv=None):
         if factor_str is None:
             raise ValueError("--single_level_factor is required with --downsample")
 
-        cumulative_factors = [int(x) for x in factor_str.split(",")]
+        downsample_factors = [int(x) for x in factor_str.split(",")]
+
+        # In chained mode, the coordinator passes --cumulative_factor_for_metadata
+        # with the true cumulative factor from s0 for correct metadata
+        cumulative_factor_for_metadata = None
+        if args.cumulative_factor_for_metadata:
+            cumulative_factor_for_metadata = [int(x) for x in args.cumulative_factor_for_metadata.split(",")]
 
         if args.submit:
             # Submit as LSF job
-            submit_downsample_job(args, cumulative_factors)
+            submit_downsample_job(args, downsample_factors)
         else:
             # Run locally - resolve 'auto' method first
             resolved_method = resolve_downsample_method(args.downsample_method, args.input)
@@ -1753,7 +1776,7 @@ def main(argv=None):
                 s0_path=args.input,
                 output_path=args.output,
                 target_level=args.target_level,
-                cumulative_factors=cumulative_factors,
+                factors=downsample_factors,
                 start_idx=args.start_idx or 0,
                 stop_idx=args.stop_idx,
                 use_shard=use_shard,
@@ -1761,6 +1784,7 @@ def main(argv=None):
                 custom_chunk_shape=list(chunk_shape) if chunk_shape else None,
                 downsample_method=resolved_method,
                 verbose=verbose,
+                cumulative_factor_for_metadata=cumulative_factor_for_metadata,
             )
         return
 

@@ -649,6 +649,7 @@ Chained Downsampling:
 - OME-NGFF compliant metadata with translation transforms (Neuroglancer compatible)
 - **S-prefixed level naming** (s0/s1/s2) follows Janelia house style (OME-NGFF compatible)
 - **Compression inheritance** from level 0 (consistent settings across pyramid)
+- **Chained in both local and cluster modes** — local `--auto_multiscale` (without `--submit`) also chains levels sequentially
 
 ### Generate Pyramid
 

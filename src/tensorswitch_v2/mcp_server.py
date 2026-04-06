@@ -396,7 +396,7 @@ def generate_pyramid(
                 s0_path=s0_path,
                 output_path=parent_dir,
                 target_level=level_num,
-                cumulative_factors=cum_factors,
+                factors=cum_factors,
                 downsample_method=downsample_method,
                 verbose=False,
             )
