@@ -650,6 +650,7 @@ Chained Downsampling:
 - **S-prefixed level naming** (s0/s1/s2) follows Janelia house style (OME-NGFF compatible)
 - **Compression inheritance** from level 0 (consistent settings across pyramid)
 - **Chained in both local and cluster modes** — local `--auto_multiscale` (without `--submit`) also chains levels sequentially
+- **Log2-based cores scaling** for pyramid jobs — cores scale with shard count (I/O workload) rather than memory, giving more cores for large levels and fewer for small ones
 
 ### Generate Pyramid
 

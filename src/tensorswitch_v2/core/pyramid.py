@@ -250,28 +250,32 @@ def _calculate_downsample_wall_time(
     return f"{hours}:{minutes:02d}"
 
 
-def _calculate_downsample_cores(memory_gb: int, zarr_format: str = 'zarr3',
-                                shard_size_gb: float = 1.0) -> int:
+def _calculate_downsample_cores(total_shards: int, shard_size_gb: float = 1.0,
+                                memory_gb: int = 0, zarr_format: str = 'zarr3') -> int:
     """
     Calculate number of cores for a pyramid downsampling job.
 
     Small chunks (<50 MB, zarr2/zarr3 non-sharded): 1 core — I/O-bound on
-    network FS, no benefit from multiple cores. Keeps memory floor at 15 GB.
-    Large shards (>=50 MB, zarr3 sharded): scale with memory.
+    network FS metadata, no benefit from multiple cores.
+
+    Large shards (>=50 MB, zarr3 sharded): log2-based scaling with shard count.
+    More shards = more I/O work = more cores for TensorStore's file_io_concurrency
+    pipeline. The log2 * 2/3 formula gives smooth graduation without artificial cap
+    (log grows slowly enough to be self-limiting).
 
     Args:
-        memory_gb: Memory in GB
-        zarr_format: 'zarr3' or 'zarr2' (unused, kept for backward compat)
+        total_shards: Total number of output shards for this level
         shard_size_gb: Size of each shard/chunk in GB
+        memory_gb: Unused, kept for backward compat
+        zarr_format: Unused, kept for backward compat
 
     Returns:
-        Number of cores (min 1, max 8)
+        Number of cores (min 1)
     """
     import math
     if shard_size_gb < 0.05:
         return 1
-    cores = max(1, int(math.ceil(memory_gb / 15)) * 2)
-    return min(cores, 8)
+    return max(1, int(math.log2(max(total_shards, 1)) * 2 / 3))
 
 
 class PyramidPlanner:
@@ -1408,9 +1412,9 @@ submit_and_wait() {{
                 level_wall_time = wall_time
 
             if cores is None:
+                level_total_shards = int(np.prod(np.ceil(np.array(level_shape) / np.array(level_shard_shape)).astype(int)))
                 level_cores = _calculate_downsample_cores(
-                    level_memory, zarr_format=zarr_fmt,
-                    shard_size_gb=level_shard_size_gb
+                    level_total_shards, shard_size_gb=level_shard_size_gb
                 )
             else:
                 level_cores = cores

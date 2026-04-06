@@ -250,7 +250,10 @@ class Downsampler:
 
         if verbose:
             print(f"\n{'='*60}")
-            print(f"DOWNSAMPLING: s0 → s{self.target_level}")
+            source_name = os.path.basename(self.s0_path.rstrip('/'))
+            from tensorswitch_v2.utils.metadata_utils import detect_level_format, get_level_name
+            target_name = get_level_name(self.target_level, detect_level_format(self.output_path))
+            print(f"DOWNSAMPLING: {source_name} → {target_name}")
             print(f"{'='*60}")
             print(f"Source: {self.s0_path}")
             print(f"Output: {self._get_output_level_path()}")
