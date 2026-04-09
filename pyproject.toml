@@ -6,21 +6,24 @@ dependencies = [
     "tensorstore>=0.1.79,<0.2",
     "psutil",
     "requests",
-    "numpy", "ome-zarr-models @ git+https://github.com/ome-zarr-models/ome-zarr-models-py.git",
-    "panel>=1.4.0",
-    "param",
-    "sqlalchemy",
-    "apscheduler",
-    "openai",
+    "numpy",
     "pydantic",
-    "watchdog", "pylibczirw>=5.1.1,<6", "bioio>=3.2.0,<4", "bioio-czi>=2.1.0,<3",
-    "bioio-bioformats>=1.0.0",
-    "bioformats_jar",
+    "pylibczirw>=5.1.1,<6",
+    "tifffile>=2025.6.11",
+    "dask",
+    "dask-image",
+    "nd2>=0.10.3",
+    "h5py>=3.14.0",
+    "ome-types>=0.6.0,<0.7",
+    "bioio>=3.2.0,<4",
+    "bioio-czi>=2.1.0,<3",
+    "bioio-nd2>=0.3.0",
+    "bioio-tifffile>=1.1.0",
 ]
 description = "This package provides a unified entry point and organized task modules for managing N5/Zarr dataset conversions and downsampling. It centralizes your workflow into a single pipeline to reduce manual work and errors."
 readme = "README.md"
 authors = [
-    {name = "Diyi K Chen", email = "chend@janelia.hhmi.org"},
+    {name = "Diyi Chen", email = "chend@janelia.hhmi.org"},
     {name = "Mark Kittisopiikul", email = "kittisopikulm@janelia.hhmi.org"}
 ]
 license = "BSD-3-Clause"
@@ -30,6 +33,18 @@ classifiers = [
     "Operating System :: OS Independent",
 ]
 
+[project.optional-dependencies]
+bioformats = [
+    "bioio-bioformats>=1.0.0",
+    "bioformats_jar",
+    "scyjava>=1.12.0,<2",
+]
+mcp = [
+    "mcp>=1.0.0",
+]
+all = [
+    "tensorswitch[bioformats,mcp]",
+]
 
 [project.scripts]
 tensorswitch-v2 = "tensorswitch_v2.__main__:main"
@@ -41,9 +56,6 @@ Issues = "https://github.com/JaneliaSciComp/tensorswitch/issues"
 [build-system]
 build-backend = "hatchling.build"
 requires = ["hatchling"]
-
-[tool.hatch.metadata]
-allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/tensorswitch_v2"]
@@ -74,13 +86,7 @@ zarr = ">=3.1.1,<4"
 ome-types = ">=0.6.0,<0.7"
 nd2 = ">=0.10.3,<0.11"
 h5py = ">=3.14.0,<4"
-panel = ">=1.4.0,<2"
-param = ">=2.1.0,<3"
-sqlalchemy = ">=2.0.0,<3"
-apscheduler = ">=3.10.0,<4"
-openai = ">=1.0.0,<2"
 pydantic = ">=2.0.0,<3"
-watchdog = ">=4.0.0,<5"
 pandas = "*"
 openpyxl = "*"
 awscli = ">=2.28.1,<3"

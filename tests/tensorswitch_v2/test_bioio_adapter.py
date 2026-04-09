@@ -13,6 +13,9 @@ import pytest
 import sys
 import os
 
+# Suppress pydantic deprecation warnings from ome_types (third-party, not our code)
+pytestmark = pytest.mark.filterwarnings("ignore::pydantic.warnings.PydanticDeprecatedSince211")
+
 # Add src to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../src'))
 

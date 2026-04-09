@@ -56,7 +56,6 @@ def test_synthetic_tiff_to_zarr3():
         assert metadata['zarr_format'] == 3
 
         print("PASS: TIFF -> Zarr3 (synthetic)")
-        return True
 
 
 def test_synthetic_n5_to_zarr3():
@@ -86,7 +85,6 @@ def test_synthetic_n5_to_zarr3():
         assert os.path.exists(os.path.join(output_path, 'zarr.json'))
 
         print("PASS: N5 -> Zarr3 (synthetic)")
-        return True
 
 
 def test_synthetic_zarr3_rechunk():
@@ -127,7 +125,6 @@ def test_synthetic_zarr3_rechunk():
         print(f"\nStats: {stats}")
 
         print("PASS: Zarr3 -> Zarr3 rechunk (synthetic)")
-        return True
 
 
 def test_real_ims_to_zarr3(chunk_count=5):
@@ -179,7 +176,6 @@ def test_real_ims_to_zarr3(chunk_count=5):
         assert stats['chunks_processed'] == chunk_count
 
         print("PASS: IMS -> Zarr3 (real data, partial)")
-        return True
 
 
 def test_real_nd2_to_zarr3(chunk_count=3):
@@ -227,7 +223,6 @@ def test_real_nd2_to_zarr3(chunk_count=3):
         assert stats['chunks_processed'] == chunk_count
 
         print("PASS: ND2 -> Zarr3 (real data, partial)")
-        return True
 
 
 def test_real_tiff_to_zarr3(chunk_count=3):
@@ -278,7 +273,6 @@ def test_real_tiff_to_zarr3(chunk_count=3):
         assert stats['chunks_processed'] == chunk_count
 
         print("PASS: TIFF -> Zarr3 (real data, partial)")
-        return True
 
 
 def test_real_czi_to_zarr3(chunk_count=3):
@@ -341,7 +335,6 @@ def test_real_czi_to_zarr3(chunk_count=3):
             assert len(ms.get('axes', [])) == 5, f"Expected 5 axes for VCZYX, got {len(ms.get('axes', []))}"
 
         print("PASS: CZI -> Zarr3 (real data, partial)")
-        return True
 
 
 def run_all_tests():

@@ -93,37 +93,69 @@ A high-performance microscopy data conversion tool with TensorStore as the unifi
 
 ## Installation
 
-TensorSwitch v2 is part of the TensorSwitch package.
+### Prerequisites
 
-### Option 1: Pixi Environment (Recommended for Janelia)
+- **Python 3.11+** (required)
+- **Java 8+** (only if using Bio-Formats for 150+ format support)
+- **Git** (only if installing from GitHub)
+
+### Option 1: Pip Install
+
+Works on **Linux**, **macOS**, and **Windows**.
 
 ```bash
-cd /path/to/tensorswitch
-pixi install
+# Core install (Tier 1 + Tier 2 + Tier 3 readers, CLI, all writers)
+pip install tensorswitch
+
+# With Bio-Formats support (Tier 4, 150+ formats, requires Java 8+)
+pip install "tensorswitch[bioformats]"
+
+# With MCP server for Claude Code / LLM agents
+pip install "tensorswitch[mcp]"
+
+# Everything
+pip install "tensorswitch[all]"
 ```
 
-### Option 2: Pip Install
+**Install from GitHub** (latest development version):
 
 ```bash
-# From local checkout (editable mode for development)
-pip install -e /path/to/tensorswitch
-
-# From GitHub
 pip install git+https://github.com/JaneliaSciComp/tensorswitch.git
+```
+
+**Install from local checkout** (for development):
+
+```bash
+git clone https://github.com/JaneliaSciComp/tensorswitch.git
+cd tensorswitch
+pip install -e .                  # Core only
+pip install -e ".[bioformats]"    # Core + Bio-Formats
+pip install -e ".[all]"           # Everything
+```
+
+### Option 2: Pixi Environment (Recommended for Janelia)
+
+[Pixi](https://pixi.sh) manages both Python and non-Python dependencies (Java, conda packages) in a single reproducible environment.
+
+```bash
+# Install pixi if you don't have it (Linux/macOS)
+curl -fsSL https://pixi.sh/install.sh | bash
+
+# Clone and install
+git clone https://github.com/JaneliaSciComp/tensorswitch.git
+cd tensorswitch
+pixi install
 ```
 
 ### Verify Installation
 
 ```bash
+# After pip install
+tensorswitch-v2 --version
+
 # Using pixi
 pixi run tensorswitch-v2 --version
 # Output: tensorswitch_v2 2.0.1
-
-# Or using module syntax
-pixi run python -m tensorswitch_v2 --version
-
-# After pip install (no pixi needed)
-tensorswitch-v2 --version
 ```
 
 ### Python API
@@ -132,6 +164,15 @@ tensorswitch-v2 --version
 from tensorswitch_v2 import __version__, TensorSwitchDataset, Readers, Writers
 print(__version__)  # 2.0.1
 ```
+
+### What's Included
+
+| Install Command | Formats Supported | Dependencies |
+|---|---|---|
+| `pip install tensorswitch` | N5, Zarr, TIFF, ND2, IMS, HDF5, CZI, LIF, Precomputed + 20 more | tensorstore, numpy, tifffile, h5py, nd2, dask, bioio |
+| `pip install "tensorswitch[bioformats]"` | + 150 more via Bio-Formats | + bioio-bioformats, scyjava (requires Java 8+) |
+| `pip install "tensorswitch[mcp]"` | + MCP server for AI agents | + mcp |
+| `pip install "tensorswitch[all]"` | Everything above | All of the above |
 
 ---
 
@@ -1090,6 +1131,10 @@ Then ask Claude natural language questions like:
 ### Requirements
 
 ```bash
+# Via pip extras
+pip install "tensorswitch[mcp]"
+
+# Or within pixi environment
 pixi run pip install "mcp[cli]"
 ```
 
