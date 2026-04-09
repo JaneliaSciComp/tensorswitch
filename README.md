@@ -1101,7 +1101,7 @@ converter.convert(
 
 ## MCP Server (AI/Agent Integration)
 
-TensorSwitch v2 includes an MCP (Model Context Protocol) server that allows Claude and other LLM agents to directly inspect, convert, and generate pyramids for microscopy data.
+TensorSwitch v2 includes an MCP (Model Context Protocol) server that allows Claude and other LLM agents to directly inspect, convert, and manage microscopy data conversions through natural language.
 
 ### Available Tools
 
@@ -1109,9 +1109,12 @@ TensorSwitch v2 includes an MCP (Model Context Protocol) server that allows Clau
 |------|-------------|
 | `inspect_dataset` | Returns shape, dtype, voxel sizes, axes, pyramid levels, OME metadata |
 | `discover_datasets` | Scans a directory for image/segmentation layers |
-| `convert` | Converts between formats (HDF5/TIFF/N5/Zarr → Zarr3/Zarr2/N5) |
-| `generate_pyramid` | Creates multiscale pyramid with anisotropic handling |
-| `list_formats` | Lists all supported input/output formats |
+| `convert` | Converts between formats with full CLI parity (2 GB size guard — larger datasets redirect to `submit_job`) |
+| `generate_pyramid` | Creates multiscale pyramid locally with chained downsampling and anisotropic handling |
+| `list_formats` | Lists all supported input/output formats by tier |
+| `estimate_resources` | Estimates memory, wall time, and cores needed for a conversion |
+| `submit_job` | Submits conversion to LSF cluster (with optional `auto_multiscale` for chained pyramid generation) |
+| `check_job_status` | Checks LSF job status (supports multiple job IDs) |
 
 ### Setup (Claude Code)
 
@@ -1125,8 +1128,11 @@ claude
 
 Then ask Claude natural language questions like:
 - "Inspect /path/to/dataset.zarr"
-- "Convert my HDF5 to Zarr3 with sharding"
-- "What formats does TensorSwitch support?"
+- "Convert my ND2 to Zarr3" (auto-detects if local or cluster submission needed)
+- "How much memory would I need to convert this IMS file?"
+- "Submit a conversion job for this large TIFF"
+- "What's the status of that job?"
+- "Generate a pyramid for the converted output"
 
 ### Requirements
 
@@ -1177,20 +1183,6 @@ tensorswitch_v2/
     ├── zarr2.py             # Zarr2Writer (OME-NGFF v0.4)
     └── n5.py                # N5Writer
 ```
-
----
-
-## Performance
-
-Tested on Janelia LSF cluster:
-
-| Dataset | Size | Output | Time | Compression |
-|---------|------|--------|------|-------------|
-| Lila Batch (1890 TIFFs) | 6.6 TB | 758 GB Zarr3 | 15 min | 8.7x |
-| CZI Pyramid (6 levels) | 446 GB | 571 GB total | 73 min | - |
-| Ahrens TIFF | 1.9 TB | ~800 GB Zarr3 | ~70 hrs | ~2.4x |
-| ND2 736 GB (Molly) | 736 GB | Zarr2 | ~7 hrs | - |
-| ND2 723 GB (Michael) | 723 GB | Zarr3 | ~7 hrs (est) | - |
 
 ---
 
