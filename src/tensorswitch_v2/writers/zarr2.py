@@ -21,6 +21,12 @@ from ..utils import (
     get_tensorstore_context,
     extract_omero_channels,
     generate_default_label_colors,
+    infer_dimension_names,
+)
+from ..utils.metadata_utils import (
+    normalize_axis_name,
+    get_axis_type,
+    get_axis_unit,
 )
 
 
@@ -276,116 +282,9 @@ class Zarr2Writer(BaseWriter):
 
     def _infer_axes(self, shape: List[int]) -> List[str]:
         """Infer axis names from shape."""
-        if len(shape) == 2:
-            return ['y', 'x']
-        elif len(shape) == 3:
-            if shape[0] <= 10:
-                return ['c', 'y', 'x']
-            else:
-                return ['z', 'y', 'x']
-        elif len(shape) == 4:
-            if shape[0] <= 10:
-                return ['c', 'z', 'y', 'x']
-            else:
-                return ['t', 'z', 'y', 'x']
-        elif len(shape) == 5:
-            return ['t', 'c', 'z', 'y', 'x']
-        else:
-            return [f'dim_{i}' for i in range(len(shape))]
+        return infer_dimension_names(shape)
 
-    def _reorder_axes_for_ome(
-        self,
-        axes: List[str],
-        shape: List[int],
-        chunk_shape: Optional[Tuple[int, ...]],
-        shard_shape: Optional[Tuple[int, ...]]
-    ) -> Tuple[List[str], List[int], Optional[List[int]], Optional[List[int]], Optional[Tuple[int, ...]]]:
-        """
-        Reorder axes so non-spatial dimensions come before spatial dimensions.
-
-        For precomputed format which stores as XYZC, this converts to CXYZ.
-        Preserves the relative order within spatial and non-spatial groups.
-
-        Args:
-            axes: Original axis names (e.g., ['x', 'y', 'z', 'channel'])
-            shape: Original shape
-            chunk_shape: Original chunk shape
-            shard_shape: Original shard shape (ignored for Zarr2)
-
-        Returns:
-            (reordered_axes, reordered_shape, reordered_chunk, reordered_shard, transpose_order)
-        """
-        # Identify spatial and non-spatial axes
-        SPATIAL_AXES = {'x', 'y', 'z'}
-
-        axes_lower = [a.lower() for a in axes]
-
-        # Separate into non-spatial (first) and spatial (second), preserving order
-        non_spatial_indices = []
-        spatial_indices = []
-
-        for i, axis in enumerate(axes_lower):
-            if axis in SPATIAL_AXES:
-                spatial_indices.append(i)
-            else:
-                non_spatial_indices.append(i)
-
-        # New order: non-spatial first, then spatial
-        new_order = non_spatial_indices + spatial_indices
-
-        # Check if reordering is needed
-        if new_order == list(range(len(axes))):
-            # Already in correct order - but still need to pad chunks if needed
-            padded_chunk = None
-            if chunk_shape:
-                padded_chunk = list(chunk_shape)
-                while len(padded_chunk) < len(axes):
-                    padded_chunk.append(1)
-            return axes, shape, padded_chunk, None, None
-
-        # Reorder axes
-        reordered_axes = [axes[i] for i in new_order]
-        reordered_shape = [shape[i] for i in new_order]
-
-        # Reorder chunk shape if provided (pad with 1s if needed for non-spatial dims)
-        reordered_chunk = None
-        if chunk_shape:
-            # Pad chunk_shape if it's shorter than axes (e.g., 3D chunks for 4D data)
-            padded_chunk = list(chunk_shape)
-            while len(padded_chunk) < len(axes):
-                padded_chunk.append(1)  # Non-spatial dims get chunk=1
-            reordered_chunk = [padded_chunk[i] for i in new_order]
-
-        # Store transpose order for data transformation
-        transpose_order = tuple(new_order)
-
-        return reordered_axes, reordered_shape, reordered_chunk, None, transpose_order
-
-    def _reorder_domain(self, domain: Any, transpose_order: Tuple[int, ...]) -> Any:
-        """
-        Reorder a chunk domain according to the transpose order.
-
-        Args:
-            domain: TensorStore IndexDomain or tuple of slices
-            transpose_order: New axis order (e.g., (3, 0, 1, 2) for XYZC -> CXYZ)
-
-        Returns:
-            Reordered domain
-        """
-        if hasattr(domain, 'origin'):
-            # TensorStore IndexDomain - extract slices, reorder, return tuple
-            slices = []
-            for i in range(len(domain.origin)):
-                start = int(domain.origin[i])
-                stop = start + int(domain.shape[i])
-                slices.append(slice(start, stop))
-            return tuple(slices[i] for i in transpose_order)
-        elif isinstance(domain, tuple):
-            # Already a tuple of slices
-            return tuple(domain[i] for i in transpose_order)
-        else:
-            # Unknown format, return as-is
-            return domain
+    # _reorder_axes_for_ome and _reorder_domain inherited from BaseWriter
 
     def _normalize_dtype(self, dtype: str) -> str:
         """Convert dtype to Zarr2 format."""
@@ -863,83 +762,31 @@ class Zarr2Writer(BaseWriter):
 
         Same logic as Zarr3 for consistent dimension handling.
         """
-        # Determine axes - same logic as zarr3_store_spec
+        # Determine axis names
         if axes_order and len(axes_order) == len(array_shape):
-            axes = list(axes_order)
+            axes = [normalize_axis_name(a) for a in axes_order]
             print(f"Zarr2 metadata: using axes from source: {axes}")
         else:
-            # Infer from shape - same logic as zarr3
-            if len(array_shape) == 2:
-                axes = ["y", "x"]
-            elif len(array_shape) == 3:
-                # For 3D, assume channels if first dimension is small, otherwise Z
-                if array_shape[0] <= 10:
-                    axes = ["c", "y", "x"]
-                else:
-                    axes = ["z", "y", "x"]
-            elif len(array_shape) == 4:
-                # CZYX or TZYX - check first dim
-                if array_shape[0] <= 10:
-                    axes = ["c", "z", "y", "x"]
-                else:
-                    axes = ["t", "z", "y", "x"]
-            elif len(array_shape) == 5:
-                axes = ["t", "c", "z", "y", "x"]
-            else:
-                axes = [f"dim_{i}" for i in range(len(array_shape))]
+            axes = infer_dimension_names(array_shape)
             print(f"Zarr2 metadata: inferred axes from shape {array_shape}: {axes}")
-
-        def get_axis_type(axis_name: str) -> str:
-            """Get OME-NGFF axis type from axis name."""
-            axis_lower = axis_name.lower()
-            if axis_lower in ['x', 'y', 'z']:
-                return "space"
-            elif axis_lower in ['c', 'channel']:
-                return "channel"
-            elif axis_lower in ['t', 'v']:
-                # 'v' (view) treated as time so viewers show it as a slider
-                return "time"
-            else:
-                return "space"  # Default to space for unknown axes
-
-        def normalize_axis_name(axis_name: str) -> str:
-            """Normalize axis name to OME-NGFF standard."""
-            axis_lower = axis_name.lower()
-            if axis_lower == 'channel':
-                return 'c'
-            elif axis_lower == 'v':
-                return 't'
-            return axis_lower
-
-        def get_axis_unit(axis_name: str) -> Optional[str]:
-            """Get unit for axis if applicable."""
-            axis_lower = axis_name.lower()
-            if axis_lower in ['x', 'y', 'z']:
-                return voxel_unit
-            elif axis_lower == 't':
-                return "second"
-            return None
 
         # Build axes metadata with proper types and units
         axes_metadata = []
-        for axis in axes:
-            normalized_name = normalize_axis_name(axis)
+        for name in axes:
             axis_info = {
-                "name": normalized_name,
-                "type": get_axis_type(axis)
+                "name": name,
+                "type": get_axis_type(name)
             }
-            unit = get_axis_unit(axis)
+            unit = get_axis_unit(name, spatial_unit=voxel_unit, time_unit='second')
             if unit:
                 axis_info["unit"] = unit
             axes_metadata.append(axis_info)
 
         # Build scale factors from voxel sizes
         scale_factors = []
-        for axis in axes:
-            if voxel_sizes and axis in voxel_sizes:
-                scale_factors.append(float(voxel_sizes[axis]))
-            elif voxel_sizes and axis.lower() in voxel_sizes:
-                scale_factors.append(float(voxel_sizes[axis.lower()]))
+        for name in axes:
+            if voxel_sizes and name in voxel_sizes:
+                scale_factors.append(float(voxel_sizes[name]))
             else:
                 scale_factors.append(1.0)
 

@@ -21,6 +21,7 @@ from ..utils import (
     get_tensorstore_context,
     write_zarr3_group_metadata,
     create_zarr3_ome_metadata,
+    infer_dimension_names,
 )
 
 
@@ -320,129 +321,9 @@ class Zarr3Writer(BaseWriter):
 
     def _infer_axes(self, shape: List[int]) -> List[str]:
         """Infer axis names from shape."""
-        if len(shape) == 2:
-            return ['y', 'x']
-        elif len(shape) == 3:
-            if shape[0] <= 10:
-                return ['c', 'y', 'x']
-            else:
-                return ['z', 'y', 'x']
-        elif len(shape) == 4:
-            if shape[0] <= 10:
-                return ['c', 'z', 'y', 'x']
-            else:
-                return ['t', 'z', 'y', 'x']
-        elif len(shape) == 5:
-            return ['t', 'c', 'z', 'y', 'x']
-        else:
-            return [f'dim_{i}' for i in range(len(shape))]
+        return infer_dimension_names(shape)
 
-    def _reorder_axes_for_ome(
-        self,
-        axes: List[str],
-        shape: List[int],
-        chunk_shape: Optional[Tuple[int, ...]],
-        shard_shape: Optional[Tuple[int, ...]]
-    ) -> Tuple[List[str], List[int], Optional[List[int]], Optional[List[int]], Optional[Tuple[int, ...]]]:
-        """
-        Reorder axes so non-spatial dimensions come before spatial dimensions.
-
-        For precomputed format which stores as XYZC, this converts to CXYZ.
-        Preserves the relative order within spatial and non-spatial groups.
-
-        Args:
-            axes: Original axis names (e.g., ['x', 'y', 'z', 'channel'])
-            shape: Original shape
-            chunk_shape: Original chunk shape
-            shard_shape: Original shard shape
-
-        Returns:
-            (reordered_axes, reordered_shape, reordered_chunk, reordered_shard, transpose_order)
-        """
-        # Identify spatial and non-spatial axes
-        SPATIAL_AXES = {'x', 'y', 'z'}
-
-        axes_lower = [a.lower() for a in axes]
-
-        # Separate into non-spatial (first) and spatial (second), preserving order
-        non_spatial_indices = []
-        spatial_indices = []
-
-        for i, axis in enumerate(axes_lower):
-            if axis in SPATIAL_AXES:
-                spatial_indices.append(i)
-            else:
-                non_spatial_indices.append(i)
-
-        # New order: non-spatial first, then spatial
-        new_order = non_spatial_indices + spatial_indices
-
-        # Check if reordering is needed
-        if new_order == list(range(len(axes))):
-            # Already in correct order - but still need to pad chunks/shards if needed
-            padded_chunk = None
-            if chunk_shape:
-                padded_chunk = list(chunk_shape)
-                while len(padded_chunk) < len(axes):
-                    padded_chunk.append(1)
-            padded_shard = None
-            if shard_shape:
-                padded_shard = list(shard_shape)
-                while len(padded_shard) < len(axes):
-                    padded_shard.append(1)
-            return axes, shape, padded_chunk, padded_shard, None
-
-        # Reorder axes
-        reordered_axes = [axes[i] for i in new_order]
-        reordered_shape = [shape[i] for i in new_order]
-
-        # Reorder chunk shape if provided (pad with 1s if needed for non-spatial dims)
-        reordered_chunk = None
-        if chunk_shape:
-            # Pad chunk_shape if it's shorter than axes (e.g., 3D chunks for 4D data)
-            padded_chunk = list(chunk_shape)
-            while len(padded_chunk) < len(axes):
-                padded_chunk.append(1)  # Non-spatial dims get chunk=1
-            reordered_chunk = [padded_chunk[i] for i in new_order]
-
-        # Reorder shard shape if provided (pad with 1s if needed)
-        reordered_shard = None
-        if shard_shape:
-            padded_shard = list(shard_shape)
-            while len(padded_shard) < len(axes):
-                padded_shard.append(1)  # Non-spatial dims get shard=1
-            reordered_shard = [padded_shard[i] for i in new_order]
-
-        # Store transpose order for data transformation
-        transpose_order = tuple(new_order)
-
-        return reordered_axes, reordered_shape, reordered_chunk, reordered_shard, transpose_order
-
-    def _reorder_domain(self, domain: Any, transpose_order: Tuple[int, ...]) -> Any:
-        """
-        Reorder a chunk domain according to the transpose order.
-
-        Args:
-            domain: TensorStore IndexDomain or tuple of slices
-            transpose_order: New axis order (e.g., (3, 0, 1, 2) for XYZC -> CXYZ)
-
-        Returns:
-            Reordered domain
-        """
-        if hasattr(domain, 'origin'):
-            # TensorStore IndexDomain - extract slices, reorder, return tuple
-            slices = []
-            for i in range(len(domain.origin)):
-                start = int(domain.origin[i])
-                stop = start + int(domain.shape[i])
-                slices.append(slice(start, stop))
-            return tuple(slices[i] for i in transpose_order)
-        elif isinstance(domain, tuple):
-            # Already a tuple of slices
-            return tuple(domain[i] for i in transpose_order)
-        else:
-            # Unknown format, return as-is
-            return domain
+    # _reorder_axes_for_ome and _reorder_domain inherited from BaseWriter
 
     def open_store(
         self,

@@ -6,7 +6,7 @@ the abstract methods to write TensorStore arrays to their target format.
 """
 
 from abc import ABC, abstractmethod
-from typing import Dict, Optional, Tuple, List
+from typing import Any, Dict, Optional, Tuple, List
 import tensorstore as ts
 
 
@@ -316,6 +316,89 @@ class BaseWriter(ABC):
             shard_shape.append(shard_dim)
 
         return tuple(shard_shape)
+
+    def _reorder_axes_for_ome(
+        self,
+        axes: List[str],
+        shape: List[int],
+        chunk_shape: Optional[Tuple[int, ...]],
+        shard_shape: Optional[Tuple[int, ...]]
+    ) -> Tuple[List[str], List[int], Optional[List[int]], Optional[List[int]], Optional[Tuple[int, ...]]]:
+        """
+        Reorder axes so non-spatial dimensions come before spatial dimensions.
+
+        For precomputed format which stores as XYZC, this converts to CXYZ.
+        Preserves the relative order within spatial and non-spatial groups.
+
+        Args:
+            axes: Original axis names (e.g., ['x', 'y', 'z', 'channel'])
+            shape: Original shape
+            chunk_shape: Original chunk shape
+            shard_shape: Original shard shape (None for formats without sharding)
+
+        Returns:
+            (reordered_axes, reordered_shape, reordered_chunk, reordered_shard, transpose_order)
+        """
+        SPATIAL_AXES = {'x', 'y', 'z'}
+        axes_lower = [a.lower() for a in axes]
+
+        non_spatial_indices = []
+        spatial_indices = []
+        for i, axis in enumerate(axes_lower):
+            if axis in SPATIAL_AXES:
+                spatial_indices.append(i)
+            else:
+                non_spatial_indices.append(i)
+
+        new_order = non_spatial_indices + spatial_indices
+
+        def _pad_and_reorder(values, reorder):
+            if values is None:
+                return None
+            padded = list(values)
+            while len(padded) < len(axes):
+                padded.append(1)
+            if reorder:
+                return [padded[i] for i in new_order]
+            return padded
+
+        if new_order == list(range(len(axes))):
+            return (axes, shape,
+                    _pad_and_reorder(chunk_shape, False),
+                    _pad_and_reorder(shard_shape, False),
+                    None)
+
+        reordered_axes = [axes[i] for i in new_order]
+        reordered_shape = [shape[i] for i in new_order]
+        transpose_order = tuple(new_order)
+
+        return (reordered_axes, reordered_shape,
+                _pad_and_reorder(chunk_shape, True),
+                _pad_and_reorder(shard_shape, True),
+                transpose_order)
+
+    def _reorder_domain(self, domain: Any, transpose_order: Tuple[int, ...]) -> Any:
+        """
+        Reorder a chunk domain according to the transpose order.
+
+        Args:
+            domain: TensorStore IndexDomain or tuple of slices
+            transpose_order: New axis order (e.g., (3, 0, 1, 2) for XYZC -> CXYZ)
+
+        Returns:
+            Reordered domain
+        """
+        if hasattr(domain, 'origin'):
+            slices = []
+            for i in range(len(domain.origin)):
+                start = int(domain.origin[i])
+                stop = start + int(domain.shape[i])
+                slices.append(slice(start, stop))
+            return tuple(slices[i] for i in transpose_order)
+        elif isinstance(domain, tuple):
+            return tuple(domain[i] for i in transpose_order)
+        else:
+            return domain
 
     def __repr__(self) -> str:
         """String representation of writer."""

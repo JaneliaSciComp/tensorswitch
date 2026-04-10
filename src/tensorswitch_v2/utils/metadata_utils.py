@@ -17,6 +17,21 @@ import re
 from typing import List, Optional, Tuple
 
 
+# ============================================================================
+# Shared Constants
+# ============================================================================
+
+NON_SPATIAL_AXES = frozenset({'c', 't', 'v', 'channel'})
+"""Axis names that should never be downsampled (factor=1)."""
+
+LABEL_KEYWORDS = ('label', 'mask', 'seg', 'annotation', 'roi', 'binary', 'instance')
+"""Path keywords that indicate segmentation/label data (use mode downsampling)."""
+
+
+# ============================================================================
+# Shared Axis Helpers
+# ============================================================================
+
 def normalize_axis_name(axis: str) -> str:
     """Normalize an axis name to OME-NGFF standard single-letter form.
 
@@ -28,6 +43,29 @@ def normalize_axis_name(axis: str) -> str:
     if ax == 'v':
         return 't'
     return ax
+
+
+def get_axis_type(axis_name: str) -> str:
+    """Get OME-NGFF axis type from a (possibly un-normalized) axis name."""
+    ax = axis_name.lower()
+    if ax in ('x', 'y', 'z'):
+        return 'space'
+    if ax in ('c', 'channel'):
+        return 'channel'
+    if ax in ('t', 'v'):
+        return 'time'
+    return 'space'
+
+
+def get_axis_unit(axis_name: str, spatial_unit: str = 'nanometer',
+                  time_unit: str = 'millisecond') -> Optional[str]:
+    """Get physical unit for an axis, or None for dimensionless axes."""
+    ax = axis_name.lower()
+    if ax in ('x', 'y', 'z'):
+        return spatial_unit
+    if ax == 't':
+        return time_unit
+    return None
 
 
 def infer_dimension_names(
@@ -350,83 +388,28 @@ def create_zarr3_ome_metadata(ome_xml, array_shape, image_name, pixel_sizes=None
                       generates default colors.
         level_path: Path for level 0 dataset (default "s0" for Janelia convention)
     """
-    def get_axis_type(axis_name):
-        axis_lower = axis_name.lower()
-        if axis_lower in ['c', 'channel']:
-            return 'channel'
-        elif axis_lower in ['t', 'v']:
-            return 'time'
-        else:
-            return 'space'
-
-    def normalize_axis_name(axis_name):
-        """Normalize axis name to OME-NGFF standard (c instead of channel, etc.)"""
-        axis_lower = axis_name.lower()
-        if axis_lower == 'channel':
-            return 'c'
-        elif axis_lower == 'v':
-            return 't'
-        return axis_lower
-
-    def get_axis_unit(axis_name):
-        if axis_name in ['x', 'y', 'z']:
-            return spatial_unit
-        elif axis_name == 't':
-            return 'millisecond'
-        return None
-
     ndim = len(array_shape)
-    axes = []
-    scale_factors = [1.0] * ndim
 
+    # Determine axis names
     if axes_order and len(axes_order) == ndim:
-        for axis_name in axes_order:
-            output_name = normalize_axis_name(axis_name)
-            axis_entry = {"name": output_name, "type": get_axis_type(axis_name)}
-            unit = get_axis_unit(axis_name)
-            if unit:
-                axis_entry["unit"] = unit
-            axes.append(axis_entry)
-        if pixel_sizes is not None:
-            scale_factors = [pixel_sizes.get(axis, 1.0) for axis in axes_order]
-    elif ndim == 3:
-        if array_shape[0] <= 10:
-            axes = [
-                {"name": "c", "type": "channel"},
-                {"name": "y", "type": "space", "unit": spatial_unit},
-                {"name": "x", "type": "space", "unit": spatial_unit}
-            ]
-            if pixel_sizes:
-                scale_factors = [1.0, pixel_sizes.get('y', 1.0), pixel_sizes.get('x', 1.0)]
-        else:
-            axes = [
-                {"name": "z", "type": "space", "unit": spatial_unit},
-                {"name": "y", "type": "space", "unit": spatial_unit},
-                {"name": "x", "type": "space", "unit": spatial_unit}
-            ]
-            if pixel_sizes:
-                scale_factors = [pixel_sizes.get('z', 1.0), pixel_sizes.get('y', 1.0), pixel_sizes.get('x', 1.0)]
-    elif ndim == 4:
-        axes = [
-            {"name": "c", "type": "channel"},
-            {"name": "z", "type": "space", "unit": spatial_unit},
-            {"name": "y", "type": "space", "unit": spatial_unit},
-            {"name": "x", "type": "space", "unit": spatial_unit}
-        ]
-        if pixel_sizes:
-            scale_factors = [1.0, pixel_sizes.get('z', 1.0), pixel_sizes.get('y', 1.0), pixel_sizes.get('x', 1.0)]
-    elif ndim == 5:
-        axes = [
-            {"name": "t", "type": "time", "unit": "millisecond"},
-            {"name": "c", "type": "channel"},
-            {"name": "z", "type": "space", "unit": spatial_unit},
-            {"name": "y", "type": "space", "unit": spatial_unit},
-            {"name": "x", "type": "space", "unit": spatial_unit}
-        ]
-        if pixel_sizes:
-            scale_factors = [1.0, 1.0, pixel_sizes.get('z', 1.0), pixel_sizes.get('y', 1.0), pixel_sizes.get('x', 1.0)]
+        axis_names = [normalize_axis_name(a) for a in axes_order]
     else:
-        axes = [{"name": f"axis_{i}", "type": "space"} for i in range(ndim)]
+        axis_names = infer_dimension_names(array_shape)
+
+    # Build axes metadata entries
+    axes = []
+    for name in axis_names:
+        entry = {"name": name, "type": get_axis_type(name)}
+        unit = get_axis_unit(name, spatial_unit=spatial_unit)
+        if unit:
+            entry["unit"] = unit
+        axes.append(entry)
+
+    # Build scale factors from pixel_sizes
+    if pixel_sizes is not None:
+        scale_factors = [pixel_sizes.get(name, 1.0) for name in axis_names]
+    else:
+        scale_factors = [1.0] * ndim
 
     coordinate_transformations = [{
         "type": "scale",

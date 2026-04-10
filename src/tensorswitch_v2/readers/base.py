@@ -15,6 +15,7 @@ import warnings
 import numpy as np
 import tensorstore as ts
 from ..utils import get_dtype_name, infer_dimension_names
+from ..utils.metadata_utils import LABEL_KEYWORDS
 
 
 def _default_voxel_sizes(source_format: str = "unknown") -> Dict[str, float]:
@@ -518,16 +519,13 @@ class BaseReader(ABC):
         """
         import os
 
-        # Keywords that suggest segmentation/label data
-        label_keywords = ['label', 'mask', 'seg', 'annotation', 'roi', 'binary', 'instance']
-
         # Check multiple levels of the path (handles /data/labels/dataset.zarr/s0)
         # Normalize and split path into components
         path_parts = self.path.lower().replace('\\', '/').split('/')
         # Check last 4 components (covers most directory structures)
         check_parts = ' '.join(path_parts[-4:]) if len(path_parts) >= 4 else ' '.join(path_parts)
 
-        for keyword in label_keywords:
+        for keyword in LABEL_KEYWORDS:
             if keyword in check_parts:
                 return 'mode'
 

@@ -17,7 +17,7 @@ import warnings
 import numpy as np
 import math
 
-from .metadata_utils import infer_dimension_names
+from .metadata_utils import infer_dimension_names, NON_SPATIAL_AXES, LABEL_KEYWORDS
 
 
 def calculate_anisotropic_downsample_factors(voxel_sizes, axes_names, min_ratio=0.5, max_ratio=2.0, use_anisotropic=True):
@@ -39,8 +39,6 @@ def calculate_anisotropic_downsample_factors(voxel_sizes, axes_names, min_ratio=
     Returns:
         List of downsampling factors (e.g., [1, 2, 2] for c, y, x)
     """
-    NON_SPATIAL_AXES = ['c', 't', 'v']
-
     if not use_anisotropic:
         return [1 if axis in NON_SPATIAL_AXES else 2 for axis in axes_names]
 
@@ -151,7 +149,6 @@ def calculate_num_multiscale_levels(shape, axes_names, voxel_sizes, chunk_shape=
         min_array_shape = [32] * len(shape)
 
     level = 0
-    NON_SPATIAL_AXES = ['c', 't', 'v']
 
     while True:
         level += 1
@@ -417,15 +414,12 @@ def resolve_downsample_method(method: str, input_path: str) -> str:
         return method
 
     # Use filename heuristics to detect label/segmentation data
-    label_keywords = ['label', 'mask', 'seg', 'annotation', 'roi', 'binary', 'instance']
-
-    # Check multiple levels of the path (handles /data/labels/dataset.zarr/s0)
     # Normalize and split path into components
     path_parts = input_path.lower().replace('\\', '/').split('/')
     # Check last 4 components (covers most directory structures)
     check_parts = ' '.join(path_parts[-4:]) if len(path_parts) >= 4 else ' '.join(path_parts)
 
-    for keyword in label_keywords:
+    for keyword in LABEL_KEYWORDS:
         if keyword in check_parts:
             return 'mode'
 

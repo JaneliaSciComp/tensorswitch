@@ -25,6 +25,7 @@ from ..utils import (
     detect_source_order,
     update_ome_metadata_if_needed,
 )
+from ..utils.metadata_utils import NON_SPATIAL_AXES
 
 
 class DistributedConverter:
@@ -97,10 +98,9 @@ class DistributedConverter:
                 labels = []
 
             # Identify spatial dimensions (skip channel, time, etc.)
-            NON_SPATIAL = ('channel', 'c', 't', 'v')
             if labels:
                 spatial_dims = [i for i, l in enumerate(labels)
-                                if l.lower() not in NON_SPATIAL]
+                                if l.lower() not in NON_SPATIAL_AXES]
             else:
                 # No labels — assume first min(3, ndim) dims are spatial
                 spatial_dims = list(range(min(3, self._input_store.ndim)))

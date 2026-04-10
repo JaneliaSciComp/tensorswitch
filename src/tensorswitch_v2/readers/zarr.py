@@ -11,6 +11,52 @@ import json
 import tensorstore as ts
 from .base import BaseReader, _default_voxel_sizes
 from ..utils import get_tensorstore_context
+from ..utils.format_loaders import convert_to_nanometers
+
+
+def _extract_voxel_sizes_from_multiscales(metadata, dataset_path, default_paths):
+    """Extract voxel sizes from OME-NGFF multiscales metadata.
+
+    Shared helper for Zarr3Reader and Zarr2Reader get_voxel_sizes().
+
+    Args:
+        metadata: Parsed group metadata dict (must have 'multiscales' key).
+        dataset_path: The reader's dataset path (e.g. 's0', '0').
+        default_paths: Fallback path strings to match when dataset_path is empty.
+
+    Returns:
+        dict with 'x','y','z' in nanometers, or None if not found.
+    """
+    multiscales = metadata.get('multiscales', [])
+    if not multiscales:
+        return None
+
+    datasets = multiscales[0].get('datasets', [])
+    axes = multiscales[0].get('axes', [])
+
+    # Build axis name → unit mapping
+    axis_units = {}
+    for axis in axes:
+        axis_name = axis.get('name', '').lower()
+        axis_units[axis_name] = axis.get('unit', 'micrometer')
+
+    # Find the dataset matching our path
+    for ds in datasets:
+        ds_path = ds.get('path', '')
+        if ds_path == dataset_path or (not dataset_path and ds_path in default_paths):
+            transforms = ds.get('coordinateTransformations', [])
+            for t in transforms:
+                if t.get('type') == 'scale':
+                    scales = t.get('scale', [])
+                    voxel_sizes = {'x': 1.0, 'y': 1.0, 'z': 1.0}
+                    for i, axis in enumerate(axes):
+                        axis_name = axis.get('name', '').lower()
+                        if i < len(scales) and axis_name in voxel_sizes:
+                            unit = axis_units.get(axis_name, 'micrometer')
+                            voxel_sizes[axis_name] = convert_to_nanometers(scales[i], unit)
+                    return voxel_sizes
+
+    return None
 
 
 class Zarr3Reader(BaseReader):
@@ -193,41 +239,9 @@ class Zarr3Reader(BaseReader):
             >>> reader = Zarr3Reader("/data.zarr")
             >>> voxel_sizes = reader.get_voxel_sizes()
         """
-        from ..utils.format_loaders import convert_to_nanometers
-
-        metadata = self.get_metadata()
-
-        # Try to get from OME-NGFF multiscales
-        multiscales = metadata.get('multiscales', [])
-        if multiscales:
-            datasets = multiscales[0].get('datasets', [])
-            axes = multiscales[0].get('axes', [])
-
-            # Build axis name to unit mapping
-            axis_units = {}
-            for axis in axes:
-                axis_name = axis.get('name', '').lower()
-                axis_units[axis_name] = axis.get('unit', 'micrometer')
-
-            # Find the dataset matching our path
-            for ds in datasets:
-                ds_path = ds.get('path', '')
-                if ds_path == self._dataset_path or (not self._dataset_path and ds_path in ['', '0', 's0']):
-                    transforms = ds.get('coordinateTransformations', [])
-                    for t in transforms:
-                        if t.get('type') == 'scale':
-                            scales = t.get('scale', [])
-                            # Map scales to axes and convert to nanometers
-                            voxel_sizes = {'x': 1.0, 'y': 1.0, 'z': 1.0}
-                            for i, axis in enumerate(axes):
-                                axis_name = axis.get('name', '').lower()
-                                if i < len(scales) and axis_name in voxel_sizes:
-                                    unit = axis_units.get(axis_name, 'micrometer')
-                                    voxel_sizes[axis_name] = convert_to_nanometers(scales[i], unit)
-                            return voxel_sizes
-
-        # Default
-        return _default_voxel_sizes("Zarr")
+        result = _extract_voxel_sizes_from_multiscales(
+            self.get_metadata(), self._dataset_path, ('', '0', 's0'))
+        return result if result else _default_voxel_sizes("Zarr")
 
     def supports_remote(self) -> bool:
         """Check if this is a remote store."""
@@ -384,38 +398,9 @@ class Zarr2Reader(BaseReader):
         Returns:
             dict: Voxel dimensions with keys 'x', 'y', 'z' in nanometers
         """
-        from ..utils.format_loaders import convert_to_nanometers
-
-        metadata = self.get_metadata()
-
-        # Try to get from OME-NGFF multiscales
-        multiscales = metadata.get('multiscales', [])
-        if multiscales:
-            datasets = multiscales[0].get('datasets', [])
-            axes = multiscales[0].get('axes', [])
-
-            # Build axis name to unit mapping
-            axis_units = {}
-            for axis in axes:
-                axis_name = axis.get('name', '').lower()
-                axis_units[axis_name] = axis.get('unit', 'micrometer')
-
-            for ds in datasets:
-                ds_path = ds.get('path', '')
-                if ds_path == self._dataset_path or (not self._dataset_path and ds_path in ['', '0']):
-                    transforms = ds.get('coordinateTransformations', [])
-                    for t in transforms:
-                        if t.get('type') == 'scale':
-                            scales = t.get('scale', [])
-                            voxel_sizes = {'x': 1.0, 'y': 1.0, 'z': 1.0}
-                            for i, axis in enumerate(axes):
-                                axis_name = axis.get('name', '').lower()
-                                if i < len(scales) and axis_name in voxel_sizes:
-                                    unit = axis_units.get(axis_name, 'micrometer')
-                                    voxel_sizes[axis_name] = convert_to_nanometers(scales[i], unit)
-                            return voxel_sizes
-
-        return _default_voxel_sizes("Zarr")
+        result = _extract_voxel_sizes_from_multiscales(
+            self.get_metadata(), self._dataset_path, ('', '0', 's0'))
+        return result if result else _default_voxel_sizes("Zarr")
 
     def supports_remote(self) -> bool:
         """Check if this is a remote store."""

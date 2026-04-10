@@ -14,10 +14,7 @@ import numpy as np
 import os
 from urllib.parse import urlparse, unquote
 
-from .metadata_utils import normalize_axis_name, infer_dimension_names as _infer_dims
-
-
-NON_SPATIAL_AXES = {'c', 't', 'v', 'channel'}
+from .metadata_utils import normalize_axis_name, infer_dimension_names as _infer_dims, NON_SPATIAL_AXES
 
 
 def get_dtype_name(dtype) -> str:
@@ -550,8 +547,6 @@ def zarr2_store_spec(zarr_level_path, shape, chunks=None, use_fortran_order=Fals
         dtype: Data type string (e.g., '<u2' for uint16)
         compressor: Compressor dict (default: zstd level 5)
     """
-    # Non-spatial axes that should have chunk size 1 for efficient per-slice access
-    NON_SPATIAL_AXES = ['c', 't', 'v', 'channel']
     # Adaptive spatial chunk size based on dataset size (see adaptive_spatial_chunk())
     spatial_chunk = adaptive_spatial_chunk(shape, dtype)
 
