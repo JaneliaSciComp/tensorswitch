@@ -14,7 +14,7 @@ import threading
 import warnings
 import numpy as np
 import tensorstore as ts
-from ..utils import get_dtype_name
+from ..utils import get_dtype_name, infer_dimension_names
 
 
 def _default_voxel_sizes(source_format: str = "unknown") -> Dict[str, float]:
@@ -440,15 +440,7 @@ class BaseReader(ABC):
 
         # Infer dimension names if not provided
         if not dimension_names:
-            ndim = len(shape)
-            if ndim == 3:
-                dimension_names = ['z', 'y', 'x']
-            elif ndim == 4:
-                dimension_names = ['c', 'z', 'y', 'x']
-            elif ndim == 5:
-                dimension_names = ['t', 'c', 'z', 'y', 'x']
-            else:
-                dimension_names = [f'dim_{i}' for i in range(ndim)]
+            dimension_names = infer_dimension_names(shape)
 
         # Build OME-NGFF axes
         axes = []
@@ -721,14 +713,7 @@ class DaskReader(BaseReader):
 
     def _infer_dimension_names(self, shape):
         """Infer standard dimension names from array shape."""
-        ndim = len(shape)
-        defaults = {
-            2: ['y', 'x'],
-            3: ['z', 'y', 'x'],
-            4: ['c', 'z', 'y', 'x'],
-            5: ['t', 'c', 'z', 'y', 'x'],
-        }
-        return defaults.get(ndim, [f'dim_{i}' for i in range(ndim)])
+        return infer_dimension_names(shape)
 
     def get_tensorstore(self) -> ts.TensorStore:
         """

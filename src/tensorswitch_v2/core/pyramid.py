@@ -26,8 +26,9 @@ os.umask(0o0002)
 
 # Import utility functions from v2 utils (independent from v1)
 from tensorswitch_v2.utils import (
-    calculate_pyramid_plan as v1_calculate_pyramid_plan,
+    calculate_pyramid_plan as _base_calculate_pyramid_plan,
     calculate_anisotropic_downsample_factors,
+    infer_dimension_names,
     precreate_zarr3_output,
     get_tensorstore_context,
     update_ome_metadata_if_needed,
@@ -376,14 +377,7 @@ class PyramidPlanner:
 
             # 3. Infer from shape as fallback
             if not dimension_names:
-                if len(shape) == 5:
-                    dimension_names = ['t', 'c', 'z', 'y', 'x']
-                elif len(shape) == 4:
-                    dimension_names = ['c', 'z', 'y', 'x']
-                elif len(shape) == 3:
-                    dimension_names = ['z', 'y', 'x']
-                else:
-                    dimension_names = [f'dim_{i}' for i in range(len(shape))]
+                dimension_names = infer_dimension_names(shape)
 
             # Extract source spatial unit from root metadata
             source_spatial_unit = extract_source_spatial_unit(self.root_path, 'zarr2')
@@ -461,19 +455,19 @@ class PyramidPlanner:
             # Use custom factors instead of auto-calculation
             return self._calculate_plan_with_custom_factors(custom_per_level_factors)
 
-        # Use v1's calculate_pyramid_plan as base
-        v1_plan = v1_calculate_pyramid_plan(
+        # Use base calculate_pyramid_plan from pyramid_utils
+        base_plan = _base_calculate_pyramid_plan(
             self.s0_path,
             min_array_nbytes=min_array_nbytes,
             min_array_shape=min_array_shape
         )
 
-        # Extract per-level factors from v1 plan
-        per_level_factors = [level['factor'] for level in v1_plan['pyramid_plan']]
+        # Extract per-level factors from base plan
+        per_level_factors = [level['factor'] for level in base_plan['pyramid_plan']]
 
         # Enhance with cumulative factors
         enhanced_levels = []
-        for level_info in v1_plan['pyramid_plan']:
+        for level_info in base_plan['pyramid_plan']:
             level = level_info['level']
 
             # Calculate cumulative factor for direct s0→sN downsampling
@@ -491,21 +485,20 @@ class PyramidPlanner:
             enhanced_levels.append(enhanced_level)
 
         # Get source spatial unit for preservation during downsampling
-        source_spatial_unit = extract_source_spatial_unit(self.root_path, v1_plan['format'])
+        source_spatial_unit = extract_source_spatial_unit(self.root_path, base_plan['format'])
 
         return {
-            'format': v1_plan['format'],
-            'shape': v1_plan['shape'],
-            'voxel_sizes': v1_plan['voxel_sizes'],
-            'axes_names': v1_plan['axes_names'],
-            'chunk_shape': v1_plan['chunk_shape'],
-            'shard_shape': v1_plan.get('shard_shape'),
-            'inner_chunk_shape': v1_plan.get('inner_chunk_shape'),
-            'dtype_size': v1_plan['dtype_size'],
-            'num_levels': v1_plan['num_levels'],
+            'format': base_plan['format'],
+            'shape': base_plan['shape'],
+            'voxel_sizes': base_plan['voxel_sizes'],
+            'axes_names': base_plan['axes_names'],
+            'chunk_shape': base_plan['chunk_shape'],
+            'shard_shape': base_plan.get('shard_shape'),
+            'inner_chunk_shape': base_plan.get('inner_chunk_shape'),
+            'dtype_size': base_plan['dtype_size'],
+            'num_levels': base_plan['num_levels'],
             'levels': enhanced_levels,
-            # Keep original v1 plan for compatibility
-            'v1_pyramid_plan': v1_plan['pyramid_plan'],
+            'base_pyramid_plan': base_plan['pyramid_plan'],
             'source_spatial_unit': source_spatial_unit,
         }
 
@@ -539,16 +532,7 @@ class PyramidPlanner:
         # Get axes names
         axes_names = s0_metadata.get('dimension_names')
         if not axes_names:
-            # Infer from shape
-            ndim = len(s0_shape)
-            if ndim == 5:
-                axes_names = ['t', 'c', 'z', 'y', 'x']
-            elif ndim == 4:
-                axes_names = ['c', 'z', 'y', 'x']
-            elif ndim == 3:
-                axes_names = ['z', 'y', 'x']
-            else:
-                axes_names = [f'dim_{i}' for i in range(ndim)]
+            axes_names = infer_dimension_names(s0_shape)
 
         # Get dtype size
         dtype_str = s0_metadata.get('data_type', 'uint16')

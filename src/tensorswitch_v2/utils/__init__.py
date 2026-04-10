@@ -37,6 +37,8 @@ from .chunk_utils import (
 )
 
 from .metadata_utils import (
+    normalize_axis_name,
+    infer_dimension_names,
     update_ome_metadata_if_needed,
     update_ome_multiscale_metadata,
     update_ome_multiscale_metadata_zarr2,
@@ -114,6 +116,8 @@ __all__ = [
     'get_total_chunks_from_store',
     'get_chunk_linear_indices_in_shard',
     # Metadata utilities
+    'normalize_axis_name',
+    'infer_dimension_names',
     'update_ome_metadata_if_needed',
     'update_ome_multiscale_metadata',
     'update_ome_multiscale_metadata_zarr2',

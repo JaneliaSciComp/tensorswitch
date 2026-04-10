@@ -14,6 +14,8 @@ import numpy as np
 import os
 from urllib.parse import urlparse, unquote
 
+from .metadata_utils import normalize_axis_name, infer_dimension_names as _infer_dims
+
 
 NON_SPATIAL_AXES = {'c', 't', 'v', 'channel'}
 
@@ -388,29 +390,11 @@ def zarr3_store_spec(path, shape, dtype, use_shard=True, level_path="s0", use_om
         array_path = path
 
     # Determine dimension names (normalize to OME-NGFF standard)
-    def normalize_axis(ax):
-        ax_lower = ax.lower()
-        if ax_lower == 'channel':
-            return 'c'
-        elif ax_lower == 'v':
-            return 't'
-        return ax_lower
-
     if axes_order is not None and len(axes_order) == len(shape):
-        dimension_names = [normalize_axis(ax) for ax in axes_order]
+        dimension_names = [normalize_axis_name(ax) for ax in axes_order]
         print(f"Using dimension names from source metadata: {dimension_names}")
     else:
-        if len(shape) == 3:
-            if shape[0] <= 10:
-                dimension_names = ["c", "y", "x"]
-            else:
-                dimension_names = ["z", "y", "x"]
-        elif len(shape) == 4:
-            dimension_names = ["c", "z", "y", "x"]
-        elif len(shape) == 5:
-            dimension_names = ["t", "c", "z", "y", "x"]
-        else:
-            dimension_names = [f"dim_{i}" for i in range(len(shape))]
+        dimension_names = _infer_dims(shape)
         print(f"Inferred dimension names from shape: {dimension_names}")
 
     return {
@@ -586,25 +570,8 @@ def zarr2_store_spec(zarr_level_path, shape, chunks=None, use_fortran_order=Fals
         return result
 
     def infer_axes_from_shape(shape):
-        """Infer axis names from shape - same logic as zarr3."""
-        if len(shape) == 2:
-            return ["y", "x"]
-        elif len(shape) == 3:
-            # For 3D, assume channels if first dimension is small, otherwise Z
-            if shape[0] <= 10:
-                return ["c", "y", "x"]
-            else:
-                return ["z", "y", "x"]
-        elif len(shape) == 4:
-            # CZYX or TZYX - check first dim
-            if shape[0] <= 10:
-                return ["c", "z", "y", "x"]
-            else:
-                return ["t", "z", "y", "x"]
-        elif len(shape) == 5:
-            return ["t", "c", "z", "y", "x"]
-        else:
-            return [f"dim_{i}" for i in range(len(shape))]
+        """Infer axis names from shape using size-based heuristics."""
+        return _infer_dims(shape)
 
     # Auto-calculate chunks if not provided
     if chunks is None:

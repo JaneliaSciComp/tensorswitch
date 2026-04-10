@@ -17,6 +17,8 @@ import warnings
 import numpy as np
 import math
 
+from .metadata_utils import infer_dimension_names
+
 
 def calculate_anisotropic_downsample_factors(voxel_sizes, axes_names, min_ratio=0.5, max_ratio=2.0, use_anisotropic=True):
     """
@@ -339,8 +341,8 @@ def calculate_pyramid_plan(s0_path, min_array_nbytes=None, min_array_shape=None)
         print(f"Warning: Could not extract voxel sizes, using default: {voxel_sizes}")
 
     if not axes_names:
-        axes_names = ['z', 'y', 'x'][-len(shape):]
-        print(f"Warning: Could not extract axes_names, using default: {axes_names}")
+        axes_names = infer_dimension_names(shape, voxel_sizes=voxel_sizes)
+        print(f"Warning: Could not extract axes_names, inferred from shape: {axes_names}")
 
     if not chunk_shape:
         chunk_shape = [32] * len(shape)

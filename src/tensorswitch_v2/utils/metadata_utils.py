@@ -14,7 +14,121 @@ import json
 import glob
 import numpy as np
 import re
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
+
+
+def normalize_axis_name(axis: str) -> str:
+    """Normalize an axis name to OME-NGFF standard single-letter form.
+
+    Maps 'channel' → 'c', 'v' (CZI multi-view) → 't', and lowercases all others.
+    """
+    ax = axis.lower()
+    if ax == 'channel':
+        return 'c'
+    if ax == 'v':
+        return 't'
+    return ax
+
+
+def infer_dimension_names(
+    shape,
+    *,
+    non_spatial_threshold: int = 10,
+    voxel_sizes=None,
+) -> List[str]:
+    """Infer dimension names from array shape using size-based heuristics.
+
+    Classifies each dimension as spatial (z/y/x) or non-spatial (t/c) based on
+    whether its size exceeds *non_spatial_threshold*.
+
+    * Spatial names are assigned **right-to-left** among spatial positions: x, y, z.
+    * Non-spatial names are assigned **left-to-right** among non-spatial positions:
+      1 non-spatial → 'c'; 2 non-spatial → first='t', second='c'.
+    * If *voxel_sizes* is provided and there are exactly 3 spatial dims, the
+      spatial dim with the largest voxel size is labelled 'z' (unless isotropic).
+
+    For ndim ≤ 2 the result is always ``['y', 'x']`` or ``['x']``.
+    For ndim ≥ 3 with all dims above threshold, all are treated as spatial.
+
+    Args:
+        shape: Array shape (tuple or list of ints).
+        non_spatial_threshold: Dimensions with size ≤ this are classified as
+            non-spatial.  Default 10.
+        voxel_sizes: Optional list of voxel sizes (same length as *shape*).
+            Used to disambiguate which spatial axis is 'z' when all dims are
+            above the threshold.
+
+    Returns:
+        List of inferred dimension names (e.g. ``['t', 'c', 'z', 'y', 'x']``).
+    """
+    ndim = len(shape)
+
+    if ndim == 0:
+        return []
+    if ndim == 1:
+        return ['x']
+    if ndim == 2:
+        return ['y', 'x']
+
+    # --- ndim >= 3 ----------------------------------------------------------
+    is_spatial = [s > non_spatial_threshold for s in shape]
+    num_spatial = sum(is_spatial)
+    num_non_spatial = ndim - num_spatial
+
+    # Good classification: 2-3 spatial dims and at most 2 non-spatial
+    if 2 <= num_spatial <= 3 and num_non_spatial <= 2:
+        spatial_positions = [i for i, sp in enumerate(is_spatial) if sp]
+        non_spatial_positions = [i for i, sp in enumerate(is_spatial) if not sp]
+
+        # --- Assign spatial names (right-to-left: x, y, z) ------------------
+        if num_spatial == 2:
+            spatial_labels = ['y', 'x']
+        else:
+            spatial_labels = ['z', 'y', 'x']  # default position-based
+
+        # Voxel-size hint: if 3 spatial dims and voxel_sizes given,
+        # re-assign 'z' to the spatial dim with the largest voxel size.
+        if num_spatial == 3 and voxel_sizes is not None and len(voxel_sizes) == ndim:
+            sp_voxels = [(pos, voxel_sizes[pos]) for pos in spatial_positions]
+            voxel_vals = [v for _, v in sp_voxels]
+            # Only use hint if NOT isotropic (at least one differs)
+            if len(set(voxel_vals)) > 1:
+                max_voxel_pos = max(sp_voxels, key=lambda pv: pv[1])[0]
+                remaining = [p for p in spatial_positions if p != max_voxel_pos]
+                # remaining assigned right-to-left: rightmost='x', other='y'
+                spatial_labels_map = {max_voxel_pos: 'z'}
+                spatial_labels_map[remaining[-1]] = 'x'
+                spatial_labels_map[remaining[0]] = 'y'
+                # Build ordered list
+                spatial_labels = [spatial_labels_map[p] for p in spatial_positions]
+            # else: isotropic → keep position-based default
+
+        # --- Assign non-spatial names -----------------------------------------
+        # 1 non-spatial → 'c' (channel is more common as single non-spatial dim)
+        # 2 non-spatial → left-to-right: 't', 'c'
+        if num_non_spatial == 1:
+            non_spatial_labels = ['c']
+        else:
+            non_spatial_labels = ['t', 'c']
+
+        # --- Merge into result -----------------------------------------------
+        result = [''] * ndim
+        for idx, label in zip(spatial_positions, spatial_labels):
+            result[idx] = label
+        for idx, label in zip(non_spatial_positions, non_spatial_labels):
+            result[idx] = label
+        return result
+
+    # --- Fallback: ambiguous classification ---------------------------------
+    # (e.g. all dims small, 4+ spatial dims, etc.)
+    defaults = {
+        3: ['z', 'y', 'x'],
+        4: ['c', 'z', 'y', 'x'],
+        5: ['t', 'c', 'z', 'y', 'x'],
+    }
+    if ndim in defaults:
+        return defaults[ndim]
+    return [f'dim_{i}' for i in range(ndim)]
 
 
 def get_software_metadata():
