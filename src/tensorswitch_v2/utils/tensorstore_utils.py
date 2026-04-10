@@ -9,6 +9,7 @@ This module contains core TensorStore-related utilities including:
 - Source data order detection
 """
 
+import math
 import tensorstore as ts
 import numpy as np
 import os
@@ -76,6 +77,22 @@ def build_default_shape(shape, axes_order, spatial_size):
             for ax in axes_order
         ]
     return [spatial_size] * len(shape)
+
+
+def _clamp_shard_to_shape(shard, shape, chunk):
+    """Clamp shard dims to data extent, rounded up to chunk boundary.
+
+    Prevents wasteful shards larger than the data in any dimension.
+    Zarr3 requires shard dims to be multiples of chunk dims.
+    """
+    result = []
+    for s_dim, d_dim, c_dim in zip(shard, shape, chunk):
+        if d_dim < s_dim:
+            aligned = int(math.ceil(d_dim / c_dim)) * c_dim
+            result.append(min(aligned, s_dim))
+        else:
+            result.append(s_dim)
+    return result
 
 
 def get_tensorstore_context(num_cores=None):
@@ -344,7 +361,8 @@ def zarr3_store_spec(path, shape, dtype, use_shard=True, level_path="s0", use_om
             else:
                 chunk_shape = custom_shard_shape
         else:
-            chunk_shape = build_default_shape(shape, axes_order, 1024)
+            default_shard = build_default_shape(shape, axes_order, 1024)
+            chunk_shape = _clamp_shard_to_shape(default_shard, shape, adjusted_inner_chunk)
     else:
         # Non-sharded codecs
         codecs = []
