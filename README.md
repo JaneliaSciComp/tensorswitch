@@ -1107,9 +1107,9 @@ TensorSwitch v2 includes an MCP (Model Context Protocol) server that allows Clau
 
 | Tool | Description |
 |------|-------------|
-| `inspect_dataset` | Returns shape, dtype, voxel sizes, axes, pyramid levels, OME metadata |
+| `inspect_dataset` | Returns shape, dtype, voxel sizes, axes, pyramid levels, OME metadata. Supports remote S3/HTTP URLs. |
 | `discover_datasets` | Scans a directory for image/segmentation layers |
-| `convert` | Converts between formats with full CLI parity (2 GB size guard — larger datasets redirect to `submit_job`) |
+| `convert` | Converts between formats with full CLI parity. Supports remote S3/HTTP sources with `--bbox` for subvolume extraction. 2 GB size guard — larger datasets redirect to `submit_job`. |
 | `generate_pyramid` | Creates multiscale pyramid locally with chained downsampling and anisotropic handling |
 | `list_formats` | Lists all supported input/output formats by tier |
 | `estimate_resources` | Estimates memory, wall time, and cores needed for a conversion |
@@ -1133,6 +1133,23 @@ Then ask Claude natural language questions like:
 - "Submit a conversion job for this large TIFF"
 - "What's the status of that job?"
 - "Generate a pyramid for the converted output"
+- "Inspect this remote dataset: https://janelia-cosem-datasets.s3.amazonaws.com/jrc_hela-2/jrc_hela-2.zarr/recon-1/em/fibsem-uint8"
+- "Convert a 64x64x64 crop from that remote S3 dataset to local Zarr3"
+
+### Cross-Repository Discovery (with micro-agent)
+
+TensorSwitch MCP works alongside [micro-agent](https://github.com/AI-HHMI/micro-agent)'s microscopy-unified MCP for end-to-end data discovery and conversion. Register both servers:
+
+```bash
+# TensorSwitch MCP (conversion, inspection, pyramids)
+claude mcp add --transport stdio tensorswitch -- pixi run python -m tensorswitch_v2.mcp_server
+
+# microscopy-unified MCP (cross-repo dataset discovery)
+claude mcp add --transport stdio microscopy-unified -- \
+  bash -c "cd /path/to/micro-agent && PYTHONPATH=mcp_servers .pixi/envs/default/bin/python -u mcp_servers/unified_server.py"
+```
+
+Then Claude can chain tools across both servers: discover datasets across OpenOrganelle/IDR/EMPIAR/BioImage Archive → inspect remote data on S3 → convert to local Zarr3 → generate pyramids.
 
 ### Requirements
 
