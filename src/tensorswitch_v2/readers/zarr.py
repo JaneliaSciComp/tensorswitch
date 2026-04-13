@@ -9,7 +9,7 @@ from typing import Dict, Optional, List
 import os
 import json
 import tensorstore as ts
-from .base import BaseReader, _default_voxel_sizes
+from .base import BaseReader, _default_voxel_sizes, build_kvstore as _build_kvstore_shared
 from ..utils import get_tensorstore_context
 from ..utils.format_loaders import convert_to_nanometers
 
@@ -135,36 +135,16 @@ class Zarr3Reader(BaseReader):
         return self._ts_store_cache
 
     def _build_kvstore(self) -> Dict:
-        """
-        Build kvstore spec based on path type (local, GCS, S3, HTTP).
-        """
+        """Build kvstore spec using shared build_kvstore (handles S3, GCS, HTTP, local)."""
         full_path = os.path.join(self.path, self._dataset_path) if self._dataset_path else self.path
-
-        if full_path.startswith('gs://'):
-            # Google Cloud Storage
-            parts = full_path[5:].split('/', 1)
-            bucket = parts[0]
-            path = parts[1] if len(parts) > 1 else ''
-            return {'driver': 'gcs', 'bucket': bucket, 'path': path}
-        elif full_path.startswith('s3://'):
-            # AWS S3
-            parts = full_path[5:].split('/', 1)
-            bucket = parts[0]
-            path = parts[1] if len(parts) > 1 else ''
-            return {'driver': 's3', 'bucket': bucket, 'path': path}
-        elif full_path.startswith('http://') or full_path.startswith('https://'):
-            # HTTP
-            return {'driver': 'http', 'base_url': full_path}
-        else:
-            # Local file
-            return {'driver': 'file', 'path': full_path}
+        return _build_kvstore_shared(full_path)
 
     def get_metadata(self) -> Dict:
         """
         Return Zarr3 metadata from zarr.json.
 
         Reads the zarr.json file which contains array metadata
-        and OME-NGFF attributes.
+        and OME-NGFF attributes. Supports both local and remote stores.
 
         Returns:
             dict: Zarr3 metadata including OME-NGFF if present
@@ -176,9 +156,18 @@ class Zarr3Reader(BaseReader):
         if self._metadata_cache is not None:
             return self._metadata_cache
 
+        if self.supports_remote():
+            metadata = self._read_remote_metadata()
+        else:
+            metadata = self._read_local_metadata()
+
+        self._metadata_cache = metadata
+        return metadata
+
+    def _read_local_metadata(self) -> Dict:
+        """Read zarr.json metadata from local filesystem."""
         metadata = {}
 
-        # Build path to zarr.json
         if self._dataset_path:
             zarr_json_path = os.path.join(self.path, self._dataset_path, 'zarr.json')
         else:
@@ -187,28 +176,8 @@ class Zarr3Reader(BaseReader):
         try:
             with open(zarr_json_path, 'r') as f:
                 zarr_metadata = json.load(f)
-                metadata['zarr_metadata'] = zarr_metadata
-
-                # Extract shape and dtype (convert to tuple for consistency)
-                if 'shape' in zarr_metadata:
-                    metadata['shape'] = tuple(zarr_metadata['shape'])
-                if 'data_type' in zarr_metadata:
-                    metadata['dtype'] = zarr_metadata['data_type']
-                if 'chunk_grid' in zarr_metadata:
-                    chunk_config = zarr_metadata['chunk_grid'].get('configuration', {})
-                    metadata['chunk_shape'] = chunk_config.get('chunk_shape')
-
-                # Extract dimension names
-                if 'dimension_names' in zarr_metadata:
-                    metadata['dimension_names'] = zarr_metadata['dimension_names']
-
-                # Extract attributes (OME-NGFF)
-                if 'attributes' in zarr_metadata:
-                    metadata['attributes'] = zarr_metadata['attributes']
-                    if 'multiscales' in zarr_metadata['attributes']:
-                        metadata['multiscales'] = zarr_metadata['attributes']['multiscales']
+                self._extract_zarr3_fields(metadata, zarr_metadata)
         except FileNotFoundError:
-            # Try reading from root zarr.json for OME-NGFF metadata
             root_zarr_json = os.path.join(self.path, 'zarr.json')
             try:
                 with open(root_zarr_json, 'r') as f:
@@ -222,8 +191,55 @@ class Zarr3Reader(BaseReader):
         except Exception as e:
             print(f"Warning: Failed to read Zarr3 metadata: {e}")
 
-        self._metadata_cache = metadata
         return metadata
+
+    def _read_remote_metadata(self) -> Dict:
+        """Read zarr.json metadata from remote store via TensorStore kvstore."""
+        from .base import build_kvstore
+
+        metadata = {}
+        key = (self._dataset_path + '/zarr.json') if self._dataset_path else 'zarr.json'
+
+        try:
+            kvs = ts.KvStore.open(build_kvstore(self.path)).result()
+            read_result = kvs.read(key).result()
+            if read_result.value is not None and len(read_result.value) > 0:
+                zarr_metadata = json.loads(bytes(read_result.value))
+                self._extract_zarr3_fields(metadata, zarr_metadata)
+        except Exception:
+            # Fall back: try root zarr.json
+            if self._dataset_path:
+                try:
+                    kvs = ts.KvStore.open(build_kvstore(self.path)).result()
+                    read_result = kvs.read('zarr.json').result()
+                    if read_result.value is not None and len(read_result.value) > 0:
+                        root_metadata = json.loads(bytes(read_result.value))
+                        if 'attributes' in root_metadata:
+                            metadata['attributes'] = root_metadata['attributes']
+                            if 'multiscales' in root_metadata['attributes']:
+                                metadata['multiscales'] = root_metadata['attributes']['multiscales']
+                except Exception:
+                    pass
+
+        return metadata
+
+    @staticmethod
+    def _extract_zarr3_fields(metadata: Dict, zarr_metadata: Dict) -> None:
+        """Extract standard fields from parsed zarr.json into metadata dict."""
+        metadata['zarr_metadata'] = zarr_metadata
+        if 'shape' in zarr_metadata:
+            metadata['shape'] = tuple(zarr_metadata['shape'])
+        if 'data_type' in zarr_metadata:
+            metadata['dtype'] = zarr_metadata['data_type']
+        if 'chunk_grid' in zarr_metadata:
+            chunk_config = zarr_metadata['chunk_grid'].get('configuration', {})
+            metadata['chunk_shape'] = chunk_config.get('chunk_shape')
+        if 'dimension_names' in zarr_metadata:
+            metadata['dimension_names'] = zarr_metadata['dimension_names']
+        if 'attributes' in zarr_metadata:
+            metadata['attributes'] = zarr_metadata['attributes']
+            if 'multiscales' in zarr_metadata['attributes']:
+                metadata['multiscales'] = zarr_metadata['attributes']['multiscales']
 
     def get_voxel_sizes(self) -> Dict[str, float]:
         """
@@ -317,30 +333,16 @@ class Zarr2Reader(BaseReader):
         return self._ts_store_cache
 
     def _build_kvstore(self) -> Dict:
-        """Build kvstore spec based on path type."""
+        """Build kvstore spec using shared build_kvstore (handles S3, GCS, HTTP, local)."""
         full_path = os.path.join(self.path, self._dataset_path) if self._dataset_path else self.path
-
-        if full_path.startswith('gs://'):
-            parts = full_path[5:].split('/', 1)
-            bucket = parts[0]
-            path = parts[1] if len(parts) > 1 else ''
-            return {'driver': 'gcs', 'bucket': bucket, 'path': path}
-        elif full_path.startswith('s3://'):
-            parts = full_path[5:].split('/', 1)
-            bucket = parts[0]
-            path = parts[1] if len(parts) > 1 else ''
-            return {'driver': 's3', 'bucket': bucket, 'path': path}
-        elif full_path.startswith('http://') or full_path.startswith('https://'):
-            return {'driver': 'http', 'base_url': full_path}
-        else:
-            return {'driver': 'file', 'path': full_path}
+        return _build_kvstore_shared(full_path)
 
     def get_metadata(self) -> Dict:
         """
         Return Zarr2 metadata from .zarray and .zattrs.
 
         Reads the .zarray (array metadata) and .zattrs (attributes)
-        files from the Zarr2 store.
+        files from the Zarr2 store. Supports both local and remote stores.
 
         Returns:
             dict: Zarr2 metadata including OME-NGFF if present
@@ -348,6 +350,16 @@ class Zarr2Reader(BaseReader):
         if self._metadata_cache is not None:
             return self._metadata_cache
 
+        if self.supports_remote():
+            metadata = self._read_remote_metadata()
+        else:
+            metadata = self._read_local_metadata()
+
+        self._metadata_cache = metadata
+        return metadata
+
+    def _read_local_metadata(self) -> Dict:
+        """Read .zarray and .zattrs metadata from local filesystem."""
         metadata = {}
         base_path = os.path.join(self.path, self._dataset_path) if self._dataset_path else self.path
 
@@ -386,7 +398,58 @@ class Zarr2Reader(BaseReader):
         except Exception as e:
             print(f"Warning: Failed to read .zattrs: {e}")
 
-        self._metadata_cache = metadata
+        return metadata
+
+    def _read_remote_metadata(self) -> Dict:
+        """Read .zarray and .zattrs metadata from remote store via TensorStore kvstore."""
+        from .base import build_kvstore
+
+        metadata = {}
+        base_key = (self._dataset_path + '/') if self._dataset_path else ''
+
+        try:
+            kvs = ts.KvStore.open(build_kvstore(self.path)).result()
+
+            # Read .zarray
+            try:
+                read_result = kvs.read(base_key + '.zarray').result()
+                if read_result.value is not None and len(read_result.value) > 0:
+                    zarray = json.loads(bytes(read_result.value))
+                    metadata['zarray'] = zarray
+                    metadata['shape'] = zarray.get('shape')
+                    metadata['dtype'] = zarray.get('dtype')
+                    metadata['chunk_shape'] = zarray.get('chunks')
+                    metadata['compressor'] = zarray.get('compressor')
+            except Exception:
+                pass
+
+            # Read .zattrs (try array-level first, then root for multiscales)
+            found_attrs = False
+            try:
+                read_result = kvs.read(base_key + '.zattrs').result()
+                if read_result.value is not None and len(read_result.value) > 0:
+                    zattrs = json.loads(bytes(read_result.value))
+                    metadata['attributes'] = zattrs
+                    if 'multiscales' in zattrs:
+                        metadata['multiscales'] = zattrs['multiscales']
+                        found_attrs = True
+            except Exception:
+                pass
+
+            # Fall back to root .zattrs for multiscales
+            if not found_attrs and self._dataset_path:
+                try:
+                    read_result = kvs.read('.zattrs').result()
+                    if read_result.value is not None and len(read_result.value) > 0:
+                        root_attrs = json.loads(bytes(read_result.value))
+                        metadata['root_attributes'] = root_attrs
+                        if 'multiscales' in root_attrs:
+                            metadata['multiscales'] = root_attrs['multiscales']
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
         return metadata
 
     def get_voxel_sizes(self) -> Dict[str, float]:

@@ -97,7 +97,20 @@ class Readers:
             - For .zarr, checks for Zarr3 vs Zarr2 version
             - User can override with explicit reader if needed
         """
+        from ..readers.base import is_remote_path as _is_remote
         path_lower = path.lower()
+
+        # Remote URLs: infer format from URL pattern (no filesystem access)
+        if _is_remote(path):
+            if path_lower.endswith('.zarr') or '.zarr/' in path_lower:
+                return _remote_zarr_reader(path)
+            elif path_lower.endswith('.n5') or '.n5/' in path_lower:
+                return Readers.n5(path)
+            elif 'precomputed://' in path_lower:
+                return Readers.precomputed(path)
+            else:
+                # Default to zarr3 for unrecognized remote paths
+                return _remote_zarr_reader(path)
 
         # Tier 1: Native TensorStore (maximum performance)
         if path_lower.endswith('.n5'):
@@ -543,3 +556,63 @@ def _is_zarr3(path: str) -> bool:
 
     # Default to Zarr2 for backwards compatibility
     return False
+
+
+def _remote_zarr_reader(path: str):
+    """Create the correct Zarr reader for a remote URL.
+
+    Detects Zarr3 vs Zarr2 and handles groups (auto-resolves to first array).
+    """
+    from ..readers.base import build_kvstore
+    import tensorstore as ts
+    import json
+
+    try:
+        kvs = ts.KvStore.open(build_kvstore(path)).result()
+
+        # Check for Zarr3 (zarr.json)
+        result = kvs.read('zarr.json').result()
+        if result.value is not None and len(result.value) > 0:
+            meta = json.loads(bytes(result.value))
+            # If it's a group with multiscales, find the first dataset path
+            if 'node_type' in meta and meta['node_type'] == 'group':
+                ds_path = _find_first_dataset_path(meta)
+                if ds_path:
+                    return Readers.zarr3(path, dataset_path=ds_path)
+            return Readers.zarr3(path)
+
+        # Check for Zarr2 group (.zgroup + .zattrs with multiscales)
+        zgroup = kvs.read('.zgroup').result()
+        if zgroup.value is not None and len(zgroup.value) > 0:
+            # It's a zarr2 group — check .zattrs for multiscales to find first array
+            zattrs = kvs.read('.zattrs').result()
+            if zattrs.value is not None and len(zattrs.value) > 0:
+                attrs = json.loads(bytes(zattrs.value))
+                ds_path = _find_first_dataset_path(attrs)
+                if ds_path:
+                    return Readers.zarr2(path, dataset_path=ds_path)
+            return Readers.zarr2(path)
+
+        # Check for Zarr2 array (.zarray)
+        zarray = kvs.read('.zarray').result()
+        if zarray.value is not None and len(zarray.value) > 0:
+            return Readers.zarr2(path)
+
+    except Exception:
+        pass
+
+    # Default fallback
+    return Readers.zarr2(path)
+
+
+def _find_first_dataset_path(metadata: dict) -> str:
+    """Extract the first dataset path from OME-NGFF multiscales metadata."""
+    # Zarr3: attributes.ome.multiscales or attributes.multiscales
+    attrs = metadata.get('attributes', metadata)
+    ome = attrs.get('ome', attrs)
+    multiscales = ome.get('multiscales', [])
+    if multiscales:
+        datasets = multiscales[0].get('datasets', [])
+        if datasets:
+            return datasets[0].get('path', '')
+    return ''

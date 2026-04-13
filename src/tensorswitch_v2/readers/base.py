@@ -68,7 +68,26 @@ def build_kvstore(path: str) -> Dict:
     scheme = parsed.scheme.lower()
 
     if scheme in ('http', 'https'):
-        # HTTP/HTTPS URL
+        # Detect S3 HTTPS URLs and use S3 driver for reliable metadata reads
+        # Pattern: https://BUCKET.s3.amazonaws.com/PATH or https://s3.REGION.amazonaws.com/BUCKET/PATH
+        host = parsed.netloc.lower()
+        if host.endswith('.s3.amazonaws.com'):
+            bucket = host.replace('.s3.amazonaws.com', '')
+            s3_path = parsed.path.lstrip('/')
+            if s3_path and not s3_path.endswith('/'):
+                s3_path += '/'
+            return {'driver': 's3', 'bucket': bucket, 'path': s3_path,
+                    'aws_credentials': {'type': 'anonymous'}}
+        elif '.s3.' in host and host.endswith('.amazonaws.com'):
+            # https://s3.REGION.amazonaws.com/BUCKET/PATH
+            parts = parsed.path.lstrip('/').split('/', 1)
+            bucket = parts[0]
+            s3_path = parts[1] if len(parts) > 1 else ''
+            if s3_path and not s3_path.endswith('/'):
+                s3_path += '/'
+            return {'driver': 's3', 'bucket': bucket, 'path': s3_path,
+                    'aws_credentials': {'type': 'anonymous'}}
+        # Generic HTTP/HTTPS URL
         return {'driver': 'http', 'base_url': path}
 
     elif scheme == 's3':

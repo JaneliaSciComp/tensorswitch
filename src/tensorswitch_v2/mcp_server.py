@@ -16,6 +16,8 @@ import sys
 import traceback
 from pathlib import Path
 
+from tensorswitch_v2.readers.base import is_remote_path
+
 from mcp.server.fastmcp import FastMCP
 
 # Logging to stderr (required for stdio transport — stdout is JSON-RPC)
@@ -53,14 +55,14 @@ def inspect_dataset(path: str) -> str:
     try:
         path = path.strip()
 
-        # Check if this is an OME-Zarr container (has zarr.json or .zattrs at root)
-        zarr_json = os.path.join(path, "zarr.json")
-        zattrs = os.path.join(path, ".zattrs")
+        # For local paths, check if this is an OME-Zarr container
+        if not is_remote_path(path):
+            zarr_json = os.path.join(path, "zarr.json")
+            zattrs = os.path.join(path, ".zattrs")
+            if os.path.isfile(zarr_json) or os.path.isfile(zattrs):
+                return _inspect_zarr_container(path)
 
-        if os.path.isfile(zarr_json) or os.path.isfile(zattrs):
-            return _inspect_zarr_container(path)
-
-        # Otherwise, inspect as a single dataset
+        # Remote paths or non-container local: inspect as single dataset
         return _inspect_single_dataset(path)
     except Exception as e:
         logger.error(f"inspect_dataset failed: {e}\n{traceback.format_exc()}")
@@ -240,9 +242,9 @@ def _create_reader(input_path: str, dataset_path: str = "",
         ext = Path(input_path).suffix.lower()
         if ext in (".h5", ".hdf5", ".hdf", ".he5"):
             return Readers.hdf5(input_path, dataset_path=dataset_path)
-        elif ext in (".n5",) or os.path.isfile(
+        elif ext in (".n5",) or (not is_remote_path(input_path) and os.path.isfile(
             os.path.join(input_path, "attributes.json")
-        ):
+        )):
             return Readers.n5(input_path, dataset_path=dataset_path)
 
     reader = Readers.auto_detect(input_path)
@@ -344,11 +346,21 @@ def convert(
         with contextlib.redirect_stdout(io.StringIO()):
             reader = _create_reader(input_path, dataset_path, use_bioio, use_bioformats, view_index)
 
-        # Size guard — refuse large datasets
+        # Size guard — refuse large datasets (use bbox size if specified)
         store = reader.get_tensorstore()
         shape = tuple(store.shape)
         dtype_str = get_dtype_name(store.dtype)
-        dataset_size_gb = (np.prod(shape) * np.dtype(dtype_str).itemsize) / (1024**3)
+
+        # If bbox is provided, use bbox volume for size check
+        if bbox:
+            bbox_parts = [int(x) for x in bbox.split(",")]
+            if len(bbox_parts) == 6:
+                effective_shape = tuple(bbox_parts[3:])  # size_z, size_y, size_x
+            else:
+                effective_shape = shape
+        else:
+            effective_shape = shape
+        dataset_size_gb = (np.prod(effective_shape) * np.dtype(dtype_str).itemsize) / (1024**3)
 
         if dataset_size_gb > MCP_CONVERT_MAX_GB:
             return json.dumps({
