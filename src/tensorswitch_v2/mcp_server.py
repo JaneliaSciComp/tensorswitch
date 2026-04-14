@@ -109,9 +109,9 @@ def _inspect_zarr_container(path: str) -> str:
             levels.append(level_info)
         result["levels"] = levels
 
-    # Check for labels
+    # Check for labels — enrich with full metadata from each label layer
     if "labels" in ome:
-        result["labels"] = ome["labels"]
+        result["labels"] = _inspect_label_layers(path, ome["labels"])
 
     # Check for LMVD provenance
     if "lmvd" in attrs:
@@ -147,6 +147,78 @@ def _inspect_zarr_container(path: str) -> str:
         logger.warning(f"Layer discovery failed: {e}")
 
     return json.dumps(result, indent=2)
+
+
+def _inspect_label_layers(container_path: str, label_names: list) -> list:
+    """Inspect each label layer under labels/{name}/ and return enriched metadata."""
+    labels_dir = os.path.join(container_path, "labels")
+    enriched = []
+
+    for name in label_names:
+        label_path = os.path.join(labels_dir, name)
+        info = {"name": name}
+
+        if not os.path.isdir(label_path):
+            enriched.append(info)
+            continue
+
+        # Read label root metadata (zarr.json or .zattrs)
+        label_zarr_json = os.path.join(label_path, "zarr.json")
+        label_zattrs = os.path.join(label_path, ".zattrs")
+        label_attrs = {}
+
+        if os.path.isfile(label_zarr_json):
+            try:
+                with open(label_zarr_json) as f:
+                    meta = json.load(f)
+                label_attrs = meta.get("attributes", {})
+                info["zarr_format"] = 3
+            except (json.JSONDecodeError, IOError):
+                pass
+        elif os.path.isfile(label_zattrs):
+            try:
+                with open(label_zattrs) as f:
+                    label_attrs = json.load(f)
+                info["zarr_format"] = 2
+            except (json.JSONDecodeError, IOError):
+                pass
+
+        # Extract OME multiscales for this label
+        label_ome = label_attrs.get("ome", label_attrs)
+        if "multiscales" in label_ome:
+            ms = label_ome["multiscales"][0]
+            info["axes"] = [a["name"] for a in ms.get("axes", [])]
+            info["num_levels"] = len(ms.get("datasets", []))
+
+            # Extract scale from first dataset
+            datasets = ms.get("datasets", [])
+            if datasets:
+                for ct in datasets[0].get("coordinateTransformations", []):
+                    if ct["type"] == "scale":
+                        info["voxel_sizes"] = ct["scale"]
+
+        # Extract image-label metadata (colors, version)
+        if "image-label" in label_ome:
+            il = label_ome["image-label"]
+            info["image_label_version"] = il.get("version", "unknown")
+            colors = il.get("colors", [])
+            if colors:
+                info["num_colors"] = len(colors)
+
+        # Read s0 array metadata for shape and dtype
+        from tensorswitch_v2.utils.folder_discovery import (
+            _read_zarr3_dataset,
+            _read_zarr2_dataset,
+        )
+        ds = _read_zarr3_dataset(label_path) or _read_zarr2_dataset(label_path)
+        if ds:
+            info["shape"] = ds.shape
+            info["dtype"] = ds.dtype
+            info["num_scales"] = ds.num_scales
+
+        enriched.append(info)
+
+    return enriched
 
 
 def _inspect_single_dataset(path: str) -> str:
