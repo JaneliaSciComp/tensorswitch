@@ -833,6 +833,74 @@ from .utils.resource_utils import calculate_wall_time as _calculate_wall_time
 from .utils.resource_utils import calculate_job_resources as _calculate_job_resources
 
 
+def run_local_pyramid(s0_path, root_path, downsample_method="auto",
+                      custom_per_level_factors=None, use_shard=True,
+                      include_translation=True, verbose=True):
+    """Run local pyramid generation from an existing s0.
+
+    Shared by standalone --auto_multiscale and conversion + --auto_multiscale paths.
+
+    Args:
+        s0_path: Path to the base resolution level (e.g., /data/volume.zarr/raw/s0)
+        root_path: Parent directory of s0 where pyramid levels are written
+        downsample_method: Already-resolved method ("mean", "mode", etc.)
+        custom_per_level_factors: Optional list of per-level factor lists
+        use_shard: Whether to use sharding for output
+        include_translation: Include translation transforms in OME metadata
+        verbose: Print progress
+    """
+    from .core.downsampler import downsample_level
+    from .core.pyramid import PyramidPlanner
+    from .utils import update_ome_metadata_if_needed
+    from .utils.metadata_utils import detect_level_format, get_level_name
+
+    planner = PyramidPlanner(s0_path, include_translation=include_translation, downsample_method=downsample_method)
+    plan = planner.calculate_pyramid_plan(custom_per_level_factors=custom_per_level_factors)
+    planner.print_pyramid_plan(plan)
+
+    if plan['num_levels'] == 0:
+        print("\nNo pyramid levels needed - dataset is already at minimum size.")
+        return plan
+
+    print("\nRunning local pyramid generation...")
+    planner.precreate_all_levels(plan, use_shard=use_shard, verbose=verbose)
+
+    prefix = detect_level_format(root_path)
+
+    for level_info in plan['levels']:
+        level = level_info['level']
+        per_level_factor = level_info['per_level_factor']
+        cumulative_factors = level_info['cumulative_factor']
+
+        source_level = level - 1
+        source_level_name = get_level_name(source_level, prefix)
+        source_path = os.path.join(root_path, source_level_name)
+
+        print(f"\n--- Downsampling {source_level_name} -> {get_level_name(level, prefix)} (per-level factor: {per_level_factor}, cumulative: {cumulative_factors}) ---")
+
+        downsample_level(
+            s0_path=source_path,
+            output_path=root_path,
+            target_level=level,
+            factors=per_level_factor,
+            use_shard=use_shard,
+            custom_shard_shape=level_info.get('shard_shape'),
+            custom_chunk_shape=level_info.get('chunk_shape'),
+            downsample_method=downsample_method,
+            verbose=verbose,
+            cumulative_factor_for_metadata=cumulative_factors,
+        )
+
+    update_ome_metadata_if_needed(root_path, use_ome_structure=True, include_translation=include_translation, downsample_method=downsample_method)
+
+    print(f"\n{'='*60}")
+    print(f"AUTO-MULTISCALE COMPLETE: {root_path}")
+    print(f"Generated s0 through s{plan['num_levels']}")
+    print(f"{'='*60}")
+
+    return plan
+
+
 def submit_job(args, return_job_id=False):
     """Submit a single LSF bsub job that re-invokes tensorswitch_v2.
 
@@ -1039,9 +1107,8 @@ def submit_job(args, return_job_id=False):
     result = subprocess.run(command, capture_output=True, text=True)
 
     if result.returncode == 0:
-        if not return_job_id:
-            print("Job submitted successfully.")
-            print(result.stdout.strip())
+        print("Job submitted successfully.")
+        print(result.stdout.strip())
         # Extract job ID from bsub output: "Job <12345> is submitted..."
         import re
         match = re.search(r'Job <(\d+)>', result.stdout)
@@ -1055,6 +1122,78 @@ def submit_job(args, return_job_id=False):
         raise RuntimeError(f"bsub failed with exit code {result.returncode}")
 
     return None
+
+
+def _submit_dependent_pyramid(args, conversion_job_id: str):
+    """Submit a dependent auto_multiscale coordinator job that waits for s0 conversion.
+
+    After the conversion job finishes, this coordinator job runs
+    --auto_multiscale on the output zarr, which submits chained
+    pyramid level jobs via create_pyramid_parallel().
+
+    Args:
+        args: Parsed command-line arguments
+        conversion_job_id: LSF job ID of the s0 conversion job to depend on
+    """
+    # Build reinvoke command for standalone auto_multiscale on the output
+    reinvoke = [
+        sys.executable, "-m", "tensorswitch_v2",
+        "--input", args.output,
+        "--auto_multiscale",
+        "--submit",
+        "-P", args.project,
+    ]
+    if getattr(args, 'downsample_method', 'auto') != 'auto':
+        reinvoke += ["--downsample_method", args.downsample_method]
+    if getattr(args, 'per_level_factors', None):
+        reinvoke += ["--per_level_factors", args.per_level_factors]
+    if getattr(args, 'no_translation', False):
+        reinvoke.append("--no_translation")
+    if args.log_dir:
+        reinvoke += ["--log_dir", args.log_dir]
+    if args.memory:
+        reinvoke += ["--memory", str(args.memory)]
+    if args.wall_time:
+        reinvoke += ["--wall_time", args.wall_time]
+    if args.cores:
+        reinvoke += ["--cores", str(args.cores)]
+
+    reinvoke_str = shlex.join(reinvoke)
+
+    # Coordinator job: small allocation, just needs to run bsub for each level
+    output_parent = os.path.dirname(os.path.abspath(args.output))
+    log_dir = args.log_dir or os.path.join(output_parent, "output")
+    os.makedirs(log_dir, exist_ok=True)
+
+    job_name = f"tsv2_pyramid_coordinator_{os.path.basename(args.output)}"
+    job_name = job_name.replace(" ", "_")[:128]
+
+    command = [
+        "bsub",
+        "-J", job_name,
+        "-n", "1",
+        "-W", "0:30",
+        "-M", "15GB",
+        "-R", "rusage[mem=15360]",
+        "-P", args.project,
+        "-g", args.job_group,
+        "-w", f"done({conversion_job_id})",
+        "-o", os.path.join(log_dir, f"output__{job_name}_%J.log"),
+        "-e", os.path.join(log_dir, f"error__{job_name}_%J.log"),
+        "/bin/bash", "-c", reinvoke_str,
+    ]
+
+    result = subprocess.run(command, capture_output=True, text=True)
+    if result.returncode == 0:
+        import re
+        match = re.search(r'Job <(\d+)>', result.stdout)
+        coordinator_id = match.group(1) if match else "unknown"
+        print(f"\nPyramid coordinator job {coordinator_id} submitted (depends on conversion job {conversion_job_id}).")
+        print(f"  After conversion completes, pyramid levels will be submitted automatically.")
+    else:
+        print(f"\nWarning: Pyramid coordinator submission failed: {result.stderr.strip()}")
+        print(f"  You can manually run pyramid after conversion finishes:")
+        print(f"  python -m tensorswitch_v2 -i {args.output} --auto_multiscale --submit -P {args.project}")
 
 
 def submit_downsample_job(args, cumulative_factors):
@@ -1537,9 +1676,9 @@ def main(argv=None):
 
             return
 
-    # Handle auto_multiscale mode (full pyramid generation)
-    # This is the main entry point for automatic downsampling - just point at s0 and it does the rest
-    if args.auto_multiscale:
+    # Handle auto_multiscale mode (standalone pyramid generation on existing zarr)
+    # When --output is provided, this is a conversion + pyramid workflow — skip to standard conversion
+    if args.auto_multiscale and not args.output:
         from .core.pyramid import PyramidPlanner, create_pyramid_parallel
         from .utils import update_ome_metadata_if_needed
         import glob as glob_module
@@ -1693,57 +1832,16 @@ def main(argv=None):
                 print("\nNo pyramid levels needed - dataset is already at minimum size.")
         else:
             # Local mode: run downsampling directly for each level
-            from .core.downsampler import downsample_level
-
             resolved_method = resolve_downsample_method(args.downsample_method, s0_path)
-
-            planner = PyramidPlanner(s0_path, include_translation=not args.no_translation, downsample_method=resolved_method)
-            plan = planner.calculate_pyramid_plan(custom_per_level_factors=custom_per_level_factors)
-            planner.print_pyramid_plan(plan)
-
-            print("\nRunning local pyramid generation...")
-
-            # Pre-create all levels first
-            planner.precreate_all_levels(plan, use_shard=use_shard, verbose=verbose)
-
-            # Process each level using chained downsampling
-            # (each level reads from previous level, not from s0)
-            from .utils.metadata_utils import detect_level_format, get_level_name
-            prefix = detect_level_format(root_path)
-
-            for level_info in plan['levels']:
-                level = level_info['level']
-                per_level_factor = level_info['per_level_factor']
-                cumulative_factors = level_info['cumulative_factor']
-
-                # Source is the previous level
-                source_level = level - 1
-                source_level_name = get_level_name(source_level, prefix)
-                source_path = os.path.join(root_path, source_level_name)
-
-                print(f"\n--- Downsampling {source_level_name} -> {get_level_name(level, prefix)} (per-level factor: {per_level_factor}, cumulative: {cumulative_factors}) ---")
-
-                downsample_level(
-                    s0_path=source_path,
-                    output_path=root_path,
-                    target_level=level,
-                    factors=per_level_factor,
-                    use_shard=use_shard,
-                    custom_shard_shape=level_info.get('shard_shape'),
-                    custom_chunk_shape=level_info.get('chunk_shape'),
-                    downsample_method=resolved_method,
-                    verbose=verbose,
-                    cumulative_factor_for_metadata=cumulative_factors,
-                )
-
-            # Update root metadata
-            print("\nUpdating root metadata...")
-            update_ome_metadata_if_needed(root_path, use_ome_structure=True, include_translation=not args.no_translation, downsample_method=resolved_method)
-
-            print(f"\n{'='*60}")
-            print(f"AUTO-MULTISCALE COMPLETE: {root_path}")
-            print(f"Generated s0 through s{plan['num_levels']}")
-            print(f"{'='*60}")
+            run_local_pyramid(
+                s0_path=s0_path,
+                root_path=root_path,
+                downsample_method=resolved_method,
+                custom_per_level_factors=custom_per_level_factors,
+                use_shard=use_shard,
+                include_translation=not args.no_translation,
+                verbose=verbose,
+            )
         return
 
     # Handle downsample mode (single level from s0)
@@ -1790,7 +1888,12 @@ def main(argv=None):
 
     # Standard conversion mode (single level / s0)
     if args.submit:
-        submit_job(args)
+        job_id = submit_job(args, return_job_id=True)
+
+        # If --auto_multiscale, submit a dependent pyramid coordinator job
+        if args.auto_multiscale and job_id:
+            _submit_dependent_pyramid(args, conversion_job_id=job_id)
+
         return
 
     reader = create_reader(args)
@@ -1926,6 +2029,27 @@ def main(argv=None):
             source_url=args.input,
             bbox=bbox,
             voxel_sizes=voxel_size_override,
+        )
+
+    # Chain pyramid generation after s0 conversion if --auto_multiscale
+    if args.auto_multiscale:
+        s0_path, _ = find_base_level(args.output, verbose=verbose)
+        # root_path must be the direct parent of s0 (e.g., raw/) not the container root
+        root_path = os.path.dirname(s0_path)
+        resolved_method = resolve_downsample_method(args.downsample_method, s0_path)
+
+        custom_per_level_factors = None
+        if args.per_level_factors:
+            custom_per_level_factors = parse_per_level_factors(args.per_level_factors)
+
+        run_local_pyramid(
+            s0_path=s0_path,
+            root_path=root_path,
+            downsample_method=resolved_method,
+            custom_per_level_factors=custom_per_level_factors,
+            use_shard=use_shard,
+            include_translation=not args.no_translation,
+            verbose=verbose,
         )
 
 
