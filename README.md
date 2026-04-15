@@ -1111,8 +1111,8 @@ TensorSwitch v2 includes an MCP (Model Context Protocol) server that allows Clau
 |------|-------------|
 | `inspect_dataset` | Returns shape, dtype, voxel sizes, axes, pyramid levels, OME metadata. Supports remote S3/HTTP URLs. |
 | `discover_datasets` | Scans a directory for image/segmentation layers |
-| `convert` | Converts between formats with full CLI parity. Supports remote S3/HTTP sources with `--bbox` for subvolume extraction. 2 GB size guard — larger datasets redirect to `submit_job`. |
-| `generate_pyramid` | Creates multiscale pyramid locally with chained downsampling and anisotropic handling |
+| `convert` | Converts between formats with full CLI parity. Supports `auto_multiscale` (one-step convert + pyramid), `omero` channel metadata, `no_translation`, remote S3/HTTP with `--bbox`. 2 GB size guard — larger datasets redirect to `submit_job`. |
+| `generate_pyramid` | Creates multiscale pyramid locally with chained downsampling, anisotropic handling, and optional `no_translation` |
 | `list_formats` | Lists all supported input/output formats by tier |
 | `estimate_resources` | Estimates memory, wall time, and cores needed for a conversion |
 | `submit_job` | Submits conversion to LSF cluster (with optional `auto_multiscale` for chained pyramid generation) |
