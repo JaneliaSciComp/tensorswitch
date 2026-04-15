@@ -358,6 +358,11 @@ def convert(
     no_ome_meta_export: bool = False,
     no_ome_xml_attr: bool = False,
     preset: str = "",
+    auto_multiscale: bool = False,
+    downsample_method: str = "auto",
+    per_level_factors: str = "",
+    omero: bool = False,
+    no_translation: bool = False,
 ) -> str:
     """Convert a microscopy dataset between formats.
 
@@ -394,6 +399,11 @@ def convert(
         no_ome_meta_export: Disable writing OME/METADATA.ome.xml file.
         no_ome_xml_attr: Do not embed OME/CZI XML in zarr.json/.zattrs.
         preset: Preset configuration — "webknossos" (chunk 32x32x32, shard 1024x1024x1024).
+        auto_multiscale: Generate full multiscale pyramid after conversion. Default: False.
+        downsample_method: Downsampling method for pyramid — "auto", "mean", "mode", etc. Used with auto_multiscale.
+        per_level_factors: Custom per-level factors, semicolon-separated (e.g., "1,2,2;1,2,2"). Used with auto_multiscale.
+        omero: Include structured omero channel metadata (from OME-XML) for visualization tools.
+        no_translation: Disable translation transforms in OME-NGFF multiscale metadata.
     """
     try:
         import contextlib
@@ -467,6 +477,7 @@ def convert(
                 level_path=level_path,
                 image_key=image_key,
                 label_key=label_key,
+                include_omero=omero,
             )
         elif output_format == "zarr2":
             writer = Writers.zarr2(
@@ -477,6 +488,7 @@ def convert(
                 level_path=level_path,
                 image_key=image_key,
                 label_key=label_key,
+                include_omero=omero,
             )
         elif output_format == "n5":
             writer = Writers.n5(
@@ -524,18 +536,44 @@ def convert(
                 no_ome_xml_attr=no_ome_xml_attr,
             )
 
-        return json.dumps(
-            {
-                "status": "success",
-                "input": input_path,
-                "output": output_path,
-                "format": output_format,
-                "dataset_size_gb": round(dataset_size_gb, 2),
-                "chunks_processed": result.get("chunks_processed", "unknown"),
-                "time_seconds": round(result.get("elapsed_time", 0), 1),
-            },
-            indent=2,
-        )
+        response = {
+            "status": "success",
+            "input": input_path,
+            "output": output_path,
+            "format": output_format,
+            "dataset_size_gb": round(dataset_size_gb, 2),
+            "chunks_processed": result.get("chunks_processed", "unknown"),
+            "time_seconds": round(result.get("elapsed_time", 0), 1),
+        }
+
+        # Auto-multiscale: generate pyramid after conversion
+        if auto_multiscale:
+            from tensorswitch_v2.__main__ import find_base_level, run_local_pyramid
+            from tensorswitch_v2.utils.pyramid_utils import resolve_downsample_method
+
+            s0_path, _ = find_base_level(output_path)
+            root_path = os.path.dirname(s0_path)
+
+            resolved_method = resolve_downsample_method(downsample_method, s0_path)
+
+            custom_factors = None
+            if per_level_factors:
+                custom_factors = [
+                    [int(x) for x in level.split(",")]
+                    for level in per_level_factors.split(";")
+                ]
+
+            run_local_pyramid(
+                s0_path, root_path,
+                downsample_method=resolved_method,
+                custom_per_level_factors=custom_factors,
+                include_translation=not no_translation,
+                verbose=False,
+            )
+            response["auto_multiscale"] = True
+            response["pyramid_s0"] = s0_path
+
+        return json.dumps(response, indent=2)
     except Exception as e:
         logger.error(f"convert failed: {e}\n{traceback.format_exc()}")
         return f"Error converting {input_path}: {e}"
@@ -550,6 +588,7 @@ def generate_pyramid(
     downsample_method: str = "auto",
     compression: str = "zstd",
     compression_level: int = 5,
+    no_translation: bool = False,
 ) -> str:
     """Generate a multiscale pyramid from a base-resolution dataset (s0).
 
@@ -566,6 +605,7 @@ def generate_pyramid(
                           "mode" (labels/segmentation), "median", "stride", "min", "max".
         compression: Compression codec for pyramid levels.
         compression_level: Compression level for pyramid levels.
+        no_translation: Disable translation transforms in OME-NGFF multiscale metadata.
     """
     try:
         import contextlib
@@ -578,7 +618,7 @@ def generate_pyramid(
         downsample_method = resolve_downsample_method(downsample_method, s0_path)
         planner = PyramidPlanner(
             s0_path,
-            include_translation=True,
+            include_translation=not no_translation,
             downsample_method=downsample_method,
         )
 
@@ -634,7 +674,7 @@ def generate_pyramid(
             update_ome_metadata_if_needed(
                 parent_dir,
                 use_ome_structure=True,
-                include_translation=True,
+                include_translation=not no_translation,
                 downsample_method=downsample_method,
             )
 
@@ -830,6 +870,8 @@ def submit_job(
     downsample_method: str = "auto",
     per_level_factors: str = "",
     preset: str = "",
+    omero: bool = False,
+    no_translation: bool = False,
 ) -> str:
     """Submit a conversion job to the LSF cluster (bsub).
 
@@ -873,6 +915,8 @@ def submit_job(
         downsample_method: Downsampling method for pyramid — "auto", "mean", "mode", etc.
         per_level_factors: Custom per-level factors, semicolon-separated (e.g., "1,2,2;1,2,2").
         preset: Preset configuration — "webknossos" (chunk 32, shard 1024).
+        omero: Include structured omero channel metadata for visualization tools.
+        no_translation: Disable translation transforms in OME-NGFF multiscale metadata.
     """
     try:
         import argparse
@@ -911,6 +955,7 @@ def submit_job(
                 per_level_factors=per_level_factors,
                 memory=memory, wall_time=wall_time, cores=cores,
                 log_dir=log_dir,
+                include_translation=not no_translation,
             )
 
         # Build argparse.Namespace matching what __main__.submit_job() reads
@@ -953,6 +998,8 @@ def submit_job(
             no_ome_meta_export=no_ome_meta_export,
             no_ome_xml_attr=no_ome_xml_attr,
             job_group=job_group if job_group else None,
+            omero=omero,
+            no_translation=no_translation,
         )
 
         # Import and call the CLI submit_job function
@@ -997,33 +1044,43 @@ def _submit_pyramid_job(
     downsample_method: str = "auto", per_level_factors: str = "",
     memory: int = 0, wall_time: str = "", cores: int = 0,
     log_dir: str = "",
+    include_translation: bool = True,
 ) -> str:
     """Submit pyramid generation as chained LSF jobs."""
     import contextlib
     import io
 
+    from tensorswitch_v2.__main__ import find_base_level
     from tensorswitch_v2.core.pyramid import create_pyramid_parallel
 
-    # Determine s0 path — if input is a zarr container, find s0
-    s0_path = input_path
-    for candidate in ["raw/s0", "s0"]:
-        candidate_path = os.path.join(input_path, candidate)
-        if os.path.isdir(candidate_path):
-            s0_path = candidate_path
-            break
-
-    # Validate s0 exists (must be an already-converted zarr, not a raw source file)
-    s0_zarr_json = os.path.join(s0_path, "zarr.json")
-    s0_zarray = os.path.join(s0_path, ".zarray")
-    if not os.path.isfile(s0_zarr_json) and not os.path.isfile(s0_zarray):
+    # Determine s0 path — use find_base_level for full detection
+    # (handles raw/s0, labels/segmentation/s0, OME-NGFF metadata, N5, etc.)
+    try:
+        s0_path, _ = find_base_level(input_path)
+    except ValueError:
         return json.dumps({
             "error": "s0_not_found",
             "message": (
-                f"Cannot find s0 array at '{s0_path}'. auto_multiscale requires "
-                f"an already-converted zarr dataset (with raw/s0 or s0 subdirectory). "
+                f"Cannot find base resolution level in '{input_path}'. "
+                f"auto_multiscale requires an already-converted dataset "
+                f"(with raw/s0, labels/segmentation/s0, or s0 subdirectory). "
                 f"First submit a conversion job without auto_multiscale, wait for it "
                 f"to complete, then submit a second job with auto_multiscale=True "
-                f"pointing at the zarr output."
+                f"pointing at the output."
+            ),
+        }, indent=2)
+
+    # Validate s0 array metadata exists (zarr.json, .zarray, or attributes.json for N5)
+    s0_zarr_json = os.path.join(s0_path, "zarr.json")
+    s0_zarray = os.path.join(s0_path, ".zarray")
+    s0_n5_attrs = os.path.join(s0_path, "attributes.json")
+    if not (os.path.isfile(s0_zarr_json) or os.path.isfile(s0_zarray) or os.path.isfile(s0_n5_attrs)):
+        return json.dumps({
+            "error": "s0_not_found",
+            "message": (
+                f"Found s0 directory at '{s0_path}' but no array metadata "
+                f"(zarr.json, .zarray, or attributes.json). The dataset may be "
+                f"incomplete or corrupted."
             ),
         }, indent=2)
 
@@ -1045,6 +1102,7 @@ def _submit_pyramid_job(
             downsample_method=downsample_method,
             custom_per_level_factors=custom_factors,
             log_dir=log_dir if log_dir else None,
+            include_translation=include_translation,
         )
 
     return json.dumps({

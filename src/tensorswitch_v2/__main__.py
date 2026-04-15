@@ -1091,6 +1091,8 @@ def submit_job(args, return_job_id=False):
         reinvoke.append("--no_ome_meta_export")
     if getattr(args, 'no_ome_xml_attr', False):
         reinvoke.append("--no_ome_xml_attr")
+    if getattr(args, 'omero', False):
+        reinvoke.append("--omero")
     # Convert to properly quoted shell command string
     # This handles paths with spaces correctly when bsub creates its wrapper
     reinvoke_str = shlex.join(reinvoke)
