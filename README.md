@@ -196,9 +196,11 @@ pixi run tensorswitch-v2 -i input.tif -o output.zarr --output_format zarr2
 ### Generate Multi-Scale Pyramid
 
 ```bash
-# After s0 conversion, generate full pyramid
-pixi run python -m tensorswitch_v2 --auto_multiscale \
-  -i output.zarr/s0 -o output.zarr
+# Convert + generate full pyramid in one command
+pixi run python -m tensorswitch_v2 -i input.tif -o output.zarr --auto_multiscale
+
+# Or generate pyramid on an existing dataset
+pixi run python -m tensorswitch_v2 -i output.zarr --auto_multiscale
 ```
 
 ### Submit to LSF Cluster

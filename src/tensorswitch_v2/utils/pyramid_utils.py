@@ -229,19 +229,22 @@ def calculate_pyramid_plan(s0_path, min_array_nbytes=None, min_array_shape=None)
     """
     zarr3_metadata_path = os.path.join(s0_path, "zarr.json")
     zarr2_metadata_path = os.path.join(s0_path, ".zarray")
+    n5_metadata_path = os.path.join(s0_path, "attributes.json")
 
     is_zarr3 = os.path.exists(zarr3_metadata_path)
     is_zarr2 = os.path.exists(zarr2_metadata_path)
+    is_n5 = not is_zarr3 and not is_zarr2 and os.path.exists(n5_metadata_path)
 
-    if not is_zarr3 and not is_zarr2:
+    if not is_zarr3 and not is_zarr2 and not is_n5:
         raise FileNotFoundError(
-            f"Cannot find zarr metadata at {s0_path}\n"
-            f"Expected either:\n"
+            f"Cannot find metadata at {s0_path}\n"
+            f"Expected one of:\n"
             f"  - Zarr3: {zarr3_metadata_path}\n"
-            f"  - Zarr2: {zarr2_metadata_path}"
+            f"  - Zarr2: {zarr2_metadata_path}\n"
+            f"  - N5: {n5_metadata_path}"
         )
 
-    format_type = "zarr3" if is_zarr3 else "zarr2"
+    format_type = "zarr3" if is_zarr3 else ("n5" if is_n5 else "zarr2")
     chunk_shape = None
     dtype_size = 2  # default uint16
 
@@ -289,6 +292,34 @@ def calculate_pyramid_plan(s0_path, min_array_nbytes=None, min_array_shape=None)
                                 if transform['type'] == 'scale':
                                     voxel_sizes = transform['scale']
                                     break
+
+    elif is_n5:  # N5
+        with open(n5_metadata_path, 'r') as f:
+            metadata = json.load(f)
+        shape = metadata.get('dimensions')
+        chunk_shape = metadata.get('blockSize')
+
+        shard_shape = chunk_shape
+        inner_chunk_shape = None
+
+        # N5 dataType uses Java names: uint16, uint8, float32, etc.
+        dtype_str = metadata.get('dataType', 'uint16')
+        dtype = np.dtype(dtype_str)
+        dtype_size = dtype.itemsize
+
+        axes_names = None
+        voxel_sizes = None
+
+        # Read root attributes.json for voxel sizes and axes
+        root_path = os.path.dirname(s0_path)
+        root_attrs_path = os.path.join(root_path, "attributes.json")
+        if os.path.exists(root_attrs_path):
+            with open(root_attrs_path, 'r') as f:
+                root_attrs = json.load(f)
+            axes_names = root_attrs.get('axes')
+            pixel_res = root_attrs.get('pixelResolution', {})
+            if 'dimensions' in pixel_res:
+                voxel_sizes = pixel_res['dimensions']
 
     else:  # zarr2
         with open(zarr2_metadata_path, 'r') as f:

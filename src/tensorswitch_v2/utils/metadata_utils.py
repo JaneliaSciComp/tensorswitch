@@ -1060,7 +1060,12 @@ def update_ome_metadata_if_needed(output_path, use_ome_structure, include_transl
                     print(f"Warning: Failed to update parent zarr2 metadata: {e}")
 
         else:
-            print("Warning: No zarr metadata file found (.zattrs or zarr.json) - skipping metadata update")
+            # Check for N5 format (attributes.json) — N5 doesn't use OME-NGFF metadata
+            n5_root_attrs = os.path.join(output_path, 'attributes.json')
+            if os.path.exists(n5_root_attrs):
+                print(f"N5 format detected — skipping OME metadata update (N5 uses attributes.json)")
+            else:
+                print("Warning: No zarr metadata file found (.zattrs or zarr.json) - skipping metadata update")
     except Exception as e:
         print(f"Warning: Failed to update OME metadata: {e}")
 

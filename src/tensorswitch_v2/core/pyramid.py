@@ -399,8 +399,58 @@ class PyramidPlanner:
             }
             return self._s0_metadata
 
+        # Try N5 (attributes.json)
+        n5_attrs_path = os.path.join(self.s0_path, 'attributes.json')
+        if os.path.exists(n5_attrs_path):
+            with open(n5_attrs_path, 'r') as f:
+                n5_meta = json.load(f)
+
+            shape = n5_meta.get('dimensions', [])
+            chunk_shape = n5_meta.get('blockSize', shape)
+            dtype_str = n5_meta.get('dataType', 'uint16')
+
+            # Read root attributes.json for axes and voxel sizes
+            dimension_names = None
+            root_attrs_path = os.path.join(self.root_path, 'attributes.json')
+            if os.path.exists(root_attrs_path):
+                with open(root_attrs_path, 'r') as f:
+                    root_attrs = json.load(f)
+                dimension_names = root_attrs.get('axes')
+
+            if not dimension_names:
+                dimension_names = infer_dimension_names(shape)
+
+            # Extract compression from N5 metadata
+            n5_compression = n5_meta.get('compression', {})
+
+            self._s0_metadata = {
+                '_format': 'n5',
+                'shape': shape,
+                'dimension_names': dimension_names,
+                'chunk_grid': {
+                    'configuration': {
+                        'chunk_shape': chunk_shape
+                    }
+                },
+                'data_type': dtype_str,
+                'source_spatial_unit': 'nanometer',  # N5 convention
+                '_n5_attrs': n5_meta,
+                '_n5_compression': n5_compression,
+            }
+
+            # Try to get spatial unit from root pixelResolution
+            if os.path.exists(root_attrs_path):
+                with open(root_attrs_path, 'r') as f:
+                    root_attrs = json.load(f)
+                pixel_res = root_attrs.get('pixelResolution', {})
+                unit = pixel_res.get('unit', 'nm')
+                unit_map = {'nm': 'nanometer', 'um': 'micrometer', 'µm': 'micrometer', 'mm': 'millimeter'}
+                self._s0_metadata['source_spatial_unit'] = unit_map.get(unit, unit)
+
+            return self._s0_metadata
+
         raise FileNotFoundError(
-            f"s0 metadata not found. Expected zarr.json (Zarr3) or .zarray (Zarr2) at {self.s0_path}"
+            f"s0 metadata not found. Expected zarr.json (Zarr3), .zarray (Zarr2), or attributes.json (N5) at {self.s0_path}"
         )
 
     def calculate_pyramid_plan(
@@ -628,7 +678,7 @@ class PyramidPlanner:
         This is critical for multi-job mode to prevent race conditions.
         All levels are pre-created so jobs can write immediately.
 
-        Supports both Zarr3 (zarr.json) and Zarr2 (.zarray/.zattrs) formats.
+        Supports Zarr3 (zarr.json), Zarr2 (.zarray/.zattrs), and N5 (attributes.json) formats.
 
         Args:
             pyramid_plan: Output from calculate_pyramid_plan()
@@ -653,7 +703,9 @@ class PyramidPlanner:
         prefix = detect_level_format(self.root_path)
 
         # Extract compression from level 0
-        if zarr_format == 'zarr2':
+        if zarr_format == 'n5':
+            compressor = s0_metadata.get('_n5_compression', {})
+        elif zarr_format == 'zarr2':
             compressor = extract_compression_from_zarr2_metadata(s0_metadata.get('_zarray', {}))
         else:
             compressor = extract_compression_from_zarr3_metadata(s0_metadata)
@@ -665,15 +717,26 @@ class PyramidPlanner:
             if verbose:
                 print(f"\nPre-creating {level_name}...")
                 print(f"  Shape: {level_info['predicted_shape']}")
-                if zarr_format == 'zarr2':
-                    # Zarr2 has no sharding, only chunks
+                if zarr_format in ('zarr2', 'n5'):
+                    # Zarr2/N5 have no sharding, only chunks
                     print(f"  Chunk shape: {pyramid_plan['chunk_shape']}")
                 else:
                     # Zarr3 has both shard and inner chunk
                     print(f"  Shard shape: {level_info['shard_shape']}")
                     print(f"  Chunk shape: {level_info['chunk_shape']}")
 
-            if zarr_format == 'zarr2':
+            if zarr_format == 'n5':
+                # N5: pre-create level directory with attributes.json
+                self._precreate_n5_level(
+                    level=level,
+                    shape=level_info['predicted_shape'],
+                    chunk_shape=pyramid_plan['chunk_shape'],
+                    dtype=dtype,
+                    prefix=prefix,
+                    compressor=compressor,
+                    verbose=verbose,
+                )
+            elif zarr_format == 'zarr2':
                 # Pre-create Zarr2 level (directory + .zarray + .zattrs)
                 # Zarr2 has no sharding - use chunk_shape from plan
                 self._precreate_zarr2_level(
@@ -784,6 +847,46 @@ class PyramidPlanner:
         }
         with open(os.path.join(level_path, '.zattrs'), 'w') as f:
             json.dump(zattrs, f, indent=2)
+
+    def _precreate_n5_level(
+        self,
+        level: int,
+        shape: List[int],
+        chunk_shape: List[int],
+        dtype: str,
+        prefix: str = "",
+        compressor: Optional[Dict] = None,
+        verbose: bool = True,
+    ) -> None:
+        """Pre-create an N5 pyramid level directory with attributes.json."""
+        from tensorswitch_v2.utils.metadata_utils import get_level_name
+        level_name = get_level_name(level, prefix)
+        level_path = os.path.join(self.root_path, level_name)
+        os.makedirs(level_path, exist_ok=True)
+
+        if verbose:
+            print(f"  Creating N5 level at: {level_path}")
+
+        # N5 uses Java-style type names
+        dtype_str = str(dtype)
+        n5_dtype_map = {
+            'uint8': 'uint8', 'uint16': 'uint16', 'uint32': 'uint32', 'uint64': 'uint64',
+            'int8': 'int8', 'int16': 'int16', 'int32': 'int32', 'int64': 'int64',
+            'float32': 'float32', 'float64': 'float64',
+        }
+        n5_dtype = n5_dtype_map.get(dtype_str, dtype_str)
+
+        if compressor is None:
+            compressor = {"type": "zstd", "level": 5}
+
+        attrs = {
+            "dimensions": list(shape),
+            "blockSize": list(chunk_shape),
+            "dataType": n5_dtype,
+            "compression": compressor,
+        }
+        with open(os.path.join(level_path, 'attributes.json'), 'w') as f:
+            json.dump(attrs, f, indent=2)
 
     def generate_parallel_submission_script(
         self,

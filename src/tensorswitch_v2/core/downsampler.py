@@ -29,6 +29,7 @@ from tensorswitch_v2.utils import (
     downsample_spec,
     zarr3_store_spec,
     zarr2_store_spec,
+    n5_store_spec,
     get_input_driver,
     get_chunk_linear_indices_in_shard,
 )
@@ -157,10 +158,9 @@ class Downsampler:
         self._s0_metadata = None
 
     def _load_s0_metadata(self) -> Dict[str, Any]:
-        """Load metadata from s0 array (supports both Zarr v2 and v3).
+        """Load metadata from s0 array (supports Zarr v2, v3, and N5).
 
-        Returns dict with '_format' key indicating 'zarr2' or 'zarr3',
-        and '_zarray' key with raw .zarray content for Zarr2.
+        Returns dict with '_format' key indicating 'zarr2', 'zarr3', or 'n5'.
         """
         # Try Zarr v3 first
         zarr_json_path = os.path.join(self.s0_path, 'zarr.json')
@@ -175,7 +175,6 @@ class Downsampler:
         if os.path.exists(zarray_path):
             with open(zarray_path, 'r') as f:
                 zarray = json.load(f)
-            # Wrap in a dict with format info
             metadata = {
                 '_format': 'zarr2',
                 '_zarray': zarray,
@@ -185,16 +184,33 @@ class Downsampler:
             }
             return metadata
 
+        # Try N5
+        n5_attrs_path = os.path.join(self.s0_path, 'attributes.json')
+        if os.path.exists(n5_attrs_path):
+            with open(n5_attrs_path, 'r') as f:
+                n5_meta = json.load(f)
+            metadata = {
+                '_format': 'n5',
+                '_n5_attrs': n5_meta,
+                '_n5_compression': n5_meta.get('compression', {}),
+                'shape': n5_meta.get('dimensions'),
+                'data_type': n5_meta.get('dataType', 'uint16'),
+                'chunks': n5_meta.get('blockSize'),
+            }
+            return metadata
+
         raise FileNotFoundError(
-            f"s0 metadata not found. Expected zarr.json (Zarr v3) or .zarray (Zarr v2) at {self.s0_path}"
+            f"s0 metadata not found. Expected zarr.json (Zarr v3), .zarray (Zarr v2), or attributes.json (N5) at {self.s0_path}"
         )
 
     def _detect_output_format(self, output_level_path: str) -> str:
-        """Detect if pre-created output is Zarr2 or Zarr3."""
+        """Detect if pre-created output is Zarr2, Zarr3, or N5."""
         if os.path.exists(os.path.join(output_level_path, '.zarray')):
             return 'zarr2'
         if os.path.exists(os.path.join(output_level_path, 'zarr.json')):
             return 'zarr3'
+        if os.path.exists(os.path.join(output_level_path, 'attributes.json')):
+            return 'n5'
         # Check parent for format hints
         parent = os.path.dirname(output_level_path)
         if os.path.exists(os.path.join(parent, '.zgroup')):
@@ -326,7 +342,10 @@ class Downsampler:
 
         # Extract compression from source metadata to inherit it
         source_compression = None
-        if self._s0_metadata.get('_format') == 'zarr2':
+        source_format = self._s0_metadata.get('_format', 'zarr3')
+        if source_format == 'n5':
+            source_compression = self._s0_metadata.get('_n5_compression', {})
+        elif source_format == 'zarr2':
             source_compression = extract_compression_from_zarr2_metadata(
                 self._s0_metadata.get('_zarray', {})
             )
@@ -337,7 +356,9 @@ class Downsampler:
             print(f"Inheriting compression from source: {source_compression}")
 
         # Build output spec based on detected format
-        if output_format == 'zarr2':
+        if output_format == 'n5':
+            output_spec = n5_store_spec(output_level_path)
+        elif output_format == 'zarr2':
             # For Zarr2: use chunk_shape directly (no sharding)
             # Convert compression to zarr2 format if needed
             zarr2_compressor = source_compression
@@ -386,12 +407,13 @@ class Downsampler:
 
         # Check if pre-created metadata exists and has wrong shape
         # If so, delete and recreate with correct shape
-        metadata_file = os.path.join(output_level_path, 'zarr.json' if output_format == 'zarr3' else '.zarray')
+        metadata_file_map = {'zarr3': 'zarr.json', 'zarr2': '.zarray', 'n5': 'attributes.json'}
+        metadata_file = os.path.join(output_level_path, metadata_file_map.get(output_format, 'zarr.json'))
         need_recreate = False
         if os.path.exists(metadata_file):
             with open(metadata_file, 'r') as f:
                 existing_metadata = json.load(f)
-            existing_shape = existing_metadata.get('shape', [])
+            existing_shape = existing_metadata.get('dimensions') if output_format == 'n5' else existing_metadata.get('shape', [])
             if existing_shape != downsampled_shape:
                 if verbose:
                     print(f"  Fixing pre-created shape: {existing_shape} -> {downsampled_shape}")
@@ -487,7 +509,19 @@ class Downsampler:
         (s0_voxel * factor) rather than the shape-ratio fallback, which produces
         non-power-of-2 results when shapes are ceiling-rounded during downsampling.
         """
-        if output_format == 'zarr2':
+        if output_format == 'n5':
+            # N5: store in attributes.json
+            attrs_path = os.path.join(level_path, 'attributes.json')
+            if not os.path.exists(attrs_path):
+                return
+            with open(attrs_path, 'r') as f:
+                attrs = json.load(f)
+            ts_meta = attrs.setdefault('tensorswitch', {})
+            ts_meta['must_understand'] = False
+            ts_meta['cumulative_factor'] = cumulative_factors
+            with open(attrs_path, 'w') as f:
+                json.dump(attrs, f, indent=2)
+        elif output_format == 'zarr2':
             zattrs_path = os.path.join(level_path, '.zattrs')
             zattrs = {}
             if os.path.exists(zattrs_path):

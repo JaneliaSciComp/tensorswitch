@@ -128,7 +128,28 @@ def find_base_level(input_path: str, verbose: bool = False) -> tuple:
         except (json.JSONDecodeError, KeyError, IndexError):
             pass
 
-    # Strategy 2: Fallback to common subdirectory patterns
+    # Strategy 2: Check nested group structures (raw/, labels/segmentation/)
+    if not base_level_path:
+        for nested_group in ['raw', 'labels/segmentation']:
+            nested_path = os.path.join(root_path, nested_group)
+            nested_meta = os.path.join(nested_path, 'zarr.json')
+            if os.path.exists(nested_meta):
+                try:
+                    with open(nested_meta, 'r') as f:
+                        nested_metadata = json.load(f)
+                    attrs = nested_metadata.get('attributes', {})
+                    ome_attrs = attrs.get('ome', attrs)
+                    multiscales = ome_attrs.get('multiscales', [])
+                    if multiscales and multiscales[0].get('datasets'):
+                        first_ds = multiscales[0]['datasets'][0].get('path')
+                        base_level_path = os.path.join(nested_group, first_ds)
+                        if verbose:
+                            print(f"Found base level from nested {nested_group}/zarr.json metadata: {base_level_path}")
+                        break
+                except (json.JSONDecodeError, KeyError, IndexError):
+                    pass
+
+    # Strategy 3: Fallback to common subdirectory patterns
     if not base_level_path:
         for candidate in ['s0', '0']:
             candidate_path = os.path.join(root_path, candidate)
@@ -1136,9 +1157,10 @@ def _submit_dependent_pyramid(args, conversion_job_id: str):
         conversion_job_id: LSF job ID of the s0 conversion job to depend on
     """
     # Build reinvoke command for standalone auto_multiscale on the output
+    # Use absolute path since the coordinator runs from a potentially different working directory
     reinvoke = [
         sys.executable, "-m", "tensorswitch_v2",
-        "--input", args.output,
+        "--input", os.path.abspath(args.output),
         "--auto_multiscale",
         "--submit",
         "-P", args.project,
@@ -1498,7 +1520,7 @@ def main(argv=None):
                 zarr_subdirs = [d for d in os.listdir(input_path) if d.endswith('.zarr') and os.path.isdir(os.path.join(input_path, d))]
                 is_batch_pyramid_mode = len(zarr_subdirs) > 0 and not has_s0 and not has_zarray
 
-        if not args.output and not is_batch_pyramid_mode:
+        if not args.output and not is_batch_pyramid_mode and not args.auto_multiscale:
             raise ValueError(
                 "Missing required argument: --output/-o\n"
                 "Provide the output path.\n"
@@ -1800,7 +1822,9 @@ def main(argv=None):
 
         # Single dataset mode (original behavior)
         # Auto-detect s0 path from input (supports root path or explicit s0 path)
-        s0_path, root_path = find_base_level(args.input, verbose=verbose)
+        s0_path, _ = find_base_level(args.input, verbose=verbose)
+        # root_path must be the direct parent of s0 (e.g., raw/) not the container root
+        root_path = os.path.dirname(s0_path)
 
         if args.submit:
             if not args.project:
