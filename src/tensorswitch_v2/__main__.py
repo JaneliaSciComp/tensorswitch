@@ -48,6 +48,47 @@ from .utils.pyramid_utils import resolve_downsample_method
 from .utils import get_dtype_name
 
 
+def _resolve_conversion_subgroup(args) -> Optional[str]:
+    """Return the subgroup the conversion writes to, or None for flat/ambiguous.
+
+    When ``--auto_multiscale`` chains a pyramid after conversion, we must tell
+    the pyramid step which subgroup inside the container holds the freshly
+    written s0. Otherwise ``find_base_level(<container_root>)`` reads the
+    container's root OME metadata and may return a stale subgroup (e.g. the
+    ``raw/`` multiscales written by a prior stage), causing the pyramid to
+    overwrite the wrong levels or skip writing new ones.
+
+    Args:
+        args: Parsed CLI namespace.
+
+    Returns:
+        - ``"labels/<label_key>"`` when conversion writes labels.
+        - ``"<image_key>"`` when conversion writes images.
+        - ``None`` when the subgroup cannot be determined from args alone
+          (``--no-nested-structure``, non-nested formats like N5, or
+          ``--data-type auto`` without ``--is_label``). The caller then falls
+          back to legacy container-root behavior.
+    """
+    # Only zarr2/zarr3 use nested OME-NGFF structure; N5 is always flat.
+    fmt = getattr(args, 'output_format', 'zarr3')
+    if fmt not in ('zarr2', 'zarr3'):
+        return None
+    if not getattr(args, 'use_nested_structure', True):
+        return None
+
+    data_type = getattr(args, 'data_type', 'auto')
+    label_key = getattr(args, 'label_key', 'segmentation')
+    image_key = getattr(args, 'image_key', 'raw')
+
+    if getattr(args, 'is_label', False) or data_type == 'labels':
+        return f'labels/{label_key}'
+    if data_type == 'image':
+        return image_key
+    # 'auto' without is_label: converter picks subgroup from dtype at runtime;
+    # we cannot know here. Preserve legacy container-root behavior.
+    return None
+
+
 def find_base_level(input_path: str, verbose: bool = False) -> tuple:
     """
     Find the base resolution level (s0) from a zarr path.
@@ -867,6 +908,42 @@ def create_writer(args, data_type: str = 'image'):
         raise ValueError(f"Unsupported output format: {fmt}")
 
 
+def _warn_if_axis_voxel_mismatch(args, axes_order) -> None:
+    """Emit a warning when --voxel_size gives 3 values but source axes have
+    fewer than 3 spatial dimensions.
+
+    Example: TIFF reports ``CYX`` (1 non-spatial + 2 spatial), but user passes
+    ``--voxel_size 5.99,5.99,5.96`` (3 spatial values). Without this warning
+    TS silently drops the Z value and the output scale[0] stays at ``1.0``.
+    Users can fix their TIFF save pipeline or pass ``--axes_order zyx`` to
+    override.
+    """
+    if not getattr(args, 'voxel_size', None):
+        return
+    if not axes_order:
+        return
+    parts = str(args.voxel_size).split(',')
+    if len(parts) != 3:
+        return
+    spatial = [a for a in axes_order if a in ('x', 'y', 'z')]
+    if len(spatial) >= 3:
+        return
+
+    non_spatial = [a for a in axes_order if a not in ('x', 'y', 'z')]
+    import sys as _sys
+    print(
+        f"WARNING: --voxel_size gave 3 values (X,Y,Z = {parts[0]}, {parts[1]}, {parts[2]}) "
+        f"but source reports only {len(spatial)} spatial axes: {axes_order} "
+        f"(non-spatial: {non_spatial}). "
+        f"The Z value ({parts[2]}) will NOT be applied to dim-0 — output scale[0] "
+        f"will default to 1.0. "
+        f"If this is actually a Z-stack mis-labeled as channels/samples, "
+        f"pass --axes_order zyx to re-interpret dim-0 as Z, "
+        f"or fix the source file's axes tag.",
+        file=_sys.stderr,
+    )
+
+
 def _get_input_metadata(args):
     """Read input shape, dtype, and axes for resource estimation.
 
@@ -883,6 +960,10 @@ def _get_input_metadata(args):
         if labels and all(labels):
             # Normalize 'channel' to 'c'
             axes_order = ['c' if l.lower() == 'channel' else l.lower() for l in labels]
+
+    # Catch CYX/IYX/SYX mis-labeling early, before resource estimation silently
+    # drops the Z value from --voxel_size.
+    _warn_if_axis_voxel_mismatch(args, axes_order)
 
     dtype_name = get_dtype_name(store.dtype)
     return tuple(store.shape), dtype_name, axes_order
@@ -1218,11 +1299,21 @@ def _submit_dependent_pyramid(args, conversion_job_id: str):
         args: Parsed command-line arguments
         conversion_job_id: LSF job ID of the s0 conversion job to depend on
     """
-    # Build reinvoke command for standalone auto_multiscale on the output
-    # Use absolute path since the coordinator runs from a potentially different working directory
+    # Build reinvoke command for standalone auto_multiscale on the output.
+    # Use absolute path since the coordinator runs from a potentially different
+    # working directory.
+    #
+    # CRITICAL: point --input at the SUBGROUP that holds the freshly written s0
+    # (e.g. <output>/labels/segmentation), not the container root. Otherwise
+    # find_base_level() reads the container's root .zattrs and may return a
+    # stale subgroup written by a prior stage, causing the pyramid to
+    # overwrite the wrong levels.
+    output_abs = os.path.abspath(args.output)
+    subgroup = _resolve_conversion_subgroup(args)
+    pyramid_input = os.path.join(output_abs, subgroup) if subgroup else output_abs
     reinvoke = [
         sys.executable, "-m", "tensorswitch_v2",
-        "--input", os.path.abspath(args.output),
+        "--input", pyramid_input,
         "--auto_multiscale",
         "--submit",
         "-P", args.project,
@@ -1994,6 +2085,21 @@ def main(argv=None):
 
     reader = create_reader(args)
 
+    # Warn about TIFF CYX/IYX-style axes mislabeling before conversion begins
+    # (for submit paths the same check runs inside _get_input_metadata).
+    try:
+        _axes_for_warning = None
+        _store_for_warning = reader.get_tensorstore()
+        if hasattr(_store_for_warning, 'domain') and hasattr(_store_for_warning.domain, 'labels'):
+            _labels = _store_for_warning.domain.labels
+            if _labels and all(_labels):
+                _axes_for_warning = [
+                    'c' if l.lower() == 'channel' else l.lower() for l in _labels
+                ]
+        _warn_if_axis_voxel_mismatch(args, _axes_for_warning)
+    except Exception:
+        pass  # warning is best-effort; never block conversion
+
     # Determine force_order from CLI args (None = auto-detect)
     force_order = None
     if args.force_c_order:
@@ -2129,7 +2235,16 @@ def main(argv=None):
 
     # Chain pyramid generation after s0 conversion if --auto_multiscale
     if args.auto_multiscale:
-        s0_path, _ = find_base_level(args.output, verbose=verbose)
+        # Resolve the subgroup the converter just wrote to (e.g. 'raw' or
+        # 'labels/segmentation'). Without this, find_base_level() on the
+        # container root reads stale multiscales from a prior stage and may
+        # return the wrong subgroup, causing the pyramid to overwrite the
+        # wrong levels.
+        subgroup = _resolve_conversion_subgroup(args)
+        base_level_input = (
+            os.path.join(args.output, subgroup) if subgroup else args.output
+        )
+        s0_path, _ = find_base_level(base_level_input, verbose=verbose)
         # root_path must be the direct parent of s0 (e.g., raw/) not the container root
         root_path = os.path.dirname(s0_path)
         resolved_method = resolve_downsample_method(args.downsample_method, s0_path)
