@@ -174,6 +174,66 @@ def find_base_level(input_path: str, verbose: bool = False) -> tuple:
     return s0_path, root_path
 
 
+def _is_pyramid_only_intent(input_path: Optional[str],
+                             output_path: Optional[str]) -> bool:
+    """True when ``--auto_multiscale -i X -o Y`` means "build pyramid on X".
+
+    Used to route ``--auto_multiscale`` to the pyramid-only branch even when
+    ``-o`` is supplied — the pattern the README documents
+    (``-i dataset.zarr/s0 -o dataset.zarr``).
+
+    Heuristic:
+      1. Input must be an existing directory.
+      2. Input is a "level" (basename ``s0``/``0``/``s1``/... with zarr.json,
+         .zarray, or attributes.json inside) — covers zarr3, zarr2, n5.
+      3. OR input is a "container" (has ``s0``/``0``/``raw``/
+         ``labels/segmentation`` child) — covers the 3 formats plus OME-NGFF
+         nested structure.
+      4. If neither → False (raw source files, TIFF dirs, …) so the
+         convert+pyramid workflow for raw sources is untouched.
+      5. If ``-o`` is absent → True (preserves existing pyramid-only behavior).
+      6. If ``-o`` is given → True only when ``-o`` is ancestor-or-equal of
+         ``-i``. This keeps cross-format conversion
+         (``-i old.zarr -o different.zarr --auto_multiscale``) routing to
+         the convert+pyramid path.
+    """
+    import re as _re
+
+    if not input_path:
+        return False
+    p = input_path.rstrip('/\\')
+    if not os.path.isdir(p):
+        return False
+
+    level_pat = _re.compile(r'^s?\d+$')
+    level_meta_files = ('zarr.json', '.zarray', 'attributes.json')
+    container_children = (
+        's0', '0', 'raw', os.path.join('labels', 'segmentation'),
+    )
+
+    is_level = (
+        bool(level_pat.match(os.path.basename(p)))
+        and any(os.path.exists(os.path.join(p, f)) for f in level_meta_files)
+    )
+    is_container = any(
+        os.path.exists(os.path.join(p, sub)) for sub in container_children
+    )
+
+    if not (is_level or is_container):
+        return False
+
+    if not output_path:
+        return True
+
+    in_abs = os.path.normpath(os.path.abspath(p))
+    out_abs = os.path.normpath(os.path.abspath(output_path.rstrip('/\\')))
+    try:
+        return os.path.commonpath([in_abs, out_abs]) == out_abs
+    except ValueError:
+        # Different drives on Windows → not the same container
+        return False
+
+
 def parse_args(argv=None):
     """Parse command-line arguments."""
     epilog = """
@@ -1700,9 +1760,19 @@ def main(argv=None):
 
             return
 
-    # Handle auto_multiscale mode (standalone pyramid generation on existing zarr)
-    # When --output is provided, this is a conversion + pyramid workflow — skip to standard conversion
-    if args.auto_multiscale and not args.output:
+    # Handle auto_multiscale mode (standalone pyramid generation on existing zarr).
+    # Route to pyramid-only when the user's intent is "build pyramid on existing
+    # zarr/n5 level-or-container" — i.e. input is a zarr/n5 level or container
+    # and output is absent or an ancestor of input. Raw source files (.tif,
+    # .czi, ...) fail this check, so the convert+pyramid workflow
+    # (``-i raw.czi -o new.zarr --auto_multiscale``) stays on the conversion
+    # path and picks up pyramid via the dependent-coordinator chain.
+    if args.auto_multiscale and _is_pyramid_only_intent(args.input, args.output):
+        if args.output:
+            print(
+                f"Note: input '{args.input}' is an existing zarr level/container — "
+                f"generating pyramid in-place (not converting)."
+            )
         from .core.pyramid import PyramidPlanner, create_pyramid_parallel
         from .utils import update_ome_metadata_if_needed
         import glob as glob_module
