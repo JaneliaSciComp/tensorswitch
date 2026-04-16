@@ -1079,8 +1079,29 @@ def write_xml_metadata_file(
     # Pretty-print XML if possible
     formatted_xml = xml_string
     try:
-        from xml.dom.minidom import parseString
+        from xml.dom.minidom import parseString, Node
+
+        def _strip_blank_text_nodes(node):
+            """Remove whitespace-only text nodes so toprettyxml doesn't
+            double-indent XML that already has inter-tag whitespace. Preserves
+            text content on mixed-content elements like <Comment>."""
+            has_element_children = any(
+                c.nodeType == Node.ELEMENT_NODE for c in node.childNodes
+            )
+            has_content_text = any(
+                c.nodeType == Node.TEXT_NODE and c.data.strip()
+                for c in node.childNodes
+            )
+            if has_element_children and not has_content_text:
+                for child in list(node.childNodes):
+                    if child.nodeType == Node.TEXT_NODE and not child.data.strip():
+                        node.removeChild(child)
+            for child in node.childNodes:
+                if child.nodeType == Node.ELEMENT_NODE:
+                    _strip_blank_text_nodes(child)
+
         dom = parseString(xml_string)
+        _strip_blank_text_nodes(dom.documentElement)
         pretty = dom.toprettyxml(indent="  ", encoding="UTF-8")
         # toprettyxml with encoding returns bytes; decode to str
         formatted_xml = pretty.decode('utf-8')
