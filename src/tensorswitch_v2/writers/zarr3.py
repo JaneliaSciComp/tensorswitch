@@ -572,6 +572,9 @@ class Zarr3Writer(BaseWriter):
         source_format = kwargs.get('source_format')
         no_ome_meta_export = kwargs.get('no_ome_meta_export', False)
         no_ome_xml_attr = kwargs.get('no_ome_xml_attr', False)
+        channel_info = kwargs.get('channel_info')
+        channel_minmax = kwargs.get('channel_minmax')
+        dtype = kwargs.get('dtype', 'uint16')
         if self.use_nested_structure and self._ome_structure:
             self._write_nested_metadata(
                 array_shape=array_shape,
@@ -584,6 +587,9 @@ class Zarr3Writer(BaseWriter):
                 source_format=source_format,
                 no_ome_meta_export=no_ome_meta_export,
                 no_ome_xml_attr=no_ome_xml_attr,
+                channel_info=channel_info,
+                channel_minmax=channel_minmax,
+                dtype=dtype,
             )
         else:
             # Legacy: write single metadata file at root
@@ -596,6 +602,9 @@ class Zarr3Writer(BaseWriter):
                 include_omero=self.include_omero,
                 is_label=is_label,
                 spatial_unit=voxel_unit,
+                channel_info=channel_info,
+                channel_minmax=channel_minmax,
+                dtype=dtype,
             )
             if no_ome_xml_attr:
                 full_metadata.get('attributes', {}).pop('ome_xml', None)
@@ -624,6 +633,9 @@ class Zarr3Writer(BaseWriter):
         source_format: Optional[str] = None,
         no_ome_meta_export: bool = False,
         no_ome_xml_attr: bool = False,
+        channel_info=None,
+        channel_minmax=None,
+        dtype: str = 'uint16',
     ) -> None:
         """
         Write metadata for OME-NGFF nested structure.
@@ -633,7 +645,11 @@ class Zarr3Writer(BaseWriter):
         - Labels container (labels/zarr.json) if writing labels
         - Root (zarr.json)
         """
-        from ..utils.metadata_utils import generate_default_label_colors
+        from ..utils.metadata_utils import (
+            generate_default_label_colors,
+            build_omero_metadata,
+            extract_channels_from_ome_xml,
+        )
 
         # Build axes list for metadata
         axes = []
@@ -667,6 +683,13 @@ class Zarr3Writer(BaseWriter):
 
         multiscales = {'axes': axes, 'datasets': datasets}
 
+        # Build OMERO metadata if enabled
+        omero_block = None
+        if self.include_omero and not is_label:
+            if channel_info is None and ome_xml:
+                channel_info = extract_channels_from_ome_xml(ome_xml)
+            omero_block = build_omero_metadata(channel_info, dtype, array_shape, axes_order, channel_minmax)
+
         if self.data_type == 'labels' or is_label:
             # Writing labels
             label_colors = generate_default_label_colors(256)
@@ -698,7 +721,8 @@ class Zarr3Writer(BaseWriter):
             # Writing image
             self._ome_structure.write_image_metadata(
                 multiscales=multiscales,
-                name=image_name
+                name=image_name,
+                omero=omero_block,
             )
 
             # Write root metadata (image only)
@@ -710,6 +734,7 @@ class Zarr3Writer(BaseWriter):
                 source_format=source_format,
                 no_ome_meta_export=no_ome_meta_export,
                 no_ome_xml_attr=no_ome_xml_attr,
+                omero=omero_block,
             )
 
             print(f"Wrote nested image metadata to {self.output_path}")

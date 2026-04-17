@@ -361,7 +361,7 @@ def convert(
     auto_multiscale: bool = False,
     downsample_method: str = "auto",
     per_level_factors: str = "",
-    omero: bool = False,
+    omero: bool = True,
     no_translation: bool = False,
 ) -> str:
     """Convert a microscopy dataset between formats.
@@ -402,7 +402,7 @@ def convert(
         auto_multiscale: Generate full multiscale pyramid after conversion. Default: False.
         downsample_method: Downsampling method for pyramid — "auto", "mean", "mode", etc. Used with auto_multiscale.
         per_level_factors: Custom per-level factors, semicolon-separated (e.g., "1,2,2;1,2,2"). Used with auto_multiscale.
-        omero: Include structured omero channel metadata (from OME-XML) for visualization tools.
+        omero: Include structured omero channel metadata for visualization tools (default: True).
         no_translation: Disable translation transforms in OME-NGFF multiscale metadata.
     """
     try:
@@ -870,7 +870,7 @@ def submit_job(
     downsample_method: str = "auto",
     per_level_factors: str = "",
     preset: str = "",
-    omero: bool = False,
+    omero: bool = True,
     no_translation: bool = False,
 ) -> str:
     """Submit a conversion job to the LSF cluster (bsub).

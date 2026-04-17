@@ -267,11 +267,21 @@ class DistributedConverter:
 
         ome_xml = None
         source_format = None
+        raw_metadata = {}
         try:
             raw_metadata = self.reader.get_metadata()
             ome_xml = raw_metadata.get('ome_xml') or raw_metadata.get('raw_xml')
             source_format = raw_metadata.get('source_format',
                                              self.reader.__class__.__name__.replace('Reader', '').lower())
+        except Exception:
+            pass
+
+        # Extract channel metadata for OMERO rendering hints
+        channel_info = None
+        try:
+            from ..utils.metadata_utils import extract_channel_info
+            reader_path = getattr(self.reader, 'path', None)
+            channel_info = extract_channel_info(raw_metadata, source_format, reader_path)
         except Exception:
             pass
 
@@ -377,6 +387,13 @@ class DistributedConverter:
         chunks_processed = 0
         last_report_time = start_time
 
+        # Per-channel min/max tracking for OMERO windows
+        axes_lower = [a.lower() for a in axes_order]
+        c_axis = axes_lower.index('c') if 'c' in axes_lower else None
+        num_channels = input_shape[c_axis] if c_axis is not None else 1
+        channel_mins = [np.inf] * num_channels
+        channel_maxs = [-np.inf] * num_channels
+
         for idx, chunk_domain in enumerate(chunk_domains, start=start_idx):
             try:
                 read_domain = chunk_domain
@@ -406,6 +423,26 @@ class DistributedConverter:
                 if self._squeeze_channel and self._squeeze_axis is not None:
                     data = np.squeeze(data, axis=self._squeeze_axis)
 
+                # Track per-channel min/max for OMERO display windows
+                if c_axis is not None:
+                    # Determine which channels this chunk covers
+                    if hasattr(write_domain, 'origin'):
+                        c_start = int(write_domain.origin[c_axis])
+                        c_size = int(write_domain.shape[c_axis])
+                    else:
+                        c_slice = write_domain[c_axis]
+                        c_start = c_slice.start or 0
+                        c_size = (c_slice.stop or input_shape[c_axis]) - c_start
+                    for ci in range(c_size):
+                        gc = c_start + ci
+                        if gc < num_channels:
+                            ch_data = np.take(data, ci, axis=c_axis)
+                            channel_mins[gc] = min(channel_mins[gc], float(ch_data.min()))
+                            channel_maxs[gc] = max(channel_maxs[gc], float(ch_data.max()))
+                else:
+                    channel_mins[0] = min(channel_mins[0], float(data.min()))
+                    channel_maxs[0] = max(channel_maxs[0], float(data.max()))
+
                 # Write
                 self.writer.write_chunk(write_domain, data, self._output_store)
                 chunks_processed += 1
@@ -428,6 +465,14 @@ class DistributedConverter:
                 if verbose:
                     print(f"  Warning: Skipping chunk {idx}: {e}")
                 continue
+
+        # Build channel_minmax from accumulated stats (only if we saw real data)
+        channel_minmax = None
+        if any(m != np.inf for m in channel_mins):
+            channel_minmax = [
+                (float(channel_mins[i]), float(channel_maxs[i]))
+                for i in range(num_channels)
+            ]
 
         # 9. Write metadata
         if write_metadata and (stop_idx >= self._total_chunks or start_idx > 0):
@@ -452,6 +497,9 @@ class DistributedConverter:
                     source_format=source_format,
                     no_ome_meta_export=no_ome_meta_export,
                     no_ome_xml_attr=no_ome_xml_attr,
+                    channel_info=channel_info,
+                    channel_minmax=channel_minmax,
+                    dtype=input_dtype,
                 )
                 root_path = os.path.dirname(self.writer.output_path)
                 if root_path and os.path.basename(self.writer.output_path) == 's0':

@@ -578,6 +578,9 @@ class Zarr2Writer(BaseWriter):
         source_format = kwargs.get('source_format')
         no_ome_meta_export = kwargs.get('no_ome_meta_export', False)
         no_ome_xml_attr = kwargs.get('no_ome_xml_attr', False)
+        channel_info = kwargs.get('channel_info')
+        channel_minmax = kwargs.get('channel_minmax')
+        dtype = kwargs.get('dtype', 'uint16')
         if self.use_nested_structure and self._ome_structure:
             self._write_nested_metadata(
                 array_shape=array_shape,
@@ -590,6 +593,9 @@ class Zarr2Writer(BaseWriter):
                 source_format=source_format,
                 no_ome_meta_export=no_ome_meta_export,
                 no_ome_xml_attr=no_ome_xml_attr,
+                channel_info=channel_info,
+                channel_minmax=channel_minmax,
+                dtype=dtype,
             )
             return
 
@@ -615,13 +621,12 @@ class Zarr2Writer(BaseWriter):
             print(f"Zarr2 metadata: added image-label with 256 colors")
 
         # Add omero channel metadata if requested
-        if self.include_omero and ome_xml:
-            omero_channels = extract_omero_channels(ome_xml)
-            if omero_channels:
-                ome_metadata['omero'] = {
-                    "channels": omero_channels,
-                    "rdefs": {"model": "color"}
-                }
+        if self.include_omero:
+            from ..utils.metadata_utils import build_omero_metadata, extract_channels_from_ome_xml
+            if channel_info is None and ome_xml:
+                channel_info = extract_channels_from_ome_xml(ome_xml)
+            omero_block = build_omero_metadata(channel_info, dtype, array_shape, axes_order, channel_minmax)
+            ome_metadata['omero'] = omero_block
 
         # Add ome_xml to metadata if provided
         if ome_xml and not no_ome_xml_attr:
@@ -662,6 +667,9 @@ class Zarr2Writer(BaseWriter):
         source_format: Optional[str] = None,
         no_ome_meta_export: bool = False,
         no_ome_xml_attr: bool = False,
+        channel_info=None,
+        channel_minmax=None,
+        dtype: str = 'uint16',
     ) -> None:
         """
         Write metadata for OME-NGFF nested structure (Zarr2 format).
@@ -671,6 +679,8 @@ class Zarr2Writer(BaseWriter):
         - Labels container (labels/.zattrs) if writing labels
         - Root (.zattrs)
         """
+        from ..utils.metadata_utils import build_omero_metadata, extract_channels_from_ome_xml
+
         # Build axes list for metadata
         axes = []
         for axis_name in axes_order:
@@ -703,6 +713,13 @@ class Zarr2Writer(BaseWriter):
 
         multiscales = {'axes': axes, 'datasets': datasets}
 
+        # Build OMERO metadata if enabled
+        omero_block = None
+        if self.include_omero and not is_label:
+            if channel_info is None and ome_xml:
+                channel_info = extract_channels_from_ome_xml(ome_xml)
+            omero_block = build_omero_metadata(channel_info, dtype, array_shape, axes_order, channel_minmax)
+
         if self.data_type == 'labels' or is_label:
             # Writing labels
             label_colors = generate_default_label_colors(256)
@@ -734,7 +751,8 @@ class Zarr2Writer(BaseWriter):
             # Writing image
             self._ome_structure.write_image_metadata(
                 multiscales=multiscales,
-                name=image_name
+                name=image_name,
+                omero=omero_block,
             )
 
             # Write root metadata (image only)
@@ -746,6 +764,7 @@ class Zarr2Writer(BaseWriter):
                 source_format=source_format,
                 no_ome_meta_export=no_ome_meta_export,
                 no_ome_xml_attr=no_ome_xml_attr,
+                omero=omero_block,
             )
 
             print(f"Wrote nested image metadata to {self.output_path}")
