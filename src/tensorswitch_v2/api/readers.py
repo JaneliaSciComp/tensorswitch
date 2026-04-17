@@ -105,7 +105,7 @@ class Readers:
             if path_lower.endswith('.zarr') or '.zarr/' in path_lower:
                 return _remote_zarr_reader(path)
             elif path_lower.endswith('.n5') or '.n5/' in path_lower:
-                return Readers.n5(path)
+                return _remote_n5_reader(path)
             elif 'precomputed://' in path_lower:
                 return Readers.precomputed(path)
             else:
@@ -616,3 +616,106 @@ def _find_first_dataset_path(metadata: dict) -> str:
         if datasets:
             return datasets[0].get('path', '')
     return ''
+
+
+def _remote_n5_reader(path: str):
+    """Create N5 reader for a remote URL, auto-resolving groups to arrays.
+
+    N5 groups have ``attributes.json`` with no ``dataType`` key.  This
+    function uses targeted ``kvs.read()`` calls on well-known sub-paths to
+    find the first array without listing the (potentially huge) key space.
+
+    Covers common N5 layouts:
+    - Flat pyramids: ``s0/``, ``s1/``, ...
+    - COSEM / Janelia: ``em/<name>/s0``, ``labels/<name>/s0``
+    - Simple: ``raw/s0``, ``data/s0``
+    """
+    from ..readers.base import build_kvstore
+    import tensorstore as ts
+    import json
+
+    # Well-known top-level group names found in COSEM, Janelia, and community
+    # N5 datasets.  We probe ``<dir>/attributes.json`` to discover children.
+    _TOP_DIRS = ["em", "raw", "labels", "volumes", "data", "setup0"]
+
+    def _read_attrs(kvs, subpath: str):
+        """Read and parse attributes.json at *subpath*; return dict or None."""
+        key = f"{subpath}/attributes.json" if subpath else "attributes.json"
+        try:
+            result = kvs.read(key).result()
+            if result.value is not None and len(result.value) > 0:
+                return json.loads(bytes(result.value))
+        except Exception:
+            pass
+        return None
+
+    def _is_array(attrs: dict) -> bool:
+        return attrs is not None and "dataType" in attrs
+
+    try:
+        kvs = ts.KvStore.open(build_kvstore(path)).result()
+
+        # 1. Root — if it has dataType, it's already an array
+        root_attrs = _read_attrs(kvs, "")
+        if _is_array(root_attrs):
+            return Readers.n5(path)
+
+        # 2. Probe well-known flat sub-paths (covers simple pyramids)
+        for subpath in ("s0", "raw/s0", "labels/segmentation/s0", "data/s0"):
+            if _is_array(_read_attrs(kvs, subpath)):
+                return Readers.n5(path, dataset_path=subpath)
+
+        # 3. Probe known top-level directories and discover children via
+        #    targeted reads (no kvs.list).
+        #
+        #    Strategy: for each known top-level group, read its
+        #    attributes.json.  If it exists (group), probe common child
+        #    names and, failing that, try the N5 multiscale metadata
+        #    (``multiscales[0].datasets[0].path``).  For each child that
+        #    is also a group, check ``<child>/s0``.
+        #
+        #    This covers layouts like:
+        #      em/fibsem-uint16/s0  (COSEM)
+        #      labels/some-label/s0
+        #      volumes/raw/s0
+        _CHILD_PROBES = [
+            "fibsem-uint8", "fibsem-uint16", "fibsem-float32",
+            "segmentation", "raw", "s0",
+        ]
+
+        for top in _TOP_DIRS:
+            top_attrs = _read_attrs(kvs, top)
+            if top_attrs is None:
+                continue  # dir doesn't exist
+            if _is_array(top_attrs):
+                return Readers.n5(path, dataset_path=top)
+
+            # Try multiscale metadata if present
+            ms = top_attrs.get("multiscales", [])
+            if ms:
+                datasets = ms[0].get("datasets", [])
+                if datasets:
+                    ds_path = datasets[0].get("path", "")
+                    if ds_path:
+                        full = f"{top}/{ds_path}"
+                        if _is_array(_read_attrs(kvs, full)):
+                            return Readers.n5(path, dataset_path=full)
+
+            # Probe common child names
+            for child in _CHILD_PROBES:
+                child_path = f"{top}/{child}"
+                child_attrs = _read_attrs(kvs, child_path)
+                if child_attrs is None:
+                    continue
+                if _is_array(child_attrs):
+                    return Readers.n5(path, dataset_path=child_path)
+                # Child is a group — try s0 inside it
+                s0_path = f"{child_path}/s0"
+                if _is_array(_read_attrs(kvs, s0_path)):
+                    return Readers.n5(path, dataset_path=s0_path)
+
+    except Exception:
+        pass
+
+    # Fallback: return as-is and let N5Reader handle the error
+    return Readers.n5(path)

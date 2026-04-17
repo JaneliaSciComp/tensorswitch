@@ -458,7 +458,9 @@ def _add_dataset(result: DiscoveryResult, dataset: DiscoveredDataset, verbose: b
 
 def discover_datasets(
     directory: str,
-    verbose: bool = True
+    verbose: bool = True,
+    pattern: str = "",
+    recursive: bool = False,
 ) -> DiscoveryResult:
     """
     Discover and classify datasets in a directory.
@@ -477,6 +479,10 @@ def discover_datasets(
     Args:
         directory: Path to directory to scan
         verbose: Print discovery progress
+        pattern: Glob pattern to filter files (e.g. "*.tif", "*.nd2").
+                 When specified, uses glob-based discovery instead of
+                 scanning immediate subdirectories only.
+        recursive: Enable recursive subdirectory scanning. Default: False.
 
     Returns:
         DiscoveryResult with discovered datasets
@@ -491,6 +497,39 @@ def discover_datasets(
 
     if not os.path.isdir(directory):
         result.error = f"Directory does not exist: {directory}"
+        return result
+
+    # Pattern / recursive mode: use glob-based discovery
+    if pattern or recursive:
+        import glob as glob_mod
+
+        if not pattern:
+            pattern = "*"
+        if recursive:
+            search_pattern = os.path.join(directory, "**", pattern)
+            matches = sorted(glob_mod.glob(search_pattern, recursive=True))
+        else:
+            search_pattern = os.path.join(directory, pattern)
+            matches = sorted(glob_mod.glob(search_pattern))
+
+        for match in matches:
+            if os.path.isfile(match):
+                dataset = _read_file_dataset(match)
+                if dataset:
+                    _add_dataset(result, dataset, verbose)
+            elif os.path.isdir(match):
+                dataset = _try_read_directory_dataset(match)
+                if dataset:
+                    _add_dataset(result, dataset, verbose)
+
+        if len(result.all_images) == 1:
+            result.image = result.all_images[0]
+        if len(result.all_segmentations) == 1:
+            result.segmentation = result.all_segmentations[0]
+
+        if verbose:
+            print(f"Pattern discovery complete: {len(result.all_images)} images, "
+                  f"{len(result.all_segmentations)} segmentations")
         return result
 
     # Check if directory itself is a single dataset

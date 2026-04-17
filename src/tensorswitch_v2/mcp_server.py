@@ -34,6 +34,32 @@ mcp = FastMCP("tensorswitch")
 MCP_CONVERT_MAX_GB = 2
 
 
+def _resolve_conversion_subgroup(
+    output_format: str,
+    data_type: str,
+    is_label: bool,
+    image_key: str = "raw",
+    label_key: str = "segmentation",
+):
+    """Return the OME-NGFF subgroup the conversion writes to, or None.
+
+    Mirrors __main__._resolve_conversion_subgroup() but takes explicit params
+    instead of an argparse Namespace.
+
+    Returns:
+        "labels/<label_key>" for label output, "<image_key>" for image output,
+        or None when the subgroup cannot be determined (N5, or data_type 'auto'
+        without is_label).
+    """
+    if output_format not in ("zarr2", "zarr3"):
+        return None
+    if is_label or data_type == "labels":
+        return f"labels/{label_key}"
+    if data_type == "image":
+        return image_key
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Tool 1: inspect_dataset
 # ---------------------------------------------------------------------------
@@ -249,7 +275,11 @@ def _inspect_single_dataset(path: str) -> str:
 # Tool 2: discover_datasets
 # ---------------------------------------------------------------------------
 @mcp.tool()
-def discover_datasets(path: str) -> str:
+def discover_datasets(
+    path: str,
+    pattern: str = "",
+    recursive: bool = False,
+) -> str:
     """Scan a directory and list all recognized microscopy datasets.
 
     Recursively discovers image and segmentation layers in Zarr, N5,
@@ -257,13 +287,17 @@ def discover_datasets(path: str) -> str:
 
     Args:
         path: Directory path to scan.
+        pattern: Glob pattern to filter files (e.g., "*.tif", "*.nd2").
+                 When specified, searches for matching files instead of
+                 only scanning immediate subdirectories for containers.
+        recursive: Enable recursive subdirectory scanning. Default: False.
     """
     try:
         from tensorswitch_v2.utils.folder_discovery import (
             discover_datasets as _discover,
         )
 
-        result = _discover(path.strip())
+        result = _discover(path.strip(), verbose=False, pattern=pattern, recursive=recursive)
 
         output = {"path": path, "images": [], "segmentations": []}
 
@@ -349,6 +383,7 @@ def convert(
     use_bioio: bool = False,
     use_bioformats: bool = False,
     axes_order: str = "",
+    force_order: str = "",
     expand_to_5d: bool = False,
     bbox: str = "",
     view_index: int = -1,
@@ -390,6 +425,8 @@ def convert(
         use_bioio: Force BIOIO adapter (Tier 3) instead of auto-detected Tier 2 reader.
         use_bioformats: Force Bio-Formats reader (Tier 4, Java-backed) for 150+ formats.
         axes_order: Override output spatial axis order (e.g., "xyz", "zyx"). Default: preserve source order.
+        force_order: Force output memory order — "c" for C-order (row-major),
+                     "f" for F-order (column-major), or "" for auto-detection.
         expand_to_5d: Force 5D TCZYX expansion.
         bbox: Bounding box for subvolume extraction: "origin_z,origin_y,origin_x,size_z,size_y,size_x".
         view_index: CZI view index (-1 = all views as 5D VCZYX).
@@ -532,6 +569,7 @@ def convert(
                 expand_to_5d=expand_to_5d,
                 bbox=bbox_parsed,
                 axes_order_override=axes_order_list,
+                force_order=force_order if force_order else None,
                 no_ome_meta_export=no_ome_meta_export,
                 no_ome_xml_attr=no_ome_xml_attr,
             )
@@ -551,7 +589,16 @@ def convert(
             from tensorswitch_v2.__main__ import find_base_level, run_local_pyramid
             from tensorswitch_v2.utils.pyramid_utils import resolve_downsample_method
 
-            s0_path, _ = find_base_level(output_path)
+            # Resolve the subgroup the converter just wrote to (e.g. 'raw'
+            # or 'labels/segmentation') so find_base_level targets the right
+            # levels instead of a stale subgroup from a prior stage.
+            subgroup = _resolve_conversion_subgroup(
+                output_format, data_type, is_label, image_key, label_key,
+            )
+            find_target = (
+                os.path.join(output_path, subgroup) if subgroup else output_path
+            )
+            s0_path, _ = find_base_level(find_target)
             root_path = os.path.dirname(s0_path)
 
             resolved_method = resolve_downsample_method(downsample_method, s0_path)
@@ -563,15 +610,26 @@ def convert(
                     for level in per_level_factors.split(";")
                 ]
 
-            run_local_pyramid(
-                s0_path, root_path,
-                downsample_method=resolved_method,
-                custom_per_level_factors=custom_factors,
-                include_translation=not no_translation,
-                verbose=False,
-            )
+            with contextlib.redirect_stdout(io.StringIO()):
+                plan = run_local_pyramid(
+                    s0_path, root_path,
+                    downsample_method=resolved_method,
+                    custom_per_level_factors=custom_factors,
+                    include_translation=not no_translation,
+                    verbose=False,
+                )
             response["auto_multiscale"] = True
             response["pyramid_s0"] = s0_path
+            if plan and isinstance(plan, dict):
+                response["pyramid_levels"] = plan.get("num_levels", 0)
+                response["pyramid_info"] = [
+                    {
+                        "level": f"s{lv['level']}",
+                        "factors": lv["cumulative_factor"],
+                        "shape": lv["predicted_shape"],
+                    }
+                    for lv in plan.get("levels", [])
+                ]
 
         return json.dumps(response, indent=2)
     except Exception as e:
@@ -589,6 +647,7 @@ def generate_pyramid(
     compression: str = "zstd",
     compression_level: int = 5,
     no_translation: bool = False,
+    per_level_factors: str = "",
 ) -> str:
     """Generate a multiscale pyramid from a base-resolution dataset (s0).
 
@@ -606,6 +665,8 @@ def generate_pyramid(
         compression: Compression codec for pyramid levels.
         compression_level: Compression level for pyramid levels.
         no_translation: Disable translation transforms in OME-NGFF multiscale metadata.
+        per_level_factors: Custom per-level factors, semicolon-separated (e.g., "1,2,2;1,2,2;2,2,2").
+                          Overrides automatic factor calculation.
     """
     try:
         import contextlib
@@ -622,7 +683,14 @@ def generate_pyramid(
             downsample_method=downsample_method,
         )
 
-        plan = planner.calculate_pyramid_plan()
+        custom_factors = None
+        if per_level_factors:
+            custom_factors = [
+                [int(x) for x in level.split(",")]
+                for level in per_level_factors.split(";")
+            ]
+
+        plan = planner.calculate_pyramid_plan(custom_per_level_factors=custom_factors)
 
         # Run locally (suppress stdout — MCP uses stdio transport)
         with contextlib.redirect_stdout(io.StringIO()):
@@ -856,6 +924,7 @@ def submit_job(
     use_bioformats: bool = False,
     view_index: int = -1,
     axes_order: str = "",
+    force_order: str = "",
     expand_to_5d: bool = False,
     bbox: str = "",
     level_path: str = "s0",
@@ -901,6 +970,7 @@ def submit_job(
         use_bioformats: Force Bio-Formats reader (Tier 4).
         view_index: CZI view index (-1 = all views).
         axes_order: Override output spatial axis order (e.g., "xyz", "zyx").
+        force_order: Force output memory order — "c" for C-order, "f" for F-order, or "" for auto.
         expand_to_5d: Force 5D TCZYX expansion.
         bbox: Bounding box for subvolume: "origin_z,origin_y,origin_x,size_z,size_y,size_x".
         level_path: Level subdirectory name (default: "s0").
@@ -947,16 +1017,34 @@ def submit_job(
             if not shard_shape:
                 shard_shape = "1024,1024,1024"
 
-        # Handle auto_multiscale mode — use pyramid submission
+        # Handle auto_multiscale mode
         if auto_multiscale:
-            return _submit_pyramid_job(
-                input_path, output_path, project,
-                downsample_method=downsample_method,
-                per_level_factors=per_level_factors,
-                memory=memory, wall_time=wall_time, cores=cores,
-                log_dir=log_dir,
-                include_translation=not no_translation,
-            )
+            from tensorswitch_v2.__main__ import find_base_level
+
+            # Detect whether input is an existing dataset (pyramid-only)
+            # or a raw source file (conversion + dependent pyramid).
+            is_existing_dataset = False
+            try:
+                find_base_level(input_path)
+                is_existing_dataset = True
+            except (ValueError, OSError):
+                pass
+
+            if is_existing_dataset:
+                # Pyramid-only: input already has s0
+                subgroup = _resolve_conversion_subgroup(
+                    output_format, data_type, is_label, image_key, label_key,
+                )
+                return _submit_pyramid_job(
+                    input_path, output_path, project,
+                    downsample_method=downsample_method,
+                    per_level_factors=per_level_factors,
+                    memory=memory, wall_time=wall_time, cores=cores,
+                    log_dir=log_dir,
+                    include_translation=not no_translation,
+                    subgroup=subgroup,
+                )
+            # else: fall through to conversion submission, then chain pyramid
 
         # Build argparse.Namespace matching what __main__.submit_job() reads
         # Reference: __main__.py lines 836-1057
@@ -982,8 +1070,8 @@ def submit_job(
             quiet=True,
             use_bioio=use_bioio,
             use_bioformats=use_bioformats,
-            force_c_order=False,
-            force_f_order=False,
+            force_c_order=(force_order.lower() == "c") if force_order else False,
+            force_f_order=(force_order.lower() == "f") if force_order else False,
             voxel_size=voxel_size if voxel_size else None,
             voxel_unit=voxel_unit if voxel_size else None,
             is_label=is_label,
@@ -1008,6 +1096,43 @@ def submit_job(
         # Suppress stdout — MCP uses stdio transport (stdout = JSON-RPC)
         with contextlib.redirect_stdout(io.StringIO()):
             job_id = _cli_submit_job(args, return_job_id=True)
+
+        # If auto_multiscale was requested for a raw source file, chain a
+        # dependent pyramid coordinator job after the conversion finishes.
+        if auto_multiscale:
+            coordinator_id = _submit_dependent_pyramid_mcp(
+                conversion_job_id=str(job_id),
+                output_path=output_path,
+                project=project,
+                output_format=output_format,
+                data_type=data_type,
+                is_label=is_label,
+                image_key=image_key,
+                label_key=label_key,
+                downsample_method=downsample_method,
+                per_level_factors=per_level_factors,
+                no_translation=no_translation,
+                log_dir=log_dir,
+                memory=memory,
+                wall_time=wall_time,
+                cores=cores,
+                job_group=job_group,
+            )
+            return json.dumps({
+                "status": "submitted",
+                "mode": "convert_and_pyramid",
+                "conversion_job_id": str(job_id),
+                "coordinator_job_id": coordinator_id,
+                "input": input_path,
+                "output": output_path,
+                "format": output_format,
+                "project": project,
+                "message": (
+                    f"Conversion job {job_id} submitted. "
+                    f"Pyramid coordinator job {coordinator_id} will start after "
+                    f"conversion completes. Use check_job_status to monitor."
+                ),
+            }, indent=2)
 
         return json.dumps({
             "status": "submitted",
@@ -1039,12 +1164,102 @@ def submit_job(
         return f"Error submitting job: {e}"
 
 
+def _submit_dependent_pyramid_mcp(
+    conversion_job_id: str,
+    output_path: str,
+    project: str,
+    output_format: str = "zarr3",
+    data_type: str = "auto",
+    is_label: bool = False,
+    image_key: str = "raw",
+    label_key: str = "segmentation",
+    downsample_method: str = "auto",
+    per_level_factors: str = "",
+    no_translation: bool = False,
+    log_dir: str = "",
+    memory: int = 0,
+    wall_time: str = "",
+    cores: int = 0,
+    job_group: str = "",
+):
+    """Submit a dependent pyramid coordinator that waits for conversion to finish.
+
+    Mirrors __main__._submit_dependent_pyramid() but standalone for MCP.
+    Returns the coordinator LSF job ID, or "unknown" on failure.
+    """
+    import re
+    import shlex
+    import subprocess
+
+    output_abs = os.path.abspath(output_path)
+    subgroup = _resolve_conversion_subgroup(
+        output_format, data_type, is_label, image_key, label_key,
+    )
+    pyramid_input = os.path.join(output_abs, subgroup) if subgroup else output_abs
+
+    reinvoke = [
+        sys.executable, "-m", "tensorswitch_v2",
+        "--input", pyramid_input,
+        "--auto_multiscale",
+        "--submit",
+        "-P", project,
+    ]
+    if downsample_method and downsample_method != "auto":
+        reinvoke += ["--downsample_method", downsample_method]
+    if per_level_factors:
+        reinvoke += ["--per_level_factors", per_level_factors]
+    if no_translation:
+        reinvoke.append("--no_translation")
+    if log_dir:
+        reinvoke += ["--log_dir", log_dir]
+    if memory and memory > 0:
+        reinvoke += ["--memory", str(memory)]
+    if wall_time:
+        reinvoke += ["--wall_time", wall_time]
+    if cores and cores > 0:
+        reinvoke += ["--cores", str(cores)]
+
+    reinvoke_str = shlex.join(reinvoke)
+
+    output_parent = os.path.dirname(output_abs)
+    effective_log_dir = log_dir or os.path.join(output_parent, "output")
+    os.makedirs(effective_log_dir, exist_ok=True)
+
+    job_name = f"tsv2_pyramid_coordinator_{os.path.basename(output_path)}"
+    job_name = job_name.replace(" ", "_")[:128]
+
+    command = [
+        "bsub",
+        "-J", job_name,
+        "-n", "1",
+        "-W", "0:30",
+        "-M", "15GB",
+        "-R", "rusage[mem=15360]",
+        "-P", project,
+        "-w", f"done({conversion_job_id})",
+        "-o", os.path.join(effective_log_dir, f"output__{job_name}_%J.log"),
+        "-e", os.path.join(effective_log_dir, f"error__{job_name}_%J.log"),
+    ]
+    if job_group:
+        command += ["-g", job_group]
+    command += ["/bin/bash", "-c", reinvoke_str]
+
+    result = subprocess.run(command, capture_output=True, text=True)
+    if result.returncode == 0:
+        match = re.search(r'Job <(\d+)>', result.stdout)
+        return match.group(1) if match else "unknown"
+
+    logger.error(f"Pyramid coordinator submission failed: {result.stderr.strip()}")
+    return "unknown"
+
+
 def _submit_pyramid_job(
     input_path: str, output_path: str, project: str,
     downsample_method: str = "auto", per_level_factors: str = "",
     memory: int = 0, wall_time: str = "", cores: int = 0,
     log_dir: str = "",
     include_translation: bool = True,
+    subgroup: str = None,
 ) -> str:
     """Submit pyramid generation as chained LSF jobs."""
     import contextlib
@@ -1053,10 +1268,18 @@ def _submit_pyramid_job(
     from tensorswitch_v2.__main__ import find_base_level
     from tensorswitch_v2.core.pyramid import create_pyramid_parallel
 
+    # Narrow to the specific subgroup if provided (e.g. 'raw' or
+    # 'labels/segmentation') so find_base_level targets the right levels.
+    effective_input = input_path
+    if subgroup:
+        candidate = os.path.join(input_path, subgroup)
+        if os.path.isdir(candidate):
+            effective_input = candidate
+
     # Determine s0 path — use find_base_level for full detection
     # (handles raw/s0, labels/segmentation/s0, OME-NGFF metadata, N5, etc.)
     try:
-        s0_path, _ = find_base_level(input_path)
+        s0_path, _ = find_base_level(effective_input)
     except ValueError:
         return json.dumps({
             "error": "s0_not_found",
@@ -1185,5 +1408,30 @@ def check_job_status(job_id: str) -> str:
 # Entry point
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
-    logger.info("Starting TensorSwitch MCP server")
-    mcp.run(transport="stdio")
+    import argparse
+
+    parser = argparse.ArgumentParser(description="TensorSwitch MCP Server")
+    parser.add_argument(
+        "--transport", default="stdio",
+        choices=["stdio", "streamable-http", "sse"],
+        help="Transport protocol (default: stdio)",
+    )
+    parser.add_argument(
+        "--host", default="127.0.0.1",
+        help="Host to bind HTTP server to (default: 127.0.0.1)",
+    )
+    parser.add_argument(
+        "--port", type=int, default=8000,
+        help="Port for HTTP server (default: 8000)",
+    )
+    args = parser.parse_args()
+
+    if args.transport == "stdio":
+        logger.info("Starting TensorSwitch MCP server (stdio)")
+        mcp.run(transport="stdio")
+    else:
+        logger.info(
+            f"Starting TensorSwitch MCP server ({args.transport}) "
+            f"on {args.host}:{args.port}"
+        )
+        mcp.run(transport=args.transport, host=args.host, port=args.port)
