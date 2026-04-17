@@ -118,6 +118,77 @@ def is_remote_path(path: str) -> bool:
     return parsed.scheme.lower() in ('http', 'https', 's3', 'gs')
 
 
+def parse_s3_url(url: str):
+    """Extract (bucket, prefix) from an S3 URL, or return None for non-S3.
+
+    Supports ``s3://bucket/path``, ``https://BUCKET.s3.amazonaws.com/PATH``,
+    and ``https://s3.REGION.amazonaws.com/BUCKET/PATH``.
+    """
+    parsed = urlparse(url)
+    scheme = parsed.scheme.lower()
+    if scheme == 's3':
+        prefix = parsed.path.lstrip('/')
+        if prefix and not prefix.endswith('/'):
+            prefix += '/'
+        return (parsed.netloc, prefix)
+    if scheme in ('http', 'https'):
+        host = parsed.netloc.lower()
+        if host.endswith('.s3.amazonaws.com'):
+            bucket = host.replace('.s3.amazonaws.com', '')
+            prefix = parsed.path.lstrip('/')
+            if prefix and not prefix.endswith('/'):
+                prefix += '/'
+            return (bucket, prefix)
+        if '.s3.' in host and host.endswith('.amazonaws.com'):
+            parts = parsed.path.lstrip('/').split('/', 1)
+            bucket = parts[0]
+            prefix = parts[1] if len(parts) > 1 else ''
+            if prefix and not prefix.endswith('/'):
+                prefix += '/'
+            return (bucket, prefix)
+    return None
+
+
+def s3_list_children(bucket: str, prefix: str):
+    """List immediate children of an S3 prefix using the REST API.
+
+    Returns ``(dirs, files)`` where *dirs* are subdirectory names (without
+    trailing ``/``) and *files* are object names — both relative to *prefix*.
+
+    Uses anonymous access (public buckets only).  Timeout: 10 s.
+    """
+    import urllib.request
+    import xml.etree.ElementTree as ET
+    from urllib.parse import quote
+
+    url = (
+        f"https://{bucket}.s3.amazonaws.com/"
+        f"?list-type=2&prefix={quote(prefix, safe='/')}&delimiter=/&max-keys=100"
+    )
+    req = urllib.request.Request(url)
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        root = ET.fromstring(resp.read())
+
+    ns = root.tag.split('}')[0] + '}' if '}' in root.tag else ''
+
+    dirs = []
+    for cp in root.findall(f'{ns}CommonPrefixes'):
+        full = cp.find(f'{ns}Prefix').text
+        # Strip prefix and trailing '/'
+        rel = full[len(prefix):].rstrip('/')
+        if rel:
+            dirs.append(rel)
+
+    files = []
+    for c in root.findall(f'{ns}Contents'):
+        key = c.find(f'{ns}Key').text
+        rel = key[len(prefix):]
+        if rel:
+            files.append(rel)
+
+    return dirs, files
+
+
 def is_local_precomputed(path: str) -> bool:
     """
     Check if path is a local Neuroglancer Precomputed directory.

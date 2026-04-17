@@ -558,10 +558,109 @@ def _is_zarr3(path: str) -> bool:
     return False
 
 
+def _s3_discover_array_path(path: str) -> str:
+    """Use S3 bounded directory listing to find the first array in a container.
+
+    Performs a breadth-first search using S3 ``ListObjectsV2`` with
+    ``delimiter='/'`` to discover subdirectories, and direct GETs to check
+    for array markers at each node:
+
+    - ``.zarray`` exists → Zarr2 array
+    - ``zarr.json`` with ``node_type == 'array'`` → Zarr3 array
+    - ``attributes.json`` with ``dataType`` → N5 array
+
+    Array markers are checked via direct HTTP GET — not via the listing
+    response — because S3's ``max-keys`` can truncate metadata files when
+    there are many chunk subdirectories (e.g. N5 ``s0/`` with 188 chunks).
+
+    Returns the relative subpath to the first array found, or ``''`` if
+    the URL is not S3 or no array is found within the search bounds.
+
+    Bounds: max depth 4, max 10 children per level.
+    """
+    from ..readers.base import parse_s3_url, s3_list_children
+    import urllib.request
+    import json
+
+    parsed = parse_s3_url(path)
+    if parsed is None:
+        return ''
+
+    bucket, root_prefix = parsed
+    base_url = f"https://{bucket}.s3.amazonaws.com/"
+
+    def _fetch_json(key: str):
+        """Fetch and parse a JSON file from S3.  Return dict or None."""
+        try:
+            with urllib.request.urlopen(base_url + key, timeout=10) as resp:
+                return json.loads(resp.read())
+        except Exception:
+            return None
+
+    def _is_array(prefix: str) -> bool:
+        """Check array markers via direct GET (not from listing)."""
+        # Zarr2: .zarray exists
+        try:
+            req = urllib.request.Request(base_url + prefix + '.zarray', method='HEAD')
+            with urllib.request.urlopen(req, timeout=5):
+                return True
+        except Exception:
+            pass
+        # Zarr3: zarr.json with node_type=array
+        meta = _fetch_json(prefix + 'zarr.json')
+        if meta and meta.get('node_type') == 'array':
+            return True
+        # N5: attributes.json with dataType
+        meta = _fetch_json(prefix + 'attributes.json')
+        if meta and 'dataType' in meta:
+            return True
+        return False
+
+    MAX_DEPTH = 4
+    MAX_CHILDREN = 10
+
+    # Prioritise directories likely to contain raw image data so that BFS
+    # finds them before exploring dozens of label subdirectories.
+    _PRIORITY = {
+        's0': 0, 'em': 1, 'raw': 2, 'data': 3, 'volumes': 4,
+        'recon-1': 5, 'setup0': 6,
+    }
+
+    def _sort_children(dirs):
+        return sorted(dirs, key=lambda d: _PRIORITY.get(d, 100))
+
+    # BFS: each entry is (prefix, depth, relative_subpath)
+    queue = [(root_prefix, 0, '')]
+
+    try:
+        while queue:
+            prefix, depth, rel = queue.pop(0)
+
+            # Skip root (depth 0) — caller already checked it
+            if depth > 0 and _is_array(prefix):
+                return rel
+
+            if depth >= MAX_DEPTH:
+                continue
+
+            dirs, _files = s3_list_children(bucket, prefix)
+
+            for child in _sort_children(dirs)[:MAX_CHILDREN]:
+                child_prefix = prefix + child + '/'
+                child_rel = f"{rel}/{child}" if rel else child
+                queue.append((child_prefix, depth + 1, child_rel))
+    except Exception:
+        pass
+
+    return ''
+
+
 def _remote_zarr_reader(path: str):
     """Create the correct Zarr reader for a remote URL.
 
-    Detects Zarr3 vs Zarr2 and handles groups (auto-resolves to first array).
+    Detects Zarr3 vs Zarr2.  Groups with OME-NGFF ``multiscales`` metadata
+    are auto-resolved to the first array.  Groups without multiscales raise
+    ``ValueError`` asking the user to provide the dataset sub-path.
     """
     from ..readers.base import build_kvstore
     import tensorstore as ts
@@ -579,6 +678,15 @@ def _remote_zarr_reader(path: str):
                 ds_path = _find_first_dataset_path(meta)
                 if ds_path:
                     return Readers.zarr3(path, dataset_path=ds_path)
+                # Try S3 bounded directory listing before giving up
+                resolved = _s3_discover_array_path(path)
+                if resolved:
+                    return Readers.zarr3(path, dataset_path=resolved)
+                raise ValueError(
+                    f"Remote Zarr3 path is a group without multiscales metadata: {path}\n"
+                    "Append the dataset sub-path to the URL, e.g.:\n"
+                    f"  {path}/raw/s0"
+                )
             return Readers.zarr3(path)
 
         # Check for Zarr2 group (.zgroup + .zattrs with multiscales)
@@ -591,13 +699,24 @@ def _remote_zarr_reader(path: str):
                 ds_path = _find_first_dataset_path(attrs)
                 if ds_path:
                     return Readers.zarr2(path, dataset_path=ds_path)
-            return Readers.zarr2(path)
+
+            # Try S3 bounded directory listing before giving up
+            resolved = _s3_discover_array_path(path)
+            if resolved:
+                return Readers.zarr2(path, dataset_path=resolved)
+            raise ValueError(
+                f"Remote Zarr path is a group without multiscales metadata: {path}\n"
+                "Append the dataset sub-path to the URL, e.g.:\n"
+                f"  {path}/recon-1/em/fibsem-uint8/s0"
+            )
 
         # Check for Zarr2 array (.zarray)
         zarray = kvs.read('.zarray').result()
         if zarray.value is not None and len(zarray.value) > 0:
             return Readers.zarr2(path)
 
+    except ValueError:
+        raise
     except Exception:
         pass
 
@@ -619,103 +738,35 @@ def _find_first_dataset_path(metadata: dict) -> str:
 
 
 def _remote_n5_reader(path: str):
-    """Create N5 reader for a remote URL, auto-resolving groups to arrays.
+    """Create N5 reader for a remote URL.
 
-    N5 groups have ``attributes.json`` with no ``dataType`` key.  This
-    function uses targeted ``kvs.read()`` calls on well-known sub-paths to
-    find the first array without listing the (potentially huge) key space.
-
-    Covers common N5 layouts:
-    - Flat pyramids: ``s0/``, ``s1/``, ...
-    - COSEM / Janelia: ``em/<name>/s0``, ``labels/<name>/s0``
-    - Simple: ``raw/s0``, ``data/s0``
+    Checks whether the root path is an N5 array (has ``dataType`` in
+    ``attributes.json``).  If the root is a group, raises ``ValueError``
+    telling the user to append the dataset sub-path.
     """
     from ..readers.base import build_kvstore
     import tensorstore as ts
     import json
 
-    # Well-known top-level group names found in COSEM, Janelia, and community
-    # N5 datasets.  We probe ``<dir>/attributes.json`` to discover children.
-    _TOP_DIRS = ["em", "raw", "labels", "volumes", "data", "setup0"]
-
-    def _read_attrs(kvs, subpath: str):
-        """Read and parse attributes.json at *subpath*; return dict or None."""
-        key = f"{subpath}/attributes.json" if subpath else "attributes.json"
-        try:
-            result = kvs.read(key).result()
-            if result.value is not None and len(result.value) > 0:
-                return json.loads(bytes(result.value))
-        except Exception:
-            pass
-        return None
-
-    def _is_array(attrs: dict) -> bool:
-        return attrs is not None and "dataType" in attrs
-
     try:
         kvs = ts.KvStore.open(build_kvstore(path)).result()
-
-        # 1. Root — if it has dataType, it's already an array
-        root_attrs = _read_attrs(kvs, "")
-        if _is_array(root_attrs):
-            return Readers.n5(path)
-
-        # 2. Probe well-known flat sub-paths (covers simple pyramids)
-        for subpath in ("s0", "raw/s0", "labels/segmentation/s0", "data/s0"):
-            if _is_array(_read_attrs(kvs, subpath)):
-                return Readers.n5(path, dataset_path=subpath)
-
-        # 3. Probe known top-level directories and discover children via
-        #    targeted reads (no kvs.list).
-        #
-        #    Strategy: for each known top-level group, read its
-        #    attributes.json.  If it exists (group), probe common child
-        #    names and, failing that, try the N5 multiscale metadata
-        #    (``multiscales[0].datasets[0].path``).  For each child that
-        #    is also a group, check ``<child>/s0``.
-        #
-        #    This covers layouts like:
-        #      em/fibsem-uint16/s0  (COSEM)
-        #      labels/some-label/s0
-        #      volumes/raw/s0
-        _CHILD_PROBES = [
-            "fibsem-uint8", "fibsem-uint16", "fibsem-float32",
-            "segmentation", "raw", "s0",
-        ]
-
-        for top in _TOP_DIRS:
-            top_attrs = _read_attrs(kvs, top)
-            if top_attrs is None:
-                continue  # dir doesn't exist
-            if _is_array(top_attrs):
-                return Readers.n5(path, dataset_path=top)
-
-            # Try multiscale metadata if present
-            ms = top_attrs.get("multiscales", [])
-            if ms:
-                datasets = ms[0].get("datasets", [])
-                if datasets:
-                    ds_path = datasets[0].get("path", "")
-                    if ds_path:
-                        full = f"{top}/{ds_path}"
-                        if _is_array(_read_attrs(kvs, full)):
-                            return Readers.n5(path, dataset_path=full)
-
-            # Probe common child names
-            for child in _CHILD_PROBES:
-                child_path = f"{top}/{child}"
-                child_attrs = _read_attrs(kvs, child_path)
-                if child_attrs is None:
-                    continue
-                if _is_array(child_attrs):
-                    return Readers.n5(path, dataset_path=child_path)
-                # Child is a group — try s0 inside it
-                s0_path = f"{child_path}/s0"
-                if _is_array(_read_attrs(kvs, s0_path)):
-                    return Readers.n5(path, dataset_path=s0_path)
-
+        result = kvs.read("attributes.json").result()
+        if result.value is not None and len(result.value) > 0:
+            attrs = json.loads(bytes(result.value))
+            if "dataType" in attrs:
+                return Readers.n5(path)
+            # Root is a group — try S3 bounded directory listing
+            resolved = _s3_discover_array_path(path)
+            if resolved:
+                return Readers.n5(path, dataset_path=resolved)
+            raise ValueError(
+                f"Remote N5 path is a group, not an array: {path}\n"
+                "Append the dataset sub-path to the URL, e.g.:\n"
+                f"  {path}/em/fibsem-uint16/s0"
+            )
+    except ValueError:
+        raise
     except Exception:
         pass
 
-    # Fallback: return as-is and let N5Reader handle the error
     return Readers.n5(path)

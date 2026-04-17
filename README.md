@@ -1109,7 +1109,7 @@ TensorSwitch v2 includes an MCP (Model Context Protocol) server that allows Clau
 
 | Tool | Description |
 |------|-------------|
-| `inspect_dataset` | Returns shape, dtype, voxel sizes, axes, pyramid levels, OME metadata. Supports remote S3/HTTP URLs with auto-path-discovery (Zarr2/3 and N5 groups auto-resolve to first array). |
+| `inspect_dataset` | Returns shape, dtype, voxel sizes, axes, pyramid levels, OME metadata. Supports remote S3/HTTP URLs with auto-discovery: groups with OME-NGFF multiscales auto-resolve; S3 containers use bounded directory listing (BFS, max 4 levels) to find arrays automatically; non-S3 URLs require full array path. |
 | `discover_datasets` | Scans a directory for image/segmentation layers. Supports `pattern` (e.g., `"*.tif"`) and `recursive` for finding proprietary files (TIFF, ND2, CZI, IMS, HDF5) in subdirectories. |
 | `convert` | Converts between formats with full CLI parity. Supports `auto_multiscale` (one-step convert + pyramid), `omero` channel metadata, `no_translation`, `force_order` (C/F memory layout), remote S3/HTTP with `--bbox`. 2 GB size guard — larger datasets redirect to `submit_job`. |
 | `generate_pyramid` | Creates multiscale pyramid locally with chained downsampling, anisotropic handling, optional `no_translation`, and custom `per_level_factors` |
@@ -1145,8 +1145,8 @@ Then ask Claude natural language questions like:
 - "Submit a conversion job for this large TIFF"
 - "What's the status of that job?"
 - "Generate a pyramid for the converted output"
-- "Inspect this remote dataset: https://janelia-cosem-datasets.s3.amazonaws.com/jrc_hela-2/jrc_hela-2.zarr/recon-1/em/fibsem-uint8"
-- "Inspect this remote N5: https://janelia-cosem-datasets.s3.amazonaws.com/jrc_hela-2/jrc_hela-2.n5" (auto-resolves to `em/fibsem-uint16/s0`)
+- "Inspect this remote Zarr: https://janelia-cosem-datasets.s3.amazonaws.com/jrc_hela-2/jrc_hela-2.zarr" (auto-discovers `recon-1/em/fibsem-uint8/s0`)
+- "Inspect this remote N5: https://janelia-cosem-datasets.s3.amazonaws.com/jrc_hela-2/jrc_hela-2.n5" (auto-discovers `em/fibsem-uint16/s0`)
 - "Convert a 64x64x64 crop from that remote S3 dataset to local Zarr3"
 
 ### Cross-Repository Discovery (with micro-agent)
