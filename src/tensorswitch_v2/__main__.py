@@ -631,8 +631,12 @@ Supported output formats:
         help="Show input/output TensorStore specs and conversion summary, then exit without converting",
     )
     parser.add_argument(
-        "--omero", action="store_true",
-        help="Include structured omero channel metadata (extracted from OME-XML) for visualization tools",
+        "--omero", action="store_true", default=False,
+        help="(deprecated, now default) Include omero channel metadata for visualization tools",
+    )
+    parser.add_argument(
+        "--no-omero", action="store_true", dest="no_omero", default=False,
+        help="Disable omero channel metadata generation (enabled by default)",
     )
 
     # Batch worker mode (used by LSF job array)
@@ -872,6 +876,7 @@ def create_writer(args, data_type: str = 'image'):
     image_key = getattr(args, 'image_key', 'raw')
     label_key = getattr(args, 'label_key', 'segmentation')
 
+    include_omero = not getattr(args, 'no_omero', False)
     if fmt == "zarr3":
         return Writers.zarr3(
             output_path=args.output,
@@ -879,7 +884,7 @@ def create_writer(args, data_type: str = 'image'):
             compression=args.compression,
             compression_level=args.compression_level,
             level_path=level_path,
-            include_omero=getattr(args, 'omero', False),
+            include_omero=include_omero,
             use_nested_structure=use_nested,
             data_type=data_type,
             image_key=image_key,
@@ -891,7 +896,7 @@ def create_writer(args, data_type: str = 'image'):
             compression=args.compression,
             compression_level=args.compression_level,
             level_path=level_path,
-            include_omero=getattr(args, 'omero', False),
+            include_omero=include_omero,
             use_nested_structure=use_nested,
             data_type=data_type,
             image_key=image_key,
@@ -1232,8 +1237,8 @@ def submit_job(args, return_job_id=False):
         reinvoke.append("--no_ome_meta_export")
     if getattr(args, 'no_ome_xml_attr', False):
         reinvoke.append("--no_ome_xml_attr")
-    if getattr(args, 'omero', False):
-        reinvoke.append("--omero")
+    if getattr(args, 'no_omero', False):
+        reinvoke.append("--no-omero")
     # Convert to properly quoted shell command string
     # This handles paths with spaces correctly when bsub creates its wrapper
     reinvoke_str = shlex.join(reinvoke)

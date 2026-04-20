@@ -14,7 +14,7 @@ import json
 import glob
 import numpy as np
 import re
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 
 # ============================================================================
@@ -355,13 +355,8 @@ def extract_omero_channels(ome_xml: str) -> list:
             continue
         color_int = int(color_match.group(1))
 
-        # Convert integer color (ARGB) to hex RGB
-        if color_int < 0:
-            color_int = color_int & 0xFFFFFFFF
-        r = (color_int >> 16) & 0xFF
-        g = (color_int >> 8) & 0xFF
-        b = color_int & 0xFF
-        color_hex = f"{r:02X}{g:02X}{b:02X}"
+        # Convert RGBA-packed integer to hex RGB
+        color_hex = _rgba_int_to_hex_rgb(color_int)
 
         channels.append({
             "label": name,
@@ -372,7 +367,20 @@ def extract_omero_channels(ome_xml: str) -> list:
     return channels if channels else None
 
 
-def create_zarr3_ome_metadata(ome_xml, array_shape, image_name, pixel_sizes=None, axes_order=None, include_omero=False, is_label=False, label_colors=None, level_path="s0", spatial_unit='nanometer'):
+# Re-export OMERO types and functions from dedicated module for backward compat
+from .omero import (  # noqa: F401
+    ChannelInfo,
+    _rgba_int_to_hex_rgb,
+    build_omero_metadata,
+    extract_channel_info,
+    extract_channels_from_czi_xml,
+    extract_channels_from_ims,
+    extract_channels_from_nd2,
+    extract_channels_from_ome_xml,
+)
+
+
+def create_zarr3_ome_metadata(ome_xml, array_shape, image_name, pixel_sizes=None, axes_order=None, include_omero=False, is_label=False, label_colors=None, level_path="s0", spatial_unit='nanometer', channel_info=None, channel_minmax=None, dtype='uint16'):
     """
     Create OME-ZARR metadata structure for zarr3 format.
 
@@ -382,11 +390,14 @@ def create_zarr3_ome_metadata(ome_xml, array_shape, image_name, pixel_sizes=None
         image_name: Name for the image/dataset
         pixel_sizes: Dict with 'x', 'y', 'z' voxel sizes in nanometers
         axes_order: List of axis names (e.g., ["v", "c", "z", "y", "x"] for CZI multi-view)
-        include_omero: If True, extract and add omero channel metadata from ome_xml
+        include_omero: If True, generate and add omero channel metadata
         is_label: If True, add image-label metadata for segmentation data
         label_colors: Optional list of color dicts for labels. If None and is_label=True,
                       generates default colors.
         level_path: Path for level 0 dataset (default "s0" for Janelia convention)
+        channel_info: Optional list of ChannelInfo for OMERO generation (extracted
+                      by format-specific parsers). Falls back to OME-XML extraction.
+        dtype: Pixel data type string for display window calculation.
     """
     ndim = len(array_shape)
 
@@ -438,13 +449,11 @@ def create_zarr3_ome_metadata(ome_xml, array_shape, image_name, pixel_sizes=None
         }
     }
 
-    if include_omero and ome_xml:
-        omero_channels = extract_omero_channels(ome_xml)
-        if omero_channels:
-            metadata["attributes"]["ome"]["omero"] = {
-                "channels": omero_channels,
-                "rdefs": {"model": "color"}
-            }
+    if include_omero:
+        if channel_info is None and ome_xml:
+            channel_info = extract_channels_from_ome_xml(ome_xml)
+        omero_block = build_omero_metadata(channel_info, dtype, array_shape, axis_names, channel_minmax)
+        metadata["attributes"]["ome"]["omero"] = omero_block
 
     if ome_xml:
         if isinstance(ome_xml, str):

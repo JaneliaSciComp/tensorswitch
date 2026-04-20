@@ -392,7 +392,8 @@ class OMEStructure:
     def write_image_metadata(
         self,
         multiscales: Dict,
-        name: str = 'image'
+        name: str = 'image',
+        omero: Optional[Dict] = None,
     ) -> None:
         """
         Write image metadata to image group zarr.json.
@@ -400,12 +401,15 @@ class OMEStructure:
         Args:
             multiscales: Dict with 'axes' and 'datasets'
             name: Name for multiscales entry
+            omero: Optional OMERO rendering metadata block
         """
         metadata = self.create_image_multiscales_metadata(
             axes=multiscales.get('axes', []),
             datasets=multiscales.get('datasets', []),
             name=name
         )
+        if omero:
+            metadata['attributes']['ome']['omero'] = omero
         path = os.path.join(self.get_image_data_path(), 'zarr.json')
         self.write_metadata(path, metadata)
 
@@ -480,6 +484,7 @@ class OMEStructure:
         source_format: Optional[str] = None,
         no_ome_meta_export: bool = False,
         no_ome_xml_attr: bool = False,
+        omero: Optional[Dict] = None,
     ) -> None:
         """
         Write root zarr.json metadata, merging with existing if present.
@@ -492,6 +497,7 @@ class OMEStructure:
             source_format: Source format identifier (e.g., 'czi', 'nd2', 'tiff')
             no_ome_meta_export: If True, skip writing OME/METADATA.ome.xml file
             no_ome_xml_attr: If True, skip embedding OME/CZI XML in zarr.json
+            omero: Optional OMERO rendering metadata block
         """
         path = os.path.join(self.output_path, 'zarr.json')
 
@@ -525,6 +531,12 @@ class OMEStructure:
             new_ome['labels'] = list(existing_labels | new_labels)
         elif 'labels' in existing_ome and 'labels' not in new_ome:
             new_ome['labels'] = existing_ome['labels']
+
+        # Add OMERO metadata (preserve existing if not provided)
+        if omero:
+            new_ome['omero'] = omero
+        elif 'omero' in existing_ome and 'omero' not in new_ome:
+            new_ome['omero'] = existing_ome['omero']
 
         metadata['attributes']['ome'] = new_ome
 
@@ -893,7 +905,8 @@ class OMEStructureZarr2:
     def write_image_metadata(
         self,
         multiscales: Dict,
-        name: str = 'image'
+        name: str = 'image',
+        omero: Optional[Dict] = None,
     ) -> None:
         """Write image metadata to image group .zattrs."""
         path = self.get_image_data_path()
@@ -903,6 +916,8 @@ class OMEStructureZarr2:
             datasets=multiscales.get('datasets', []),
             name=name
         )
+        if omero:
+            metadata['omero'] = omero
         self._write_zattrs(path, metadata)
 
     def write_labels_container_metadata(
@@ -963,6 +978,7 @@ class OMEStructureZarr2:
         source_format: Optional[str] = None,
         no_ome_meta_export: bool = False,
         no_ome_xml_attr: bool = False,
+        omero: Optional[Dict] = None,
     ) -> None:
         """Write root .zattrs metadata, merging with existing if present."""
         self._write_zgroup(self.output_path)
@@ -996,6 +1012,12 @@ class OMEStructureZarr2:
             metadata['labels'] = list(existing_labels | new_labels)
         elif 'labels' in existing_metadata and 'labels' not in metadata:
             metadata['labels'] = existing_metadata['labels']
+
+        # Add OMERO metadata (preserve existing if not provided)
+        if omero:
+            metadata['omero'] = omero
+        elif 'omero' in existing_metadata and 'omero' not in metadata:
+            metadata['omero'] = existing_metadata['omero']
 
         # Preserve existing non-ome attributes (e.g., source provenance)
         for key, value in existing_metadata.items():
