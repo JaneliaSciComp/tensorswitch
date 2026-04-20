@@ -225,7 +225,7 @@ pixi run python -m tensorswitch_v2 -i input.tif -o output.zarr \
 | `-V, --version` | Show version | - |
 | `--quiet` | Suppress progress output | False |
 | `--show_spec` | Preview conversion specs without running | False |
-| `--omero` | Include structured omero channel metadata | False |
+| `--no-omero` | Disable omero channel metadata generation | False |
 
 ### Presets
 
@@ -1111,7 +1111,7 @@ TensorSwitch v2 includes an MCP (Model Context Protocol) server that allows Clau
 |------|-------------|
 | `inspect_dataset` | Returns shape, dtype, voxel sizes, axes, pyramid levels, OME metadata. Supports remote S3/HTTP URLs with auto-discovery: groups with OME-NGFF multiscales auto-resolve; S3 containers use bounded directory listing (BFS, max 4 levels) to find arrays automatically; non-S3 URLs require full array path. |
 | `discover_datasets` | Scans a directory for image/segmentation layers. Supports `pattern` (e.g., `"*.tif"`) and `recursive` for finding proprietary files (TIFF, ND2, CZI, IMS, HDF5) in subdirectories. |
-| `convert` | Converts between formats with full CLI parity. Supports `auto_multiscale` (one-step convert + pyramid), `omero` channel metadata, `no_translation`, `force_order` (C/F memory layout), remote S3/HTTP with `--bbox`. 2 GB size guard — larger datasets redirect to `submit_job`. |
+| `convert` | Converts between formats with full CLI parity. Supports `auto_multiscale` (one-step convert + pyramid), `omero` channel metadata (default ON, opt out with `omero=False`), `no_translation`, `force_order` (C/F memory layout), remote S3/HTTP with `--bbox`. 2 GB size guard — larger datasets redirect to `submit_job`. |
 | `generate_pyramid` | Creates multiscale pyramid locally with chained downsampling, anisotropic handling, optional `no_translation`, and custom `per_level_factors` |
 | `list_formats` | Lists all supported input/output formats by tier |
 | `estimate_resources` | Estimates memory, wall time, and cores needed for a conversion |
