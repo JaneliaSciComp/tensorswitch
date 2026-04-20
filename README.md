@@ -1,6 +1,6 @@
 # TensorSwitch v2
 
-**Version**: 2.0.1
+**Version**: 2.0.2
 **Status**: Production Ready
 **Branch**: `main`
 
@@ -155,14 +155,14 @@ tensorswitch-v2 --version
 
 # Using pixi
 pixi run tensorswitch-v2 --version
-# Output: tensorswitch_v2 2.0.1
+# Output: tensorswitch_v2 2.0.2
 ```
 
 ### Python API
 
 ```python
 from tensorswitch_v2 import __version__, TensorSwitchDataset, Readers, Writers
-print(__version__)  # 2.0.1
+print(__version__)  # 2.0.2
 ```
 
 ### What's Included
@@ -1224,7 +1224,7 @@ If you use TensorSwitch in your research, please cite it:
 @software{chen2026tensorswitch,
   author = {Chen, Diyi},
   title = {TensorSwitch},
-  version = {2.0.1},
+  version = {2.0.2},
   year = {2026},
   url = {https://github.com/JaneliaSciComp/tensorswitch}
 }
