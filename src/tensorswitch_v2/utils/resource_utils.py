@@ -362,3 +362,135 @@ def calculate_job_resources(
     memory_gb = max(memory_gb, cores * 15)
 
     return memory_gb, wall_time, cores
+
+
+def calculate_upsample_resources(
+    source_shape: List[int],
+    dtype: str,
+    source_chunks: List[int],
+    zoom_factors: List[float],
+    output_format: str = "zarr2",
+    no_sharding: bool = False,
+    shard_shape: Optional[List[int]] = None,
+) -> Tuple[int, str, int]:
+    """Calculate memory, wall time, and cores for an upsample job.
+
+    Upsampling processes data in XY-column chunks: for each (x, y) chunk,
+    reads the full extent of the zoom axis (typically Z), runs scipy.ndimage.zoom,
+    and writes the upsampled result via TensorStore.
+
+    Three output format cases:
+      - zarr2: sequential chunk writes, 1 core sufficient
+      - zarr3 non-sharded: same as zarr2
+      - zarr3 sharded: TensorStore buffers full shards in memory before flushing,
+        needs shard buffer memory + extra cores for I/O concurrency
+
+    Args:
+        source_shape: Source array shape (e.g., [3000, 3000, 1350, 1])
+        dtype: Data type string (e.g., 'uint8', 'uint16')
+        source_chunks: Source chunk shape (e.g., [256, 256, 256, 1])
+        zoom_factors: Per-axis zoom factors (e.g., [1.0, 1.0, 2.222, 1.0])
+        output_format: 'zarr2', 'zarr3'
+        no_sharding: If True, zarr3 uses non-sharded mode
+        shard_shape: Custom shard shape for zarr3 sharded (default: 1024 spatial)
+
+    Returns:
+        tuple: (memory_gb, wall_time_str, cores)
+    """
+    dtype_bytes = np.dtype(dtype).itemsize
+    use_sharding = (output_format == "zarr3" and not no_sharding)
+
+    # Identify zoom and non-zoom axes
+    non_zoom_axes = [i for i, f in enumerate(zoom_factors) if abs(f - 1.0) < 1e-6]
+    zoom_axes = [i for i, f in enumerate(zoom_factors) if abs(f - 1.0) >= 1e-6]
+
+    # Count XY-column chunks (iterate over non-zoom spatial axes)
+    n_xy_chunks = 1
+    for ax in non_zoom_axes:
+        if ax < len(source_shape) and ax < len(source_chunks):
+            n_xy_chunks *= math.ceil(source_shape[ax] / source_chunks[ax])
+
+    # --- Memory ---
+    # Per-chunk memory: read_slab + scipy_intermediate + write_slab
+    read_elements = 1
+    for ax in non_zoom_axes:
+        read_elements *= min(source_chunks[ax], source_shape[ax]) if ax < len(source_chunks) else 1
+    for ax in zoom_axes:
+        read_elements *= source_shape[ax]
+
+    max_zoom = max(zoom_factors) if zoom_factors else 1.0
+    write_elements = read_elements * max_zoom
+
+    read_gb = (read_elements * dtype_bytes) / (1024 ** 3)
+    write_gb = (write_elements * dtype_bytes) / (1024 ** 3)
+    scipy_gb = (read_elements * 8) / (1024 ** 3)  # float64 intermediate
+
+    per_chunk_gb = read_gb + write_gb + scipy_gb
+    task_overhead = 2  # GB for Python, TensorStore, scipy
+
+    total_mem = per_chunk_gb + task_overhead
+
+    # Zarr3 sharded: TensorStore buffers shard data in memory.
+    # Each shard = product(shard_dims) × dtype_bytes. Multiple shards may be
+    # in flight if a write straddles shard boundaries.
+    shard_buffer_gb = 0.0
+    if use_sharding:
+        default_shard_spatial = 1024
+        if shard_shape:
+            shard_elements = 1
+            for s in shard_shape:
+                shard_elements *= s
+        else:
+            # Default: 1024 for spatial, 1 for non-spatial
+            shard_elements = 1
+            for i, s in enumerate(source_shape):
+                shard_elements *= min(default_shard_spatial, s)
+        # 2 shard buffers (current + neighbor if write straddles boundary)
+        shard_buffer_gb = 2 * (shard_elements * dtype_bytes) / (1024 ** 3)
+        total_mem += shard_buffer_gb
+
+    recommended_mem = int(math.ceil(total_mem * 1.5 / 5) * 5)
+
+    # --- Cores ---
+    # scipy.ndimage.zoom is single-threaded (GIL-bound).
+    # zarr2/zarr3 non-sharded: 1 core sufficient
+    # zarr3 sharded: TensorStore uses I/O concurrency for shard writes.
+    #   2 cores allows overlapping zoom compute + shard I/O flush.
+    if use_sharding:
+        cores = 2
+    else:
+        cores = 1
+
+    # Enforce cluster policy: 15 GB per core minimum
+    memory_gb = max(recommended_mem, cores * 15)
+
+    # --- Wall time ---
+    # Empirical: ~25 sec per XY-column chunk on Janelia NFS for NISB-sized columns
+    #   (256×256×1350 uint8 read → scipy zoom → 256×256×3000 write)
+    reference_mb = 84.0
+    reference_sec = 25.0
+    actual_read_mb = (read_elements * dtype_bytes) / (1024 ** 2)
+
+    sec_per_chunk = reference_sec * (actual_read_mb / reference_mb)
+    sec_per_chunk = max(2.0, sec_per_chunk)  # 2 sec floor for small datasets
+
+    # Zarr3 sharded writes may be slightly faster due to fewer filesystem ops
+    # (one shard file vs many chunk files), but scipy remains the bottleneck.
+    # Conservative: no wall time reduction for sharding.
+    upsample_minutes = (n_xy_chunks * sec_per_chunk) / 60
+
+    # Pyramid overhead (~50% of upsample time, always budgeted)
+    pyramid_overhead_minutes = upsample_minutes * 0.5
+    overhead_minutes = 2  # setup
+
+    total_minutes = upsample_minutes + pyramid_overhead_minutes + overhead_minutes
+
+    # 1.5x safety margin, round to nearest 15 min
+    safe_minutes = int(math.ceil(total_minutes * 1.5 / 15) * 15)
+    safe_minutes = max(15, min(safe_minutes, 12 * 60))  # 15 min floor, 12 hour cap
+
+    hours = safe_minutes // 60
+    minutes = safe_minutes % 60
+    wall_time = f"{hours}:{minutes:02d}"
+
+    return memory_gb, wall_time, cores

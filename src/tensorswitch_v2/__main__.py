@@ -507,6 +507,24 @@ Supported output formats:
              "By default, translation offsets are included for Neuroglancer compatibility.",
     )
 
+    # Upsampling mode
+    parser.add_argument(
+        "--upsample", action="store_true",
+        help="Upsample mode: resample anisotropic data to isotropic resolution. "
+             "Uses scipy.ndimage.zoom (trilinear for images, nearest for labels).",
+    )
+    parser.add_argument(
+        "--target_voxel_size", type=float, default=None,
+        help="Target isotropic voxel size in nm for --upsample mode. "
+             "Default: auto (use smallest source voxel size = highest resolution axis).",
+    )
+    parser.add_argument(
+        "--upsample_method", type=str, default="auto",
+        choices=["auto", "trilinear", "nearest", "cubic"],
+        help="Upsampling interpolation method: auto (default, trilinear for images, "
+             "nearest for labels), trilinear, nearest, cubic.",
+    )
+
     # Subvolume extraction
     parser.add_argument(
         "--bbox", type=str, default=None,
@@ -1403,6 +1421,173 @@ def _submit_dependent_pyramid(args, conversion_job_id: str):
         print(f"  python -m tensorswitch_v2 -i {args.output} --auto_multiscale --submit -P {args.project}")
 
 
+def _submit_upsample_job(args, verbose=True):
+    """Submit an LSF bsub job for upsampling anisotropic → isotropic.
+
+    Re-invokes tensorswitch_v2 --upsample (without --submit) on a cluster node.
+    Uses calculate_upsample_resources() for proper resource estimation.
+    """
+    if not args.project:
+        raise ValueError(
+            "Missing required argument: --project/-P\n"
+            "When using --submit, you must specify an LSF project for billing."
+        )
+
+    import json as _json
+    import tensorstore as _ts
+    from .utils.resource_utils import calculate_upsample_resources
+    from .utils.tensorstore_utils import get_zarr_store_spec as _get_spec
+    from .core.upsampler import Upsampler
+
+    # Use Upsampler to compute zoom factors (single source of truth, no duplication)
+    from .core.upsampler import upsample_to_isotropic as _upsample_fn
+    temp_up = Upsampler(
+        input_path=args.input.rstrip('/'),
+        output_path="/tmp/_placeholder_",
+        target_voxel_sizes=[],  # will read from metadata
+    )
+    src_voxels, axes_info = temp_up._get_source_voxel_sizes_and_axes()
+
+    # Determine target voxel size (same logic as upsample_to_isotropic)
+    spatial_voxels = []
+    if axes_info:
+        for i, ax in enumerate(axes_info):
+            if ax.get("type") == "space" and i < len(src_voxels):
+                spatial_voxels.append(src_voxels[i])
+    else:
+        spatial_voxels = list(src_voxels[:3])
+    target_voxel = args.target_voxel_size if args.target_voxel_size else min(spatial_voxels)
+
+    # Build full target voxel list and compute zoom factors via Upsampler
+    full_target = []
+    spatial_idx = 0
+    for i in range(len(src_voxels)):
+        if axes_info and i < len(axes_info) and axes_info[i].get("type") == "space":
+            full_target.append(target_voxel)
+            spatial_idx += 1
+        else:
+            full_target.append(src_voxels[i])
+    temp_up.target_voxel_sizes = full_target
+    zoom_factors = temp_up.compute_zoom_factors()
+
+    # Read source shape/chunks via TensorStore
+    _src_spec = _get_spec(args.input.rstrip('/'))
+    src = _ts.open(_src_spec, open=True).result()
+    src_shape = list(src.shape)
+    src_chunks = list(src.chunk_layout.read_chunk.shape)
+    dtype_str = src.dtype.numpy_dtype.name
+
+    # Auto-calculate resources using the proper system
+    shard_shape_list = [int(x) for x in args.shard_shape.split(',')] if args.shard_shape else None
+    auto_mem, auto_wall, auto_cores = calculate_upsample_resources(
+        source_shape=src_shape,
+        dtype=dtype_str,
+        source_chunks=src_chunks,
+        zoom_factors=zoom_factors,
+        output_format=args.output_format,
+        no_sharding=args.no_sharding,
+        shard_shape=shard_shape_list,
+    )
+
+    # Allow user overrides
+    memory_gb = args.memory or auto_mem
+    wall_time = args.wall_time or auto_wall
+    cores = args.cores or auto_cores
+
+    # Enforce cluster policy: 15 GB per core minimum
+    memory_gb = max(memory_gb, cores * 15)
+
+    # Job name
+    input_name = os.path.basename(os.path.dirname(os.path.dirname(args.input)))
+    job_name = f"tsv2_upsample_{input_name}"
+    job_name = job_name.replace(" ", "_")[:128]
+
+    # Log directory
+    output_parent = os.path.dirname(os.path.abspath(args.output))
+    log_dir = getattr(args, 'log_dir', None) or os.path.join(output_parent, "output")
+    os.makedirs(log_dir, exist_ok=True)
+
+    log_path = os.path.join(log_dir, f"output__{job_name}_%J.log")
+    error_path = os.path.join(log_dir, f"error__{job_name}_%J.log")
+
+    # Build re-invocation command (same args, without --submit and LSF flags)
+    reinvoke = [
+        sys.executable, "-m", "tensorswitch_v2",
+        "--upsample",
+        "--input", args.input,
+        "--output", args.output,
+    ]
+    if args.target_voxel_size is not None:
+        reinvoke += ["--target_voxel_size", str(args.target_voxel_size)]
+    if args.upsample_method != "auto":
+        reinvoke += ["--upsample_method", args.upsample_method]
+    if getattr(args, 'is_label', False):
+        reinvoke.append("--is-label")
+    if args.auto_multiscale:
+        reinvoke.append("--auto_multiscale")
+    if args.downsample_method != "auto":
+        reinvoke += ["--downsample_method", args.downsample_method]
+    if args.per_level_factors:
+        reinvoke += ["--per_level_factors", args.per_level_factors]
+    if args.no_translation:
+        reinvoke.append("--no-translation")
+    # Output format params
+    if args.output_format != "zarr3":
+        reinvoke += ["--output_format", args.output_format]
+    if args.no_sharding:
+        reinvoke.append("--no_sharding")
+    if args.shard_shape:
+        reinvoke += ["--shard_shape", args.shard_shape]
+    if args.compression != "zstd":
+        reinvoke += ["--compression", args.compression]
+    if args.compression_level != 5:
+        reinvoke += ["--compression_level", str(args.compression_level)]
+
+    reinvoke_str = shlex.join(reinvoke)
+
+    command = [
+        "bsub",
+        "-J", job_name,
+        "-n", str(cores),
+        "-W", wall_time,
+        "-M", f"{memory_gb}GB",
+        "-R", f"rusage[mem={memory_gb * 1024}]",
+        "-P", args.project,
+        "-g", args.job_group,
+        "-o", log_path,
+        "-e", error_path,
+        "/bin/bash", "-c", reinvoke_str,
+    ]
+
+    print("=" * 72)
+    print("LSF Upsample Job Submission")
+    print("=" * 72)
+    print(f"  Job name:    {job_name}")
+    print(f"  Source:      {args.input}")
+    print(f"  Output:      {args.output}")
+    print(f"  Source shape: {src_shape}")
+    print(f"  Zoom factors: {[round(f, 4) for f in zoom_factors]}")
+    print(f"  Format:      {args.output_format}")
+    print(f"  Cores:       {cores}")
+    print(f"  Memory:      {memory_gb} GB")
+    print(f"  Wall time:   {wall_time}")
+    print(f"  Project:     {args.project}")
+    print(f"  Log:         {log_path}")
+    print(f"  Command:     {reinvoke_str}")
+    print("=" * 72)
+
+    result = subprocess.run(command, capture_output=True, text=True)
+
+    if result.returncode == 0:
+        print("Job submitted successfully.")
+        print(result.stdout.strip())
+    else:
+        print(f"Job submission failed (exit code {result.returncode}).")
+        if result.stderr:
+            print(result.stderr.strip())
+        raise RuntimeError(f"bsub failed: {result.stderr.strip()}")
+
+
 def submit_downsample_job(args, cumulative_factors):
     """Submit a single LSF bsub job for downsampling.
 
@@ -2061,6 +2246,98 @@ def main(argv=None):
                 include_translation=not args.no_translation,
                 verbose=verbose,
             )
+        return
+
+    # Handle upsample mode (anisotropic → isotropic)
+    if args.upsample:
+        from .core.upsampler import upsample_to_isotropic as _upsample_fn
+
+        if not args.output:
+            raise ValueError("--output/-o is required with --upsample")
+
+        if args.submit:
+            # Submit upsample job to LSF cluster
+            _submit_upsample_job(args, verbose=verbose)
+            return
+
+        # Determine s0 output path: if output looks like a container root,
+        # mirror the input's subgroup structure (e.g., img/s0)
+        input_path = args.input.rstrip('/')
+        output_base = args.output.rstrip('/')
+
+        # Auto-detect subgroup from input (e.g., img/s0 → group=img, level=s0)
+        input_basename = os.path.basename(input_path)
+        input_group = os.path.basename(os.path.dirname(input_path))
+
+        # If output already ends with the level name, use as-is
+        # Otherwise, mirror the input structure
+        import re
+        level_pattern = re.compile(r'^(s?\d+)$')
+        if level_pattern.match(os.path.basename(output_base)):
+            s0_output = output_base
+        elif input_group and level_pattern.match(input_basename):
+            s0_output = os.path.join(output_base, input_group, input_basename)
+        else:
+            s0_output = os.path.join(output_base, "s0")
+
+        # Safe write: write to .tmp, rename on completion
+        final_output = args.output.rstrip('/')
+        tmp_output = _tmp_path_for(final_output)
+        if os.path.exists(tmp_output):
+            shutil.rmtree(tmp_output)
+            if verbose:
+                print(f"Removed leftover temporary path: {tmp_output}")
+
+        # Remap s0_output into tmp space
+        if s0_output.startswith(final_output):
+            tmp_s0 = tmp_output + s0_output[len(final_output):]
+        else:
+            tmp_s0 = s0_output  # Shouldn't happen, but be safe
+
+        if verbose:
+            print(f"Writing to temporary path: {tmp_output}")
+
+        stats = _upsample_fn(
+            input_path=input_path,
+            output_path=tmp_s0,
+            target_voxel_size=args.target_voxel_size,
+            upsample_method=args.upsample_method,
+            is_label=getattr(args, 'is_label', False),
+            verbose=verbose,
+            output_format=args.output_format,
+            no_sharding=args.no_sharding,
+            shard_shape=[int(x) for x in args.shard_shape.split(',')] if args.shard_shape else None,
+            compression=args.compression,
+            compression_level=args.compression_level,
+        )
+
+        # Auto-pyramid after upsampling if requested
+        if args.auto_multiscale:
+            root_path = os.path.dirname(tmp_s0)
+            resolved_method = resolve_downsample_method(args.downsample_method, tmp_s0)
+
+            custom_per_level_factors = None
+            if args.per_level_factors:
+                custom_per_level_factors = parse_per_level_factors(args.per_level_factors)
+
+            run_local_pyramid(
+                s0_path=tmp_s0,
+                root_path=root_path,
+                downsample_method=resolved_method,
+                custom_per_level_factors=custom_per_level_factors,
+                include_translation=not args.no_translation,
+                verbose=verbose,
+            )
+
+        # Safe write: rename .tmp → final
+        _finalize_tmp_path(tmp_output, final_output, verbose=verbose)
+
+        if verbose:
+            print(f"\nUpsampling complete.")
+            print(f"  Output: {final_output}")
+            print(f"  Shape:  {stats['input_shape']} → {stats['output_shape']}")
+            print(f"  Method: {stats['upsample_method']}")
+            print(f"  Time:   {stats['elapsed_time']:.1f}s")
         return
 
     # Handle downsample mode (single level from s0)

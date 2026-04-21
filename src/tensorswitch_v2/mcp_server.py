@@ -17,7 +17,10 @@ import sys
 import traceback
 from pathlib import Path
 
+import tensorstore as ts
+
 from tensorswitch_v2.readers.base import is_remote_path
+from tensorswitch_v2.utils.tensorstore_utils import get_zarr_store_spec
 
 from mcp.server.fastmcp import FastMCP
 
@@ -1359,7 +1362,178 @@ def _submit_pyramid_job(
 
 
 # ---------------------------------------------------------------------------
-# Tool 8: check_job_status
+# Tool 8: upsample_to_isotropic
+# ---------------------------------------------------------------------------
+@mcp.tool()
+def upsample_to_isotropic(
+    input_path: str,
+    output_path: str,
+    target_voxel_size: float = 0,
+    upsample_method: str = "auto",
+    is_label: bool = False,
+    output_format: str = "auto",
+    no_sharding: bool = False,
+    compression: str = "zstd",
+    compression_level: int = 5,
+    auto_pyramid: bool = True,
+    downsample_method: str = "auto",
+    per_level_factors: str = "",
+    no_translation: bool = False,
+) -> str:
+    """Upsample anisotropic data to isotropic resolution.
+
+    Resamples data along anisotropic axes (e.g., Z in ssTEM/FIB-SEM) to
+    match the highest-resolution axis, producing isotropic voxels. Uses
+    scipy.ndimage.zoom for interpolation, TensorStore for output writes.
+
+    For datasets larger than 2 GB, use the CLI instead.
+
+    Args:
+        input_path: Path to source s0 array (e.g., /data/volume.zarr/img/s0).
+        output_path: Path for output (e.g., /data/output.zarr/img/s0).
+        target_voxel_size: Target isotropic voxel size in nm. 0 = auto
+            (use smallest source voxel size, i.e. highest resolution axis).
+        upsample_method: Interpolation method — "auto" (trilinear for images,
+            nearest for labels), "trilinear", "nearest", or "cubic".
+        is_label: Set True for segmentation/label data (forces nearest-neighbor).
+        output_format: Output format — "auto" (match source), "zarr2", "zarr3".
+        no_sharding: Disable sharding for zarr3 output. Default: False.
+        compression: Compression codec — "zstd" (default), "gzip", or "none".
+        compression_level: Compression level (1-22 for zstd, 1-9 for gzip).
+        auto_pyramid: Generate isotropic multiscale pyramid after upsampling.
+        downsample_method: Downsampling method for pyramid — "auto", "mean",
+            "mode", etc. Used with auto_pyramid.
+        per_level_factors: Custom per-level factors, semicolon-separated
+            (e.g., "1,2,2;1,2,2"). Used with auto_pyramid.
+        no_translation: Disable translation transforms in OME-NGFF metadata.
+    """
+    try:
+        import contextlib
+        import io
+
+        import numpy as np
+        from tensorswitch_v2.core.upsampler import (
+            upsample_to_isotropic as _upsample,
+        )
+
+        input_path = input_path.strip()
+        output_path = output_path.strip()
+
+        # Size guard
+        src = ts.open(get_zarr_store_spec(input_path), open=True).result()
+        shape = tuple(src.shape)
+        dtype_str = src.dtype.numpy_dtype.name
+        dataset_size_gb = (np.prod(shape) * np.dtype(dtype_str).itemsize) / (1024**3)
+
+        if dataset_size_gb > MCP_CONVERT_MAX_GB:
+            return json.dumps({
+                "error": "dataset_too_large",
+                "dataset_size_gb": round(dataset_size_gb, 2),
+                "threshold_gb": MCP_CONVERT_MAX_GB,
+                "shape": list(shape),
+                "dtype": dtype_str,
+                "recommendation": (
+                    f"Dataset is {dataset_size_gb:.1f} GB, exceeding the "
+                    f"{MCP_CONVERT_MAX_GB} GB MCP threshold. Use the CLI: "
+                    f"python -m tensorswitch_v2 --upsample "
+                    f"-i '{input_path}' -o '{output_path}'"
+                ),
+            }, indent=2)
+
+        # Safe write: write to .tmp, rename on completion
+        final_output = output_path
+        # Determine the container root (parent of the group containing s0)
+        # e.g., /data/out.zarr/img/s0 → container is /data/out.zarr
+        # We apply .tmp at the container level
+        s0_name = os.path.basename(output_path)
+        group_path = os.path.dirname(output_path)
+        container_path = os.path.dirname(group_path) if group_path else output_path
+
+        tmp_container = container_path.rstrip('/\\') + '.tmp'
+        tmp_group = os.path.join(tmp_container, os.path.basename(group_path)) if group_path != output_path else tmp_container
+        tmp_s0 = os.path.join(tmp_group, s0_name) if group_path != output_path else tmp_container
+
+        if os.path.exists(tmp_container):
+            shutil.rmtree(tmp_container)
+
+        target = target_voxel_size if target_voxel_size > 0 else None
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            stats = _upsample(
+                input_path=input_path,
+                output_path=tmp_s0,
+                target_voxel_size=target,
+                upsample_method=upsample_method,
+                is_label=is_label,
+                verbose=False,
+                output_format=output_format,
+                no_sharding=no_sharding,
+                compression=compression,
+                compression_level=compression_level,
+            )
+
+        response = {
+            "status": "success",
+            "input": input_path,
+            "output": final_output,
+            "input_shape": stats["input_shape"],
+            "output_shape": stats["output_shape"],
+            "zoom_factors": [round(f, 4) for f in stats["zoom_factors"]],
+            "upsample_method": stats["upsample_method"],
+            "time_seconds": round(stats["elapsed_time"], 1),
+        }
+
+        # Auto-pyramid after upsampling
+        if auto_pyramid:
+            from tensorswitch_v2.__main__ import run_local_pyramid
+            from tensorswitch_v2.utils.pyramid_utils import resolve_downsample_method
+
+            root_path = os.path.dirname(tmp_s0)
+            resolved_method = resolve_downsample_method(downsample_method, tmp_s0)
+
+            custom_factors = None
+            if per_level_factors:
+                custom_factors = [
+                    [int(x) for x in level.split(",")]
+                    for level in per_level_factors.split(";")
+                ]
+
+            with contextlib.redirect_stdout(io.StringIO()):
+                plan = run_local_pyramid(
+                    tmp_s0, root_path,
+                    downsample_method=resolved_method,
+                    custom_per_level_factors=custom_factors,
+                    include_translation=not no_translation,
+                    verbose=False,
+                )
+            response["auto_pyramid"] = True
+            response["pyramid_s0"] = tmp_s0
+            if plan and isinstance(plan, dict):
+                response["pyramid_levels"] = plan.get("num_levels", 0)
+                response["pyramid_info"] = [
+                    {
+                        "level": f"s{lv['level']}",
+                        "factors": lv["cumulative_factor"],
+                        "shape": lv["predicted_shape"],
+                    }
+                    for lv in plan.get("levels", [])
+                ]
+
+        # Safe write: rename .tmp → final path
+        if os.path.exists(tmp_container):
+            if os.path.exists(container_path):
+                shutil.rmtree(container_path)
+            os.rename(tmp_container, container_path)
+        response["output"] = final_output
+
+        return json.dumps(response, indent=2)
+    except Exception as e:
+        logger.error(f"upsample_to_isotropic failed: {e}\n{traceback.format_exc()}")
+        return f"Error upsampling {input_path}: {e}"
+
+
+# ---------------------------------------------------------------------------
+# Tool 9: check_job_status
 # ---------------------------------------------------------------------------
 @mcp.tool()
 def check_job_status(job_id: str) -> str:

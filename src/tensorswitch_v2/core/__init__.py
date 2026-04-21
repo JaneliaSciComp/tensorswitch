@@ -23,6 +23,7 @@ Public API:
 from .converter import DistributedConverter
 from .downsampler import Downsampler, downsample_level, calculate_cumulative_factors
 from .pyramid import PyramidPlanner, create_pyramid_parallel
+from .upsampler import Upsampler, upsample_to_isotropic
 from .batch import BatchConverter, detect_input_mode, discover_files
 
 __all__ = [
@@ -32,6 +33,8 @@ __all__ = [
     'calculate_cumulative_factors',
     'PyramidPlanner',
     'create_pyramid_parallel',
+    'Upsampler',
+    'upsample_to_isotropic',
     'BatchConverter',
     'detect_input_mode',
     'discover_files',

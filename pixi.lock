@@ -6134,7 +6134,7 @@ packages:
 - pypi: ./
   name: tensorswitch
   version: 2.0.2
-  sha256: d5be740ce29890c319c35e7b21376bd5a7fafcc533d3e072a554863d059768b1
+  sha256: 8e90e7509f15f1bf57b458836605e08e4759c52ed5eed06be77628d29f2a6dee
   requires_dist:
   - tensorstore>=0.1.79,<0.2
   - psutil
@@ -6152,6 +6152,7 @@ packages:
   - bioio-czi>=2.1.0,<3
   - bioio-nd2>=0.3.0
   - bioio-tifffile>=1.1.0
+  - scipy>=1.8
   - bioio-bioformats>=1.0.0 ; extra == 'bioformats'
   - bioformats-jar ; extra == 'bioformats'
   - scyjava>=1.12.0,<2 ; extra == 'bioformats'
