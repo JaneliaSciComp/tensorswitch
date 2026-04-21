@@ -29,6 +29,7 @@ import subprocess
 import shlex
 import math
 import argparse
+import shutil
 from typing import Optional, Tuple
 
 import numpy as np
@@ -746,6 +747,32 @@ def validate_output_path(path: str) -> None:
             f"Output directory is not writable: {parent}\n"
             f"Check permissions with: ls -la {parent}"
         )
+
+
+def _tmp_path_for(output_path: str) -> str:
+    """Return the temporary path used during conversion.
+
+    Appends '.tmp' to the output path so partial writes are never
+    confused with completed conversions.  Example:
+        /nrs/scicompsoft/rokicki/output.zarr  →
+        /nrs/scicompsoft/rokicki/output.zarr.tmp
+    """
+    return output_path.rstrip('/\\') + '.tmp'
+
+
+def _finalize_tmp_path(tmp_path: str, final_path: str, verbose: bool = True) -> None:
+    """Rename a completed .tmp output to its final path.
+
+    If the final path already exists (e.g. leftover from a prior run),
+    it is removed first.
+    """
+    if not os.path.exists(tmp_path):
+        return
+    if os.path.exists(final_path):
+        shutil.rmtree(final_path)
+    os.rename(tmp_path, final_path)
+    if verbose:
+        print(f"Renamed {tmp_path} → {final_path}")
 
 
 def parse_shape(s: str, param_name: str = "shape") -> Tuple[int, ...]:
@@ -2088,6 +2115,18 @@ def main(argv=None):
 
         return
 
+    # --- Safe write: write to .tmp, rename on completion ---
+    final_output = args.output
+    tmp_output = _tmp_path_for(final_output)
+    # Clean up leftover .tmp from a prior failed run
+    if os.path.exists(tmp_output):
+        shutil.rmtree(tmp_output)
+        if verbose:
+            print(f"Removed leftover temporary path: {tmp_output}")
+    args.output = tmp_output
+    if verbose:
+        print(f"Writing to temporary path: {tmp_output}")
+
     reader = create_reader(args)
 
     # Warn about TIFF CYX/IYX-style axes mislabeling before conversion begins
@@ -2267,6 +2306,9 @@ def main(argv=None):
             include_translation=not args.no_translation,
             verbose=verbose,
         )
+
+    # --- Safe write: rename .tmp → final path ---
+    _finalize_tmp_path(tmp_output, final_output, verbose=verbose)
 
 
 if __name__ == "__main__":

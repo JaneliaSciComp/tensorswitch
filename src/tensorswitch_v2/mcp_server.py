@@ -12,6 +12,7 @@ Usage:
 import json
 import logging
 import os
+import shutil
 import sys
 import traceback
 from pathlib import Path
@@ -503,6 +504,13 @@ def convert(
         else:
             resolved_data_type = data_type
 
+        # Safe write: write to .tmp, rename on completion
+        final_output = output_path
+        tmp_output = output_path.rstrip('/\\') + '.tmp'
+        if os.path.exists(tmp_output):
+            shutil.rmtree(tmp_output)
+        output_path = tmp_output
+
         # Create writer
         if output_format == "zarr3":
             writer = Writers.zarr3(
@@ -630,6 +638,13 @@ def convert(
                     }
                     for lv in plan.get("levels", [])
                 ]
+
+        # Safe write: rename .tmp → final path
+        if os.path.exists(tmp_output):
+            if os.path.exists(final_output):
+                shutil.rmtree(final_output)
+            os.rename(tmp_output, final_output)
+        response["output"] = final_output
 
         return json.dumps(response, indent=2)
     except Exception as e:

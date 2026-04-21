@@ -53,6 +53,7 @@ A high-performance microscopy data conversion tool with TensorStore as the unifi
 - **Remote Sources**: Read from GCS, S3, HTTP URLs with optional bounding box subvolume extraction
 - **Software Attribution**: All output metadata includes `_software` field with TensorSwitch version and GitHub link
 - **OME XML Export**: Writes `OME/METADATA.ome.xml` (or `.czi.xml`) as standalone file for easy access and tool compatibility
+- **Safe Write**: Writes to `.tmp` during conversion and renames on completion — interrupted jobs never leave corrupted output
 - **MCP Server**: AI/agent integration via Model Context Protocol (Claude Code, LLM agents)
 
 ---
