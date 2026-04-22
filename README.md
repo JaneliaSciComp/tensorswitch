@@ -53,6 +53,7 @@ A high-performance microscopy data conversion tool with TensorStore as the unifi
 - **Remote Sources**: Read from GCS, S3, HTTP URLs with optional bounding box subvolume extraction
 - **Software Attribution**: All output metadata includes `_software` field with TensorSwitch version and GitHub link
 - **OME XML Export**: Writes `OME/METADATA.ome.xml` (or `.czi.xml`) as standalone file for easy access and tool compatibility
+- **Isotropic Upsampling**: Upsample anisotropic data to isotropic resolution via `scipy.ndimage.zoom` (trilinear for images, nearest-neighbor for labels), with automatic pyramid generation
 - **Safe Write**: Writes to `.tmp` during conversion and renames on completion — interrupted jobs never leave corrupted output
 - **MCP Server**: AI/agent integration via Model Context Protocol (Claude Code, LLM agents)
 
@@ -248,6 +249,33 @@ pixi run python -m tensorswitch_v2 -i input.tif -o output.zarr --preset webknoss
 | `--no_sharding` | Disable sharding (Zarr3 only) | False |
 | `--compression` | Compression codec | `zstd` |
 | `--compression_level` | Compression level (1-22) | `5` |
+
+### Upsampling (Anisotropic → Isotropic)
+
+| Argument | Description | Default |
+|----------|-------------|---------|
+| `--upsample` | Upsample mode: resample anisotropic data to isotropic resolution | False |
+| `--target_voxel_size` | Target isotropic voxel size in nm | Auto (smallest source voxel) |
+| `--upsample_method` | Interpolation method: `auto`, `trilinear`, `nearest`, `cubic` | `auto` |
+
+Combine with `--auto_multiscale` to generate an isotropic pyramid after upsampling. Combine with `--submit` for LSF cluster submission.
+
+```bash
+# Upsample anisotropic data (9x9x20 nm) to isotropic (9x9x9 nm) + pyramid
+pixi run python -m tensorswitch_v2 --upsample --auto_multiscale \
+  -i /data/anisotropic.zarr/img/s0 \
+  -o /data/isotropic.zarr \
+  --submit -P scicompsoft
+
+# Upsample labels with nearest-neighbor interpolation
+pixi run python -m tensorswitch_v2 --upsample --auto_multiscale \
+  -i /data/anisotropic.zarr/labels/seg/s0 \
+  -o /data/isotropic_labels.zarr \
+  --upsample_method nearest \
+  --submit -P scicompsoft
+```
+
+**How it works**: Processes in XY-column chunks (full Z per column), applies `scipy.ndimage.zoom(grid_mode=True)` for interpolation, writes via TensorStore. Supports zarr2 and zarr3 (with/without sharding) output formats.
 
 ### Downsampling
 
