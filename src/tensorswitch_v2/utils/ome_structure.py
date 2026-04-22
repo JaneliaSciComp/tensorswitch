@@ -886,6 +886,7 @@ class OMEStructureZarr2:
             metadata['multiscales'] = [{
                 'version': self.config.ome_version,
                 'name': image_name,
+                'type': 'image',
                 'axes': image_multiscales.get('axes', []),
                 'datasets': adjusted_datasets
             }]

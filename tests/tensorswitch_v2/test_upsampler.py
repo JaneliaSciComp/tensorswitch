@@ -283,21 +283,76 @@ class TestUpsampleToIsotropic:
         assert abs(stats["zoom_factors"][2] - 2.0) < 1e-4
 
     def test_writes_ome_metadata(self, aniso_zarr2, tmp_path):
-        """Should write correct OME-NGFF metadata with isotropic voxels."""
+        """Should write correct OME-NGFF 0.4 metadata at both group and root level."""
         out_s0 = str(tmp_path / "out.zarr" / "img" / "s0")
         upsample_to_isotropic(
             input_path=aniso_zarr2["s0_path"],
             output_path=out_s0,
             verbose=False,
         )
-        # Read output metadata
         out_group = os.path.dirname(out_s0)
+        out_root = os.path.dirname(out_group)
+
+        # Group-level metadata (img/.zattrs — OME-NGFF 0.4)
         with open(os.path.join(out_group, ".zattrs")) as f:
             meta = json.load(f)
-
         ms = meta["multiscales"][0]
+        assert ms["version"] == "0.4"
+        assert ms["type"] == "image"
+        assert ms["datasets"][0]["path"] == "s0"
         scale = ms["datasets"][0]["coordinateTransformations"][0]["scale"]
         assert scale == [9.0, 9.0, 9.0, 1.0]
+
+        # Root-level metadata (out.zarr/.zgroup + .zattrs)
+        assert os.path.exists(os.path.join(out_root, ".zgroup"))
+        with open(os.path.join(out_root, ".zattrs")) as f:
+            root_meta = json.load(f)
+        root_ms = root_meta["multiscales"][0]
+        assert root_ms["version"] == "0.4"
+        assert root_ms["type"] == "image"
+        assert root_ms["datasets"][0]["path"] == "img/s0"
+        root_scale = root_ms["datasets"][0]["coordinateTransformations"][0]["scale"]
+        assert root_scale == [9.0, 9.0, 9.0, 1.0]
+        assert "_software" in root_meta
+
+    def test_writes_root_metadata_zarr3(self, aniso_zarr2, tmp_path):
+        """Should write correct OME-NGFF 0.5 zarr.json metadata for zarr3 output."""
+        out_s0 = str(tmp_path / "out.zarr" / "img" / "s0")
+        upsample_to_isotropic(
+            input_path=aniso_zarr2["s0_path"],
+            output_path=out_s0,
+            output_format="zarr3",
+            no_sharding=True,
+            verbose=False,
+        )
+        out_group = str(tmp_path / "out.zarr" / "img")
+        out_root = str(tmp_path / "out.zarr")
+
+        # Group-level zarr.json (img/zarr.json — OME-NGFF 0.5)
+        group_zarr_json = os.path.join(out_group, "zarr.json")
+        assert os.path.exists(group_zarr_json)
+        with open(group_zarr_json) as f:
+            group_meta = json.load(f)
+        assert group_meta["zarr_format"] == 3
+        group_ome = group_meta["attributes"]["ome"]
+        assert group_ome["version"] == "0.5"
+        group_ms = group_ome["multiscales"][0]
+        assert group_ms["type"] == "image"
+        assert group_ms["datasets"][0]["path"] == "s0"
+
+        # Root-level zarr.json (out.zarr/zarr.json — OME-NGFF 0.5)
+        root_zarr_json = os.path.join(out_root, "zarr.json")
+        assert os.path.exists(root_zarr_json)
+        with open(root_zarr_json) as f:
+            root_meta = json.load(f)
+        assert root_meta["zarr_format"] == 3
+        assert root_meta["node_type"] == "group"
+        root_ome = root_meta["attributes"]["ome"]
+        assert root_ome["version"] == "0.5"
+        root_ms = root_ome["multiscales"][0]
+        assert root_ms["type"] == "image"
+        assert root_ms["datasets"][0]["path"] == "img/s0"
+        assert "_software" in root_meta["attributes"]
 
     def test_already_isotropic_raises(self, tmp_path):
         """Should raise ValueError if source is already isotropic."""

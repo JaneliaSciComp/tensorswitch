@@ -814,6 +814,7 @@ class Zarr2Writer(BaseWriter):
             "multiscales": [{
                 "version": "0.4",
                 "name": image_name,
+                "type": "image",
                 "axes": axes_metadata,
                 "datasets": [{
                     "path": self.level_path,

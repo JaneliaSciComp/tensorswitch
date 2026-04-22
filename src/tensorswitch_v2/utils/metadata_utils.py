@@ -994,6 +994,7 @@ def _update_parent_zarr2_zattrs(inner_path, parent_path, image_key):
             'axes': inner_ms.get('axes', []),
             'datasets': adjusted_datasets,
             'name': inner_ms.get('name', 'image'),
+            'type': inner_ms.get('type', 'image'),
         }]
 
     with open(parent_zattrs, 'w') as f:

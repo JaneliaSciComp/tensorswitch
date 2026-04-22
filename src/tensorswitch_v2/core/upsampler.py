@@ -630,8 +630,15 @@ def upsample_to_isotropic(
     )
     stats = up.upsample(verbose=verbose)
 
-    # Write OME-NGFF metadata at the group level
-    _write_ome_metadata(output_path, axes_info, full_target)
+    # Resolve output format for metadata (same logic as Upsampler.upsample)
+    if output_format == "auto":
+        is_zarr2_source = os.path.exists(os.path.join(input_path, ".zarray"))
+        resolved_fmt = "zarr2" if is_zarr2_source else "zarr3"
+    else:
+        resolved_fmt = output_format
+
+    # Write OME-NGFF metadata at both group and root level
+    _write_ome_metadata(output_path, axes_info, full_target, resolved_fmt)
 
     return stats
 
@@ -640,14 +647,29 @@ def _write_ome_metadata(
     s0_path: str,
     axes_info: Optional[List[Dict]],
     voxel_sizes: List[float],
+    output_format: str,
 ):
-    """Write OME-NGFF .zattrs for the parent group of s0.
+    """Write OME-NGFF metadata at both group and root level.
 
     Creates minimal multiscales metadata with just the s0 level.
     Pyramid generation later updates this with additional levels.
+
+    Zarr2 (OME-NGFF 0.4): .zgroup + .zattrs at group and root level.
+    Zarr3 (OME-NGFF 0.5): zarr.json at group and root level.
+
+    Args:
+        s0_path: Path to the s0 output array.
+        axes_info: OME-NGFF axes list from source metadata.
+        voxel_sizes: Full voxel size list (including non-spatial axes).
+        output_format: "zarr2" or "zarr3".
     """
+    from ..utils.metadata_utils import get_software_metadata
+
     group_path = os.path.dirname(s0_path)
     s0_name = os.path.basename(s0_path)
+    image_key = os.path.basename(group_path)
+    root_path = os.path.dirname(group_path)
+    software_meta = get_software_metadata()
 
     # Build axes list
     if axes_info:
@@ -659,38 +681,112 @@ def _write_ome_metadata(
             {"name": "z", "type": "space", "unit": "nanometer"},
         ]
 
-    metadata = {
-        "multiscales": [{
-            "version": "0.4",
-            "name": os.path.basename(group_path),
-            "axes": axes,
-            "datasets": [{
-                "path": s0_name,
-                "coordinateTransformations": [
-                    {"type": "scale", "scale": voxel_sizes}
-                ],
-            }],
-        }]
+    dataset_entry = {
+        "path": s0_name,
+        "coordinateTransformations": [
+            {"type": "scale", "scale": voxel_sizes}
+        ],
+    }
+    root_dataset_entry = {
+        "path": f"{image_key}/{s0_name}",
+        "coordinateTransformations": [
+            {"type": "scale", "scale": voxel_sizes}
+        ],
     }
 
-    # Write as .zattrs (Zarr2) or update zarr.json (Zarr3)
-    zattrs_path = os.path.join(group_path, ".zattrs")
-    zarr_json_path = os.path.join(group_path, "zarr.json")
-
-    if os.path.exists(zarr_json_path):
-        # Zarr3: update attributes.ome.multiscales
-        with open(zarr_json_path) as f:
-            meta = json.load(f)
-        meta.setdefault("attributes", {}).setdefault("ome", {})["multiscales"] = metadata["multiscales"]
-        with open(zarr_json_path, "w") as f:
-            json.dump(meta, f, indent=2)
+    if output_format == "zarr3":
+        _write_zarr3_metadata(group_path, root_path, image_key, axes,
+                              dataset_entry, root_dataset_entry, software_meta)
     else:
-        # Zarr2: write .zattrs
-        # Ensure .zgroup exists
-        zgroup_path = os.path.join(group_path, ".zgroup")
-        if not os.path.exists(zgroup_path):
-            os.makedirs(group_path, exist_ok=True)
-            with open(zgroup_path, "w") as f:
-                json.dump({"zarr_format": 2}, f)
-        with open(zattrs_path, "w") as f:
-            json.dump(metadata, f, indent=2)
+        _write_zarr2_metadata(group_path, root_path, image_key, axes,
+                              dataset_entry, root_dataset_entry, software_meta)
+
+
+def _write_zarr3_metadata(group_path, root_path, image_key, axes,
+                          dataset_entry, root_dataset_entry, software_meta):
+    """Write OME-NGFF 0.5 metadata (zarr.json) at group and root level."""
+    multiscale = {
+        "axes": axes,
+        "datasets": [dataset_entry],
+        "name": image_key,
+        "type": "image",
+    }
+
+    # Group-level zarr.json (e.g., img/zarr.json)
+    group_zarr_json = os.path.join(group_path, "zarr.json")
+    if os.path.exists(group_zarr_json):
+        with open(group_zarr_json) as f:
+            meta = json.load(f)
+    else:
+        meta = {"zarr_format": 3, "node_type": "group", "attributes": {}}
+    ome = meta.setdefault("attributes", {}).setdefault("ome", {})
+    ome["version"] = "0.5"
+    ome["multiscales"] = [multiscale]
+    os.makedirs(group_path, exist_ok=True)
+    with open(group_zarr_json, "w") as f:
+        json.dump(meta, f, indent=2)
+
+    # Root-level zarr.json (e.g., output.zarr/zarr.json)
+    root_multiscale = {
+        "axes": axes,
+        "datasets": [root_dataset_entry],
+        "name": image_key,
+        "type": "image",
+    }
+    root_zarr_json = os.path.join(root_path, "zarr.json")
+    if os.path.exists(root_zarr_json):
+        with open(root_zarr_json) as f:
+            root_meta = json.load(f)
+    else:
+        root_meta = {"zarr_format": 3, "node_type": "group", "attributes": {}}
+    root_ome = root_meta.setdefault("attributes", {}).setdefault("ome", {})
+    root_ome["version"] = "0.5"
+    root_ome["multiscales"] = [root_multiscale]
+    root_meta["attributes"]["_software"] = software_meta
+    with open(root_zarr_json, "w") as f:
+        json.dump(root_meta, f, indent=2)
+
+
+def _write_zarr2_metadata(group_path, root_path, image_key, axes,
+                          dataset_entry, root_dataset_entry, software_meta):
+    """Write OME-NGFF 0.4 metadata (.zgroup + .zattrs) at group and root level."""
+    multiscale = {
+        "version": "0.4",
+        "name": image_key,
+        "type": "image",
+        "axes": axes,
+        "datasets": [dataset_entry],
+    }
+
+    # Group-level .zgroup + .zattrs (e.g., img/.zgroup, img/.zattrs)
+    zgroup_path = os.path.join(group_path, ".zgroup")
+    if not os.path.exists(zgroup_path):
+        os.makedirs(group_path, exist_ok=True)
+        with open(zgroup_path, "w") as f:
+            json.dump({"zarr_format": 2}, f)
+    with open(os.path.join(group_path, ".zattrs"), "w") as f:
+        json.dump({"multiscales": [multiscale]}, f, indent=2)
+
+    # Root-level .zgroup + .zattrs (e.g., output.zarr/.zgroup, output.zarr/.zattrs)
+    root_multiscale = {
+        "version": "0.4",
+        "name": image_key,
+        "type": "image",
+        "axes": axes,
+        "datasets": [root_dataset_entry],
+    }
+    root_zgroup = os.path.join(root_path, ".zgroup")
+    if not os.path.exists(root_zgroup):
+        os.makedirs(root_path, exist_ok=True)
+        with open(root_zgroup, "w") as f:
+            json.dump({"zarr_format": 2}, f)
+    root_zattrs_path = os.path.join(root_path, ".zattrs")
+    if os.path.exists(root_zattrs_path):
+        with open(root_zattrs_path) as f:
+            root_meta = json.load(f)
+    else:
+        root_meta = {}
+    root_meta["multiscales"] = [root_multiscale]
+    root_meta["_software"] = software_meta
+    with open(root_zattrs_path, "w") as f:
+        json.dump(root_meta, f, indent=2)
