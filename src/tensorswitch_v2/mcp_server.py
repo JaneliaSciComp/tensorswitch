@@ -440,6 +440,7 @@ def convert(
         no_ome_meta_export: Disable writing OME/METADATA.ome.xml file.
         no_ome_xml_attr: Do not embed OME/CZI XML in zarr.json/.zattrs.
         preset: Preset configuration — "webknossos" (chunk 32x32x32, shard 1024x1024x1024).
+                          "paintera" (n5, xyz axis order, gzip, chunk 64x64x64; or zarr2 with zyx).
         auto_multiscale: Generate full multiscale pyramid after conversion. Default: False.
         downsample_method: Downsampling method for pyramid — "auto", "mean", "mode", etc. Used with auto_multiscale.
         per_level_factors: Custom per-level factors, semicolon-separated (e.g., "1,2,2;1,2,2"). Used with auto_multiscale.
@@ -464,6 +465,15 @@ def convert(
                 chunk_shape = "32,32,32"
             if not shard_shape:
                 shard_shape = "1024,1024,1024"
+        elif preset == "paintera":
+            if output_format == "zarr3":
+                output_format = "n5"
+            if not chunk_shape:
+                chunk_shape = "64,64,64"
+            if compression == "zstd":
+                compression = "gzip"
+            if not axes_order:
+                axes_order = "xyz" if output_format == "n5" else "zyx"
 
         # Create reader (suppress stdout — MCP uses stdio transport)
         with contextlib.redirect_stdout(io.StringIO()):
@@ -1003,6 +1013,7 @@ def submit_job(
         downsample_method: Downsampling method for pyramid — "auto", "mean", "mode", etc.
         per_level_factors: Custom per-level factors, semicolon-separated (e.g., "1,2,2;1,2,2").
         preset: Preset configuration — "webknossos" (chunk 32, shard 1024).
+                          "paintera" (n5, xyz axis order, gzip, chunk 64x64x64; or zarr2 with zyx).
         omero: Include structured omero channel metadata for visualization tools.
         no_translation: Disable translation transforms in OME-NGFF multiscale metadata.
     """
@@ -1034,6 +1045,15 @@ def submit_job(
                 chunk_shape = "32,32,32"
             if not shard_shape:
                 shard_shape = "1024,1024,1024"
+        elif preset == "paintera":
+            if output_format == "zarr3":
+                output_format = "n5"
+            if not chunk_shape:
+                chunk_shape = "64,64,64"
+            if compression == "zstd":
+                compression = "gzip"
+            if not axes_order:
+                axes_order = "xyz" if output_format == "n5" else "zyx"
 
         # Handle auto_multiscale mode
         if auto_multiscale:

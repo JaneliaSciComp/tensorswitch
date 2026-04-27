@@ -342,8 +342,11 @@ Supported output formats:
     # Presets for common use cases
     parser.add_argument(
         "--preset", default=None,
-        choices=["webknossos"],
-        help="Use preset configuration. 'webknossos': zarr3, chunk 32x32x32, shard 1024x1024x1024, zstd.",
+        choices=["webknossos", "paintera"],
+        help="Use preset configuration. "
+             "'webknossos': zarr3, chunk 32x32x32, shard 1024x1024x1024, zstd. "
+             "'paintera': n5, xyz axis order, gzip, chunk 64x64x64 "
+             "(or zarr2 with zyx if --output_format zarr2).",
     )
 
     # Dataset paths
@@ -1830,6 +1833,20 @@ def main(argv=None):
             args.shard_shape = "1024,1024,1024"
         if not args.quiet:
             print("Using WebKnossos preset: chunk=32x32x32, shard=1024x1024x1024, zarr3")
+    elif args.preset == "paintera":
+        # Paintera preset: n5 (default) with xyz, or zarr2 with zyx
+        # If user didn't explicitly set output_format (still default zarr3), use n5
+        if args.output_format == "zarr3":
+            args.output_format = "n5"
+        if not args.chunk_shape:
+            args.chunk_shape = "64,64,64"
+        if args.compression == "zstd":
+            args.compression = "gzip"
+        if not args.axes_order:
+            args.axes_order = "xyz" if args.output_format == "n5" else "zyx"
+        if not args.quiet:
+            print(f"Using Paintera preset: output={args.output_format}, "
+                  f"axes={args.axes_order}, chunk=64x64x64, compression=gzip")
 
     # Parse optional shapes
     chunk_shape = parse_shape(args.chunk_shape, "chunk_shape") if args.chunk_shape else None
