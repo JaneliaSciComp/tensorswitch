@@ -4,6 +4,7 @@ DistributedConverter for TensorSwitch Phase 5 architecture.
 Provides format-agnostic conversion with LSF multi-job and Dask single-job support.
 """
 
+import json
 import os
 import time
 from typing import Optional, Tuple, List, Dict, Any
@@ -157,6 +158,32 @@ class DistributedConverter:
                     print(f"  Axes from TensorStore domain: {axes_order}")
         except Exception:
             pass
+
+        # Fall back to OME-NGFF axes from reader metadata (zarr2 has no domain labels)
+        if not axes_order:
+            try:
+                metadata = self.reader.get_metadata()
+                multiscales = metadata.get('multiscales', [])
+                # If no multiscales at array level, try parent dir (OME-NGFF
+                # stores multiscales one level above the array, e.g. img/.zattrs
+                # for img/s0)
+                if not multiscales:
+                    parent_zattrs = os.path.join(
+                        os.path.dirname(self.reader.path), '.zattrs')
+                    if os.path.isfile(parent_zattrs):
+                        with open(parent_zattrs, 'r') as f:
+                            multiscales = json.load(f).get('multiscales', [])
+                if multiscales:
+                    ome_axes = multiscales[0].get('axes', [])
+                    if ome_axes and len(ome_axes) == len(input_shape):
+                        axes_order = [
+                            a['name'].lower() if isinstance(a, dict) else a.lower()
+                            for a in ome_axes
+                        ]
+                        if verbose:
+                            print(f"  Axes from OME-NGFF metadata: {axes_order}")
+            except Exception:
+                pass
 
         # Handle order: force_order overrides auto-detection
         if force_order is not None:
@@ -339,10 +366,28 @@ class DistributedConverter:
         # 4. Apply spatial axis reorder (--axes_order)
         if spatial_transpose:
             input_shape = tuple(input_shape[p] for p in spatial_transpose)
-            if chunk_shape:
-                chunk_shape = tuple(chunk_shape[p] for p in spatial_transpose)
-            if shard_shape:
-                shard_shape = tuple(shard_shape[p] for p in spatial_transpose)
+            # chunk/shard shapes may be spatial-only (e.g. 3 values for x,y,z)
+            # while spatial_transpose covers all dims (including c, t, etc).
+            # Pad them to full dimensionality (1 for non-spatial) before permuting.
+            for attr_name in ('chunk_shape', 'shard_shape'):
+                shape_val = chunk_shape if attr_name == 'chunk_shape' else shard_shape
+                if shape_val and len(shape_val) < len(spatial_transpose):
+                    padded = []
+                    spatial_iter = iter(shape_val)
+                    for a in axes_order:
+                        if a.lower() in {'x', 'y', 'z'}:
+                            padded.append(next(spatial_iter))
+                        else:
+                            padded.append(1)
+                    if attr_name == 'chunk_shape':
+                        chunk_shape = tuple(padded[p] for p in spatial_transpose)
+                    else:
+                        shard_shape = tuple(padded[p] for p in spatial_transpose)
+                elif shape_val:
+                    if attr_name == 'chunk_shape':
+                        chunk_shape = tuple(shape_val[p] for p in spatial_transpose)
+                    else:
+                        shard_shape = tuple(shape_val[p] for p in spatial_transpose)
             axes_order = _target_axes_order
             if verbose:
                 print(f"  Reordered shape: {input_shape}")
