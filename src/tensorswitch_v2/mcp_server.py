@@ -402,6 +402,7 @@ def convert(
     per_level_factors: str = "",
     omero: bool = True,
     no_translation: bool = False,
+    output_dtype: str = "",
 ) -> str:
     """Convert a microscopy dataset between formats.
 
@@ -446,6 +447,7 @@ def convert(
         per_level_factors: Custom per-level factors, semicolon-separated (e.g., "1,2,2;1,2,2"). Used with auto_multiscale.
         omero: Include structured omero channel metadata for visualization tools (default: True).
         no_translation: Disable translation transforms in OME-NGFF multiscale metadata.
+        output_dtype: Output dtype override (e.g., "uint8", "int16", "uint16"). Empty = preserve source dtype.
     """
     try:
         import contextlib
@@ -493,7 +495,8 @@ def convert(
                 effective_shape = shape
         else:
             effective_shape = shape
-        dataset_size_gb = (np.prod(effective_shape) * np.dtype(dtype_str).itemsize) / (1024**3)
+        effective_dtype_str = output_dtype if output_dtype else dtype_str
+        dataset_size_gb = (np.prod(effective_shape) * np.dtype(effective_dtype_str).itemsize) / (1024**3)
 
         if dataset_size_gb > MCP_CONVERT_MAX_GB:
             return json.dumps({
@@ -593,6 +596,7 @@ def convert(
                 force_order=force_order if force_order else None,
                 no_ome_meta_export=no_ome_meta_export,
                 no_ome_xml_attr=no_ome_xml_attr,
+                output_dtype=output_dtype if output_dtype else None,
             )
 
         response = {
@@ -969,6 +973,7 @@ def submit_job(
     preset: str = "",
     omero: bool = True,
     no_translation: bool = False,
+    output_dtype: str = "",
 ) -> str:
     """Submit a conversion job to the LSF cluster (bsub).
 
@@ -1016,6 +1021,7 @@ def submit_job(
                           "paintera" (n5, xyz axis order, gzip, chunk 64x64x64; or zarr2 with zyx).
         omero: Include structured omero channel metadata for visualization tools.
         no_translation: Disable translation transforms in OME-NGFF multiscale metadata.
+        output_dtype: Output dtype override (e.g., "uint8", "int16", "uint16"). Empty = preserve source dtype.
     """
     try:
         import argparse
@@ -1126,6 +1132,7 @@ def submit_job(
             job_group=job_group if job_group else None,
             omero=omero,
             no_translation=no_translation,
+            dtype=output_dtype if output_dtype else None,
         )
 
         # Import and call the CLI submit_job function

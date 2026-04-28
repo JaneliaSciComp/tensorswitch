@@ -382,6 +382,11 @@ Supported output formats:
         "--compression_level", type=int, default=5,
         help="Compression level (default: 5)",
     )
+    parser.add_argument(
+        "--dtype", default=None,
+        help="Output dtype override (e.g., uint8, int16, uint16, float32). "
+             "Default: preserve source dtype.",
+    )
 
     # Voxel size override
     parser.add_argument(
@@ -1287,6 +1292,8 @@ def submit_job(args, return_job_id=False):
         reinvoke.append("--no_ome_xml_attr")
     if getattr(args, 'no_omero', False):
         reinvoke.append("--no-omero")
+    if getattr(args, 'dtype', None):
+        reinvoke += ["--dtype", args.dtype]
     # Convert to properly quoted shell command string
     # This handles paths with spaces correctly when bsub creates its wrapper
     reinvoke_str = shlex.join(reinvoke)
@@ -2542,6 +2549,7 @@ def main(argv=None):
             axes_order_override=axes_order_override,
             no_ome_meta_export=no_ome_meta_export,
             no_ome_xml_attr=no_ome_xml_attr,
+            output_dtype=getattr(args, 'dtype', None),
         )
     else:
         # Full single-process conversion
@@ -2559,6 +2567,7 @@ def main(argv=None):
             axes_order_override=axes_order_override,
             no_ome_meta_export=no_ome_meta_export,
             no_ome_xml_attr=no_ome_xml_attr,
+            output_dtype=getattr(args, 'dtype', None),
         )
 
     # Write source provenance metadata when --bbox is used

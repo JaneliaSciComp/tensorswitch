@@ -73,6 +73,7 @@ class DistributedConverter:
         axes_order_override: Optional[List[str]] = None,
         no_ome_meta_export: bool = False,
         no_ome_xml_attr: bool = False,
+        output_dtype: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Convert data from reader to writer.
 
@@ -141,9 +142,47 @@ class DistributedConverter:
 
         input_shape = tuple(self._input_store.shape)
         input_dtype = get_dtype_name(self._input_store.dtype)
+        effective_dtype = output_dtype if output_dtype else input_dtype
 
         if verbose:
             print(f"  Shape: {input_shape}, dtype: {input_dtype}")
+            if output_dtype and output_dtype != input_dtype:
+                print(f"  Output dtype: {output_dtype} (casting from {input_dtype})")
+
+        # Validate dtype cast safety: check if target range can hold source values
+        if output_dtype and output_dtype != input_dtype:
+            out_np = np.dtype(output_dtype)
+            in_np = np.dtype(input_dtype)
+            if np.can_cast(in_np, out_np, casting='safe'):
+                if verbose:
+                    print(f"  Dtype cast {input_dtype} -> {output_dtype}: safe (no data loss)")
+            elif np.issubdtype(out_np, np.integer):
+                # Narrowing cast — sample data to check range
+                info = np.iinfo(out_np)
+                if verbose:
+                    print(f"  Dtype cast {input_dtype} -> {output_dtype}: narrowing "
+                          f"(target range [{info.min}, {info.max}]), sampling data to verify...")
+                # Sample up to 8 evenly-spaced chunks from the input
+                total_voxels = int(np.prod(input_shape))
+                n_sample = min(8, max(1, total_voxels // (256 * 256 * 256)))
+                sample_indices = np.linspace(0, max(0, input_shape[0] - 1), n_sample, dtype=int)
+                src_min, src_max = np.inf, -np.inf
+                for si in sample_indices:
+                    # Read a thin slab along first axis
+                    slab = self._input_store[int(si)].read().result()
+                    if slab.size > 0:
+                        src_min = min(src_min, float(slab.min()))
+                        src_max = max(src_max, float(slab.max()))
+                if src_min < info.min or src_max > info.max:
+                    raise ValueError(
+                        f"Dtype cast {input_dtype} -> {output_dtype} would clip data: "
+                        f"source range [{src_min:.2f}, {src_max:.2f}] exceeds target "
+                        f"range [{info.min}, {info.max}]. Use a wider dtype or pre-normalize "
+                        f"the data. (Sampled {n_sample} slabs along axis 0.)"
+                    )
+                if verbose:
+                    print(f"  Data range [{src_min:.2f}, {src_max:.2f}] fits in "
+                          f"{output_dtype} [{info.min}, {info.max}] — safe to cast")
 
         # 2. Detect source order and axes
         use_fortran_order = False
@@ -398,7 +437,7 @@ class DistributedConverter:
 
         output_spec = self.writer.create_output_spec(
             shape=input_shape,
-            dtype=input_dtype,
+            dtype=effective_dtype,
             chunk_shape=chunk_shape,
             shard_shape=shard_shape,
             use_fortran_order=use_fortran_order,
@@ -475,6 +514,14 @@ class DistributedConverter:
                 # Squeeze singleton channel if we detected one
                 if self._squeeze_channel and self._squeeze_axis is not None:
                     data = np.squeeze(data, axis=self._squeeze_axis)
+
+                # Cast dtype if requested
+                if output_dtype and output_dtype != input_dtype:
+                    out_np = np.dtype(output_dtype)
+                    if np.issubdtype(data.dtype, np.floating) and np.issubdtype(out_np, np.integer):
+                        info = np.iinfo(out_np)
+                        data = np.clip(data, info.min, info.max)
+                    data = data.astype(out_np)
 
                 # Track per-channel min/max for OMERO display windows
                 if c_axis is not None:

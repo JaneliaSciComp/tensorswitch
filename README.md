@@ -54,6 +54,7 @@ A high-performance microscopy data conversion tool with TensorStore as the unifi
 - **Software Attribution**: All output metadata includes `_software` field with TensorSwitch version and GitHub link
 - **OME XML Export**: Writes `OME/METADATA.ome.xml` (or `.czi.xml`) as standalone file for easy access and tool compatibility
 - **Isotropic Upsampling**: Upsample anisotropic data to isotropic resolution via `scipy.ndimage.zoom` (trilinear for images, nearest-neighbor for labels), with automatic pyramid generation
+- **Dtype Casting**: Convert output to a different numeric dtype (e.g., float32 → int16) with upfront range validation and per-chunk clipping safety
 - **Safe Write**: Writes to `.tmp` during conversion and renames on completion — interrupted jobs never leave corrupted output
 - **MCP Server**: AI/agent integration via Model Context Protocol (Claude Code, LLM agents)
 
@@ -256,6 +257,22 @@ pixi run python -m tensorswitch_v2 -i input.zarr -o output.zarr --preset painter
 | `--no_sharding` | Disable sharding (Zarr3 only) | False |
 | `--compression` | Compression codec | `zstd` |
 | `--compression_level` | Compression level (1-22) | `5` |
+| `--dtype` | Output dtype override (e.g., `uint8`, `int16`, `uint16`, `float32`) | Source dtype |
+
+### Dtype Casting
+
+Cast the output to a different numeric dtype during conversion. Useful for reducing memory footprint (e.g., float32 → int16 for Neuroglancer viewing).
+
+```bash
+# Convert float32 zarr2 to int16 zarr3 with sharding
+pixi run python -m tensorswitch_v2 -i input.zarr -o output.zarr --dtype int16
+
+# Submit to cluster with dtype cast + pyramid
+pixi run python -m tensorswitch_v2 -i input.zarr -o output.zarr \
+  --dtype int16 --auto_multiscale --submit -P scicompsoft
+```
+
+**Safety**: Before conversion starts, the converter samples the source data and raises an error if values would be clipped by the target dtype range. For float → integer casts, values are clipped to the target range per chunk as a secondary safety net.
 
 ### Upsampling (Anisotropic → Isotropic)
 
