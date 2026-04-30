@@ -33,6 +33,7 @@ from tensorswitch_v2.utils import (
     get_input_driver,
     get_chunk_linear_indices_in_shard,
 )
+from .retry import retry_write, MAX_RETRIES
 
 
 def calculate_cumulative_factors(
@@ -458,22 +459,41 @@ class Downsampler:
 
         # Process chunks with transaction-per-chunk pattern
         chunks_processed = 0
+        failed_chunks = []
+        chunk_idx = 0
         for chunk_domain in get_chunk_domains(
             output_chunk_shape,
             self._output_store,
             linear_indices_to_process=linear_indices_to_process
         ):
-            # Create transaction per chunk to prevent OOM
-            with ts.Transaction() as txn:
-                self._output_store[chunk_domain].with_transaction(txn).write(
-                    self._downsampled_store[chunk_domain]
-                ).result()
+            try:
+                def _do_write(domain=chunk_domain):
+                    with ts.Transaction() as txn:
+                        self._output_store[domain].with_transaction(txn).write(
+                            self._downsampled_store[domain]
+                        ).result()
 
-            chunks_processed += 1
-            if verbose and chunks_processed % progress_interval == 0:
+                retry_write(_do_write, chunk_id=chunk_idx, verbose=verbose)
+                chunks_processed += 1
+            except KeyboardInterrupt:
+                raise
+            except Exception as e:
+                failed_chunks.append((chunk_idx, str(e)))
+                if verbose:
+                    print(f"  FAILED chunk {chunk_idx} after retries: {e}")
+
+            chunk_idx += 1
+            if verbose and chunks_processed % progress_interval == 0 and chunks_processed > 0:
                 elapsed = time.time() - start_time
                 rate = chunks_processed / elapsed if elapsed > 0 else 0
                 print(f"  Processed {chunks_processed} chunks ({rate:.1f} chunks/s)")
+
+        if failed_chunks:
+            raise RuntimeError(
+                f"Downsampling failed: {len(failed_chunks)} chunk(s) could not be "
+                f"written after {MAX_RETRIES} retries each.\n"
+                f"Failed chunk indices: {[c[0] for c in failed_chunks]}"
+            )
 
         elapsed_time = time.time() - start_time
 

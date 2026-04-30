@@ -26,6 +26,7 @@ from ..utils.tensorstore_utils import (
     zarr3_store_spec,
     get_tensorstore_context,
 )
+from .retry import retry_write, MAX_RETRIES
 
 # Set team permissions: rwxrwxr-x (files get rw-rw-r--)
 os.umask(0o0002)
@@ -445,59 +446,71 @@ class Upsampler:
             print(f"{'=' * 60}")
 
         chunks_processed = 0
+        failed_chunks = []
+        chunk_idx = 0
         for coords in product(*axis_ranges):
-            # Build read/write slices
-            read_slices = [slice(None)] * len(src_shape)
-            write_slices = [slice(None)] * len(output_shape)
+            try:
+                # Build read/write slices
+                read_slices = [slice(None)] * len(src_shape)
+                write_slices = [slice(None)] * len(output_shape)
 
-            for j, ax in enumerate(chunk_axes):
-                c = coords[j]
-                start = c * src_chunks[ax]
-                end = min(start + src_chunks[ax], src_shape[ax])
-                read_slices[ax] = slice(start, end)
-                # For non-zoom axes, output indices match input
-                write_slices[ax] = slice(start, end)
+                for j, ax in enumerate(chunk_axes):
+                    c = coords[j]
+                    start = c * src_chunks[ax]
+                    end = min(start + src_chunks[ax], src_shape[ax])
+                    read_slices[ax] = slice(start, end)
+                    # For non-zoom axes, output indices match input
+                    write_slices[ax] = slice(start, end)
 
-            # Read source chunk (full extent on zoom axes)
-            slab = src[tuple(read_slices)].read().result()
+                # Read source chunk (full extent on zoom axes)
+                slab = src[tuple(read_slices)].read().result()
 
-            # Apply zoom
-            upsampled = zoom(
-                slab,
-                zoom_factors,
-                order=self.interp_order,
-                grid_mode=True,
-                mode="nearest",
-            )
+                # Apply zoom
+                upsampled = zoom(
+                    slab,
+                    zoom_factors,
+                    order=self.interp_order,
+                    grid_mode=True,
+                    mode="nearest",
+                )
 
-            # Clip to dtype range for integer types (trilinear can overshoot)
-            if self.interp_order > 0 and np.issubdtype(src_dtype, np.integer):
-                info = np.iinfo(src_dtype)
-                upsampled = np.clip(upsampled, info.min, info.max)
-            upsampled = upsampled.astype(src_dtype)
+                # Clip to dtype range for integer types (trilinear can overshoot)
+                if self.interp_order > 0 and np.issubdtype(src_dtype, np.integer):
+                    info = np.iinfo(src_dtype)
+                    upsampled = np.clip(upsampled, info.min, info.max)
+                upsampled = upsampled.astype(src_dtype)
 
-            # Trim to exact output shape on zoom axes (rounding edge case)
-            for ax in zoom_axes:
-                actual = upsampled.shape[ax]
-                expected = output_shape[ax]
-                if actual > expected:
-                    trim_slices = [slice(None)] * len(output_shape)
-                    trim_slices[ax] = slice(0, expected)
-                    upsampled = upsampled[tuple(trim_slices)]
+                # Trim to exact output shape on zoom axes (rounding edge case)
+                for ax in zoom_axes:
+                    actual = upsampled.shape[ax]
+                    expected = output_shape[ax]
+                    if actual > expected:
+                        trim_slices = [slice(None)] * len(output_shape)
+                        trim_slices[ax] = slice(0, expected)
+                        upsampled = upsampled[tuple(trim_slices)]
 
-            # Build write slices for zoom axes (full extent)
-            for ax in zoom_axes:
-                write_slices[ax] = slice(0, upsampled.shape[ax])
+                # Build write slices for zoom axes (full extent)
+                for ax in zoom_axes:
+                    write_slices[ax] = slice(0, upsampled.shape[ax])
 
-            # Write via TensorStore transaction (memory-safe, supports sharding)
-            write_domain = tuple(write_slices)
-            with ts.Transaction() as txn:
-                dst[write_domain].with_transaction(txn).write(
-                    np.ascontiguousarray(upsampled)
-                ).result()
+                # Write via TensorStore transaction with retry
+                write_domain = tuple(write_slices)
 
-            chunks_processed += 1
-            if verbose and (chunks_processed % 10 == 0 or chunks_processed == total_chunks):
+                def _do_write(domain=write_domain, arr=np.ascontiguousarray(upsampled)):
+                    with ts.Transaction() as txn:
+                        dst[domain].with_transaction(txn).write(arr).result()
+
+                retry_write(_do_write, chunk_id=chunk_idx, verbose=verbose)
+                chunks_processed += 1
+            except KeyboardInterrupt:
+                raise
+            except Exception as e:
+                failed_chunks.append((chunk_idx, str(e)))
+                if verbose:
+                    print(f"  FAILED chunk {chunk_idx} after retries: {e}")
+
+            chunk_idx += 1
+            if verbose and (chunks_processed % 10 == 0 or chunks_processed == total_chunks) and chunks_processed > 0:
                 elapsed = time.time() - start_time
                 rate = chunks_processed / elapsed if elapsed > 0 else 0
                 eta = (total_chunks - chunks_processed) / rate if rate > 0 else 0
@@ -505,6 +518,13 @@ class Upsampler:
                     f"  [{chunks_processed}/{total_chunks}] "
                     f"{elapsed:.0f}s elapsed, ETA {eta:.0f}s"
                 )
+
+        if failed_chunks:
+            raise RuntimeError(
+                f"Upsampling failed: {len(failed_chunks)} chunk(s) could not be "
+                f"written after {MAX_RETRIES} retries each.\n"
+                f"Failed chunk indices: {[c[0] for c in failed_chunks]}"
+            )
 
         elapsed = time.time() - start_time
         if verbose:

@@ -27,6 +27,7 @@ from ..utils import (
     update_ome_metadata_if_needed,
 )
 from ..utils.metadata_utils import NON_SPATIAL_AXES
+from .retry import retry_write, MAX_RETRIES
 
 
 class DistributedConverter:
@@ -486,6 +487,8 @@ class DistributedConverter:
         channel_mins = [np.inf] * num_channels
         channel_maxs = [-np.inf] * num_channels
 
+        failed_chunks = []
+
         for idx, chunk_domain in enumerate(chunk_domains, start=start_idx):
             try:
                 read_domain = chunk_domain
@@ -543,8 +546,11 @@ class DistributedConverter:
                     channel_mins[0] = min(channel_mins[0], float(data.min()))
                     channel_maxs[0] = max(channel_maxs[0], float(data.max()))
 
-                # Write
-                self.writer.write_chunk(write_domain, data, self._output_store)
+                # Write with retry on transient I/O errors
+                def _do_write(wd=write_domain, d=data):
+                    self.writer.write_chunk(wd, d, self._output_store)
+
+                retry_write(_do_write, chunk_id=idx, verbose=verbose)
                 chunks_processed += 1
 
                 # Progress reporting
@@ -562,9 +568,20 @@ class DistributedConverter:
                 print(f"\nInterrupted at chunk {idx}. Exiting...")
                 raise
             except Exception as e:
+                failed_chunks.append((idx, str(e)))
                 if verbose:
-                    print(f"  Warning: Skipping chunk {idx}: {e}")
-                continue
+                    print(f"  FAILED chunk {idx} after retries: {e}")
+
+        if failed_chunks:
+            msg = (
+                f"Conversion failed: {len(failed_chunks)} chunk(s) could not be "
+                f"written after {MAX_RETRIES} retries each.\n"
+                f"Failed chunk indices: {[c[0] for c in failed_chunks]}"
+            )
+            if verbose:
+                for chunk_idx, err in failed_chunks:
+                    print(f"  Chunk {chunk_idx}: {err}")
+            raise RuntimeError(msg)
 
         # Build channel_minmax from accumulated stats (only if we saw real data)
         channel_minmax = None
