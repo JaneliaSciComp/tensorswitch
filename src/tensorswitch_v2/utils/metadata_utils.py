@@ -24,7 +24,7 @@ from typing import Dict, List, Optional, Tuple
 NON_SPATIAL_AXES = frozenset({'c', 't', 'v', 'channel'})
 """Axis names that should never be downsampled (factor=1)."""
 
-LABEL_KEYWORDS = ('label', 'mask', 'seg', 'annotation', 'roi', 'binary', 'instance')
+LABEL_KEYWORDS = ('label', 'mask', 'seg', 'annotation', 'binary', 'instance')
 """Path keywords that indicate segmentation/label data (use mode downsampling)."""
 
 
