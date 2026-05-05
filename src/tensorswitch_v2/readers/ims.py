@@ -2,11 +2,11 @@
 IMS (Imaris) reader implementation wrapping existing load_ims_stack function.
 
 Tier 2 reader - reuses proven production code with minimal overhead.
-Auto-detects dimension names from IMS HDF5 structure.
+Dimension names are determined by load_ims_stack() using cross-referencing
+of HDF5 TimePoint/Channel structure with the resulting array shape.
 """
 
 from typing import Dict, List, Optional
-import h5py
 # Import utility functions from v2 utils (independent from v1)
 from ..utils import load_ims_stack, extract_ims_metadata
 from .base import DaskReader
@@ -16,9 +16,9 @@ class IMSReader(DaskReader):
     """
     Reader for Imaris IMS format using existing load_ims_stack function.
 
-    Wraps the proven load_ims_stack() which returns a Dask array.
-    DaskReader base class wraps that via ts.virtual_chunked for a
-    uniform TensorStore API.
+    Wraps the proven load_ims_stack() which returns a Dask array with
+    all TimePoints and Channels loaded. DaskReader base class wraps
+    that via ts.virtual_chunked for a uniform TensorStore API.
 
     Tier: 2 (Custom Optimized - Production Ready)
 
@@ -40,33 +40,9 @@ class IMSReader(DaskReader):
         if self._dask_array is not None:
             return
 
-        # Load dask array
-        self._dask_array, self._h5_file = load_ims_stack(self.path)
-
-        # Extract dimension info from IMS HDF5 structure
-        try:
-            with h5py.File(self.path, 'r') as f:
-                dataset_path = f'DataSet/ResolutionLevel {self._resolution_level}'
-                if dataset_path in f:
-                    ds_group = f[dataset_path]
-                    time_points = len([k for k in ds_group.keys() if k.startswith('TimePoint')])
-                    channels = 1
-                    if 'TimePoint 0' in ds_group:
-                        channels = len([k for k in ds_group['TimePoint 0'].keys() if k.startswith('Channel')])
-
-                    ndim = len(self._dask_array.shape)
-                    if ndim == 5:
-                        self._dimension_names = ['t', 'c', 'z', 'y', 'x']
-                    elif ndim == 4:
-                        if time_points > 1:
-                            self._dimension_names = ['t', 'z', 'y', 'x']
-                        else:
-                            self._dimension_names = ['c', 'z', 'y', 'x']
-                    elif ndim == 3:
-                        self._dimension_names = ['z', 'y', 'x']
-        except Exception as e:
-            print(f"Warning: Could not extract IMS dimension names: {e}")
-            self._dimension_names = None
+        # load_ims_stack reads all TimePoints and Channels, returns
+        # authoritative dimension names from HDF5 structure cross-referencing
+        self._dask_array, self._h5_file, self._dimension_names = load_ims_stack(self.path)
 
     def get_metadata(self) -> Dict:
         """Return IMS metadata using existing extract_ims_metadata function."""

@@ -336,15 +336,90 @@ def extract_nd2_ome_metadata(nd2_file):
         return ome_xml, voxel_sizes
 
 
+def _ims_detect_dimension_names(shape, num_timepoints, num_channels):
+    """Detect IMS dimension names using spatial/non-spatial classification.
+
+    Uses the same principled approach as infer_dimension_names():
+    - Dimensions with size <= 10 are non-spatial
+    - Non-spatial dims are cross-referenced against known HDF5 counts
+    - Spatial dims assigned right-to-left: x, y, z
+    - Falls back to infer_dimension_names() if classification fails
+
+    Args:
+        shape: Dask array shape tuple.
+        num_timepoints: Number of TimePoint groups in HDF5.
+        num_channels: Number of Channel groups per TimePoint in HDF5.
+
+    Returns:
+        List of dimension name strings (e.g. ['t', 'c', 'z', 'y', 'x']).
+    """
+    from .metadata_utils import infer_dimension_names
+
+    NON_SPATIAL_THRESHOLD = 10
+    ndim = len(shape)
+
+    if ndim < 3 or ndim > 5:
+        return infer_dimension_names(shape)
+
+    is_spatial = [s > NON_SPATIAL_THRESHOLD for s in shape]
+    spatial_positions = [i for i, sp in enumerate(is_spatial) if sp]
+    non_spatial_positions = [i for i, sp in enumerate(is_spatial) if not sp]
+
+    num_spatial = len(spatial_positions)
+    num_non_spatial = len(non_spatial_positions)
+
+    # Expect 2-3 spatial dims and 0-2 non-spatial
+    if not (2 <= num_spatial <= 3 and num_non_spatial <= 2):
+        return infer_dimension_names(shape)
+
+    # Assign spatial names right-to-left: x, y, z
+    spatial_labels = ['z', 'y', 'x'][-num_spatial:]
+
+    # Assign non-spatial names by cross-referencing with HDF5 counts
+    non_spatial_labels = []
+    for pos in non_spatial_positions:
+        dim_size = shape[pos]
+        if num_non_spatial == 1:
+            # Single non-spatial dim: match against known counts
+            if dim_size == num_channels:
+                non_spatial_labels.append('c')
+            elif dim_size == num_timepoints:
+                non_spatial_labels.append('t')
+            else:
+                # Default single non-spatial to 'c' (more common)
+                non_spatial_labels.append('c')
+        else:
+            # Two non-spatial dims: use position (left='t', right='c')
+            # but validate against known counts when possible
+            if len(non_spatial_labels) == 0:
+                non_spatial_labels.append('t')
+            else:
+                non_spatial_labels.append('c')
+
+    # Merge into result
+    result = [''] * ndim
+    for idx, label in zip(spatial_positions, spatial_labels):
+        result[idx] = label
+    for idx, label in zip(non_spatial_positions, non_spatial_labels):
+        result[idx] = label
+
+    return result
+
+
 def load_ims_stack(ims_file):
     """
     Load IMS data as a dask array using h5py, trimmed to actual data bounds.
+
+    Reads all TimePoints and Channels from the IMS HDF5 structure.
+    Returns dimension names determined by cross-referencing the HDF5
+    structure (TimePoint/Channel counts) with the resulting array shape.
 
     Args:
         ims_file: Path to IMS file
 
     Returns:
-        tuple: (dask_array, h5_file_handle)
+        tuple: (dask_array, h5_file_handle, dimension_names)
+            dimension_names: list of axis labels (e.g. ['t', 'c', 'z', 'y', 'x'])
     """
     import h5py
 
@@ -366,45 +441,72 @@ def load_ims_stack(ims_file):
 
     dataset_group = h5_file['DataSet']
     resolution_group = dataset_group['ResolutionLevel 0']
-    timepoint_group = resolution_group['TimePoint 0']
 
-    channel_keys = [key for key in timepoint_group.keys() if key.startswith('Channel')]
-    channel_keys.sort()
+    # Discover all TimePoints, sorted numerically
+    tp_keys = [k for k in resolution_group.keys() if k.startswith('TimePoint')]
+    tp_keys.sort(key=lambda k: int(k.split()[-1]))
+    num_timepoints = len(tp_keys)
+
+    if not tp_keys:
+        raise ValueError(f"No TimePoints found in IMS file: {ims_file}")
+
+    # Get channel count from first TimePoint
+    first_tp = resolution_group[tp_keys[0]]
+    channel_keys = sorted(
+        [k for k in first_tp.keys() if k.startswith('Channel')],
+        key=lambda k: int(k.split()[-1]),
+    )
+    num_channels = len(channel_keys)
 
     if not channel_keys:
         raise ValueError(f"No channels found in IMS file: {ims_file}")
 
-    print(f"Found {len(channel_keys)} channels: {channel_keys}")
+    print(f"Found {num_timepoints} timepoints, {num_channels} channels: {channel_keys}")
 
-    channel_arrays = []
-    for channel_key in channel_keys:
-        channel_group = timepoint_group[channel_key]
-        data_dataset = channel_group['Data']
+    def _load_channels(tp_group, tp_name):
+        """Load and optionally trim all channels from a TimePoint group."""
+        arrays = []
+        for ch_key in channel_keys:
+            data_dataset = tp_group[ch_key]['Data']
 
-        print(f"{channel_key} full shape: {data_dataset.shape}, dtype: {data_dataset.dtype}")
+            if tp_name == tp_keys[0]:
+                print(f"  {ch_key} full shape: {data_dataset.shape}, dtype: {data_dataset.dtype}")
 
-        if actual_z_slices is not None and actual_z_slices < data_dataset.shape[0]:
-            print(f"PADDING DETECTED: Trimming Z from {data_dataset.shape[0]} to {actual_z_slices} slices")
-            trimmed_dataset = data_dataset[:actual_z_slices, :, :]
-            channel_array = da.from_array(trimmed_dataset, chunks='auto')
-            print(f"{channel_key} trimmed shape: {trimmed_dataset.shape}")
-        else:
-            if actual_z_slices is None:
-                print(f"{channel_key}: No metadata Z-dimension found, using full array")
-            else:
-                print(f"{channel_key}: No padding detected")
-            channel_array = da.from_array(data_dataset, chunks='auto')
+            # Wrap h5py dataset in dask first (lazy), then trim Z if needed.
+            # Slicing h5py directly would eagerly read GBs into memory.
+            arr = da.from_array(data_dataset, chunks='auto')
+            if actual_z_slices is not None and actual_z_slices < data_dataset.shape[0]:
+                if tp_name == tp_keys[0]:
+                    print(f"  PADDING DETECTED: Trimming Z from {data_dataset.shape[0]} to {actual_z_slices}")
+                arr = arr[:actual_z_slices, :, :]
 
-        channel_arrays.append(channel_array)
+            arrays.append(arr)
 
-    if len(channel_arrays) > 1:
-        stacked_array = da.stack(channel_arrays, axis=0)
-        print(f"Stacked array shape (CZYX): {stacked_array.shape}")
+        if len(arrays) > 1:
+            return da.stack(arrays, axis=0)  # (C, Z, Y, X)
+        return arrays[0]  # (Z, Y, X)
+
+    # Load all TimePoints
+    tp_arrays = []
+    for tp_key in tp_keys:
+        tp_group = resolution_group[tp_key]
+        tp_arrays.append(_load_channels(tp_group, tp_key))
+
+    # Stack timepoints if multiple
+    if len(tp_arrays) > 1:
+        stacked_array = da.stack(tp_arrays, axis=0)
     else:
-        stacked_array = channel_arrays[0]
-        print(f"Single channel array shape (ZYX): {stacked_array.shape}")
+        stacked_array = tp_arrays[0]
 
-    return stacked_array, h5_file
+    print(f"Final array shape: {stacked_array.shape}")
+
+    # Determine dimension names from shape and known HDF5 structure
+    dimension_names = _ims_detect_dimension_names(
+        stacked_array.shape, num_timepoints, num_channels,
+    )
+    print(f"Dimension names: {dimension_names}")
+
+    return stacked_array, h5_file, dimension_names
 
 
 def extract_ims_metadata(ims_file):
@@ -470,6 +572,44 @@ def extract_ims_metadata(ims_file):
                 except (ValueError, ZeroDivisionError) as e:
                     print(f"Could not calculate voxel sizes: {e}")
                     voxel_sizes = None
+
+            # Extract time info from DataSetInfo/TimeInfo
+            if 'DataSetInfo' in h5_file and 'TimeInfo' in h5_file['DataSetInfo']:
+                ti = h5_file['DataSetInfo']['TimeInfo']
+                try:
+                    raw = ti.attrs.get('DatasetTimePoints', 0)
+                    if isinstance(raw, np.ndarray):
+                        raw = raw.item()
+                    metadata['num_timepoints'] = int(raw)
+                except (ValueError, TypeError):
+                    pass
+
+                # Compute average time interval from timestamps
+                from datetime import datetime
+                timestamps = []
+                for attr in sorted(ti.attrs.keys()):
+                    if attr.startswith('TimePoint') and attr != 'TimePoints':
+                        val = ti.attrs[attr]
+                        if hasattr(val, 'tobytes'):
+                            val = val.tobytes().decode('utf-8', errors='ignore')
+                        elif isinstance(val, bytes):
+                            val = val.decode('utf-8', errors='ignore')
+                        if isinstance(val, str) and '-' in val:
+                            try:
+                                timestamps.append(datetime.strptime(
+                                    val.strip(), '%Y-%m-%d %H:%M:%S.%f'))
+                            except ValueError:
+                                pass
+
+                if len(timestamps) >= 2:
+                    timestamps.sort()
+                    intervals = [
+                        (timestamps[i+1] - timestamps[i]).total_seconds() * 1000
+                        for i in range(len(timestamps) - 1)
+                    ]
+                    avg_ms = sum(intervals) / len(intervals)
+                    metadata['time_interval_ms'] = avg_ms
+                    print(f"Time interval: {avg_ms:.0f} ms (avg of {len(intervals)} intervals)")
 
             return metadata, voxel_sizes
     except Exception as e:
