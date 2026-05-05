@@ -414,9 +414,19 @@ class DistributedConverter:
                             min(d, n) if n < a else d
                             for d, n, a in zip(
                                 default_shard, native, input_shape))
-                        if verbose:
-                            print(f"  Auto-capped shard shape for frame-based "
-                                  f"source: {shard_shape}")
+
+                    # Zarr3 requires shard dims to be multiples of chunk dims.
+                    # Auto-capping chunk and shard independently can produce
+                    # misaligned values (e.g. shard=640, chunk=256 → 640/256=2.5).
+                    # Round shard down to nearest chunk multiple per dim.
+                    if chunk_shape is not None and shard_shape is not None:
+                        shard_shape = tuple(
+                            max(c, (s // c) * c)
+                            for s, c in zip(shard_shape, chunk_shape))
+
+                    if verbose and shard_shape is not None:
+                        print(f"  Auto-capped shard shape for frame-based "
+                              f"source: {shard_shape}")
 
         # 4. Apply spatial axis reorder (--axes_order)
         if spatial_transpose:
