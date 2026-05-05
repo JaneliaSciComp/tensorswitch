@@ -228,6 +228,13 @@ class DistributedConverter:
         # Handle order: force_order overrides auto-detection
         if force_order is not None:
             use_fortran_order = (force_order.lower() == 'f')
+            # Still detect axes even when forcing order
+            if axes_order is None:
+                try:
+                    order_info = detect_source_order(self._input_store)
+                    axes_order = order_info.get('suggested_axes', None)
+                except Exception:
+                    pass
             if verbose:
                 order_name = "F-order" if use_fortran_order else "C-order"
                 print(f"  Forcing {order_name} (--force_{force_order.lower()}_order)")
@@ -273,7 +280,15 @@ class DistributedConverter:
         spatial_transpose = None
         _target_axes_order = None
         if axes_order_override and axes_order:
+            # Re-interpret 't' as 'z' if override contains 'z' but source has
+            # 't' instead (common with TIFF Z-stacks mis-labeled as time)
             source_spatial = [a for a in axes_order if a.lower() in {'x', 'y', 'z'}]
+            if ('z' in axes_order_override and 'z' not in source_spatial
+                    and 't' in [a.lower() for a in axes_order]):
+                axes_order = ['z' if a.lower() == 't' else a for a in axes_order]
+                source_spatial = [a for a in axes_order if a.lower() in {'x', 'y', 'z'}]
+                if verbose:
+                    print(f"  Re-interpreted 't' as 'z': axes now {axes_order}")
             if sorted(axes_order_override) != sorted(source_spatial):
                 raise ValueError(
                     f"--axes_order {axes_order_override} doesn't match "
@@ -489,12 +504,32 @@ class DistributedConverter:
 
         failed_chunks = []
 
+        # Pre-compute inverse permutation for spatial transpose
+        _inverse_spatial_perm = None
+        if spatial_transpose:
+            _inverse_spatial_perm = [0] * len(spatial_transpose)
+            for i, j in enumerate(spatial_transpose):
+                _inverse_spatial_perm[j] = i
+            _inverse_spatial_perm = tuple(_inverse_spatial_perm)
+
         for idx, chunk_domain in enumerate(chunk_domains, start=start_idx):
             try:
                 read_domain = chunk_domain
                 write_domain = chunk_domain
                 if hasattr(self.writer, 'get_input_domain_from_output'):
                     read_domain = self.writer.get_input_domain_from_output(chunk_domain)
+
+                # Inverse-transpose read domain for --axes_order spatial reorder
+                if _inverse_spatial_perm is not None:
+                    if hasattr(read_domain, 'origin'):
+                        slices = []
+                        for i in range(read_domain.ndim):
+                            start_val = int(read_domain.origin[i])
+                            stop_val = start_val + int(read_domain.shape[i])
+                            slices.append(slice(start_val, stop_val))
+                        read_domain = tuple(slices[p] for p in _inverse_spatial_perm)
+                    else:
+                        read_domain = tuple(read_domain[p] for p in _inverse_spatial_perm)
 
                 # If we squeezed a singleton channel, expand domain back for reading
                 if self._squeeze_channel and self._squeeze_axis is not None:
@@ -517,6 +552,10 @@ class DistributedConverter:
                 # Squeeze singleton channel if we detected one
                 if self._squeeze_channel and self._squeeze_axis is not None:
                     data = np.squeeze(data, axis=self._squeeze_axis)
+
+                # Transpose data for --axes_order spatial reorder
+                if spatial_transpose:
+                    data = np.ascontiguousarray(np.transpose(data, spatial_transpose))
 
                 # Cast dtype if requested
                 if output_dtype and output_dtype != input_dtype:
