@@ -1,13 +1,30 @@
 """
-Upsampler for TensorSwitch — resample anisotropic data to isotropic resolution.
+Upsampler for TensorSwitch — resample data to a finer isotropic resolution.
 
 Uses scipy.ndimage.zoom for interpolation:
   - order=1 (trilinear) for image data
   - order=0 (nearest-neighbor) for label/segmentation data
 
-Processes data in XY-column chunks to keep memory bounded. Each column reads
-the full Z extent, upsamples Z, and writes to the output — no chunk boundary
-artifacts because the interpolation axis is never split.
+Chunk strategy
+--------------
+The upsampler iterates over *chunk_axes* and reads the full extent of the
+remaining *zoom_axes* per iteration (the "slab" approach).
+
+  Anisotropic case (e.g. only Z needs upsampling, X/Y unchanged):
+    chunk_axes  = spatial non-zoom axes [X, Y]
+    full extent = zoom axis [Z]
+    No cross-chunk interpolation artifacts: the zoom axis is always read
+    completely, so scipy sees a contiguous extent along that dimension.
+
+  Isotropic case (all spatial axes zoomed, e.g. 32 nm → 16 nm):
+    non_zoom_axes = [] — no non-zoom axes to iterate over.
+    chunk_axes  = first two zoom axes [ax0, ax1]  (XY-slab approach)
+    full extent = remaining zoom axis [ax2]
+    For order > 0 (trilinear / cubic): each zoom chunk axis is read with a
+    border of `interp_order` source voxels on each side; the corresponding
+    border is trimmed from the zoomed slab before writing.  This prevents
+    cross-chunk interpolation artifacts at slab boundaries.
+    For order = 0 (nearest-neighbor): border = 0, no trimming needed.
 """
 
 import json
@@ -411,38 +428,48 @@ class Upsampler:
             print(f"Output format: {output_fmt}"
                   f"{' (sharded)' if output_fmt == 'zarr3' and not self.no_sharding else ''}")
 
-        # 8. Process in chunks over non-zoom axes, full extent on zoom axes
-        #    For NISB: non_zoom = [0, 1, 3] (x, y, c), zoom = [2] (z)
-        #    We chunk over x and y, read full z per chunk.
+        # 8. Determine chunk_axes and full-extent zoom axes.
+        #    See module docstring for the two-case strategy.
 
-        # Build chunk grid for non-zoom spatial axes only
-        # (skip channel and other non-spatial axes — they're usually small)
+        zoom_axes_set = set(zoom_axes)
+
+        # Prefer spatial non-zoom axes as chunk axes (anisotropic case).
         chunk_axes = [i for i in non_zoom_axes
                       if axes_info is None or i >= len(axes_info)
                       or axes_info[i].get("type") == "space"]
 
-        # If no spatial non-zoom axes to chunk over, process whole volume at once
         if not chunk_axes:
-            chunk_axes = non_zoom_axes[:2] if len(non_zoom_axes) >= 2 else non_zoom_axes
+            # Isotropic case: all spatial axes are zoomed.
+            # Chunk over first two zoom axes; read remaining at full extent.
+            chunk_axes = zoom_axes[:2] if len(zoom_axes) >= 2 else zoom_axes
 
-        # Compute number of chunks per axis
-        chunk_grid = {}
-        for ax in chunk_axes:
-            chunk_grid[ax] = math.ceil(src_shape[ax] / src_chunks[ax])
+        chunk_axes_set = set(chunk_axes)
 
-        # Generate all chunk coordinates
+        # zoom_axes read at full extent per chunk (not iterated in chunks)
+        zoom_axes_full = [ax for ax in zoom_axes if ax not in chunk_axes_set]
+
+        # Border in source voxels for zoom axes used as chunk axes.
+        # Needed so that scipy can interpolate across the slab boundary correctly.
+        #   order=0 (nearest-neighbor): no border — each output voxel maps to
+        #     exactly one input voxel; no cross-slab dependency.
+        #   order=1 (trilinear): 1-voxel border — boundary output voxels are
+        #     interpolated between adjacent input voxels across the slab edge.
+        #   order=3 (cubic): 2-voxel border — cubic spline needs 2 neighbours.
+        chunk_zoom_border = self.interp_order  # 0, 1, or 2/3
+
+        # Compute chunk grid
+        chunk_grid = {ax: math.ceil(src_shape[ax] / src_chunks[ax]) for ax in chunk_axes}
+
         from itertools import product
-        axis_ranges = []
-        for ax in chunk_axes:
-            axis_ranges.append(range(chunk_grid[ax]))
+        axis_ranges = [range(chunk_grid[ax]) for ax in chunk_axes]
+        total_chunks = math.prod(chunk_grid[ax] for ax in chunk_axes) if chunk_axes else 1
 
-        total_chunks = 1
-        for ax in chunk_axes:
-            total_chunks *= chunk_grid[ax]
-
+        is_isotropic_mode = bool(chunk_axes_set & zoom_axes_set)
         if verbose:
-            print(f"Chunk axes:   {chunk_axes} ({total_chunks} chunks)")
-            print(f"Zoom axes:    {zoom_axes}")
+            mode_tag = (f" [isotropic mode, border={chunk_zoom_border}]"
+                        if is_isotropic_mode else "")
+            print(f"Chunk axes:   {chunk_axes} ({total_chunks} chunks){mode_tag}")
+            print(f"Zoom axes:    {zoom_axes} (full extent: {zoom_axes_full})")
             print(f"{'=' * 60}")
 
         chunks_processed = 0
@@ -450,22 +477,41 @@ class Upsampler:
         chunk_idx = 0
         for coords in product(*axis_ranges):
             try:
-                # Build read/write slices
                 read_slices = [slice(None)] * len(src_shape)
                 write_slices = [slice(None)] * len(output_shape)
+
+                # Maps zoom chunk axis → (left_trim, right_trim) in output voxels
+                border_trims = {}
 
                 for j, ax in enumerate(chunk_axes):
                     c = coords[j]
                     start = c * src_chunks[ax]
                     end = min(start + src_chunks[ax], src_shape[ax])
-                    read_slices[ax] = slice(start, end)
-                    # For non-zoom axes, output indices match input
-                    write_slices[ax] = slice(start, end)
 
-                # Read source chunk (full extent on zoom axes)
+                    if ax in zoom_axes_set:
+                        # Zoom axis used as chunk axis: expand read by border so
+                        # scipy has enough context for interpolation at slab edges.
+                        left_pad  = min(chunk_zoom_border, start)
+                        right_pad = min(chunk_zoom_border, src_shape[ax] - end)
+                        read_slices[ax] = slice(start - left_pad, end + right_pad)
+                        # Record how many output voxels to trim after zoom
+                        left_trim  = round(left_pad  * zoom_factors[ax])
+                        right_trim = round(right_pad * zoom_factors[ax])
+                        border_trims[ax] = (left_trim, right_trim)
+                        # Output range for the valid (non-border) data
+                        write_slices[ax] = slice(
+                            round(start * zoom_factors[ax]),
+                            round(end   * zoom_factors[ax]),
+                        )
+                    else:
+                        # Non-zoom axis: output indices equal input indices
+                        read_slices[ax] = slice(start, end)
+                        write_slices[ax] = slice(start, end)
+
+                # Read source slab (zoom_axes_full are read at full extent)
                 slab = src[tuple(read_slices)].read().result()
 
-                # Apply zoom
+                # Apply zoom across all axes simultaneously
                 upsampled = zoom(
                     slab,
                     zoom_factors,
@@ -480,17 +526,23 @@ class Upsampler:
                     upsampled = np.clip(upsampled, info.min, info.max)
                 upsampled = upsampled.astype(src_dtype)
 
-                # Trim to exact output shape on zoom axes (rounding edge case)
-                for ax in zoom_axes:
-                    actual = upsampled.shape[ax]
+                # Trim border contributions from zoom chunk axes (all at once)
+                if border_trims:
+                    sl = [slice(None)] * upsampled.ndim
+                    for ax, (lt, rt) in border_trims.items():
+                        sz = upsampled.shape[ax]
+                        sl[ax] = slice(lt, sz - rt if rt > 0 else sz)
+                    upsampled = upsampled[tuple(sl)]
+
+                # For full-extent zoom axes: trim any rounding overshoot and set
+                # write slices to cover the full zoomed output along those axes.
+                for ax in zoom_axes_full:
+                    actual   = upsampled.shape[ax]
                     expected = output_shape[ax]
                     if actual > expected:
-                        trim_slices = [slice(None)] * len(output_shape)
-                        trim_slices[ax] = slice(0, expected)
-                        upsampled = upsampled[tuple(trim_slices)]
-
-                # Build write slices for zoom axes (full extent)
-                for ax in zoom_axes:
+                        sl = [slice(None)] * upsampled.ndim
+                        sl[ax] = slice(0, expected)
+                        upsampled = upsampled[tuple(sl)]
                     write_slices[ax] = slice(0, upsampled.shape[ax])
 
                 # Write via TensorStore transaction with retry

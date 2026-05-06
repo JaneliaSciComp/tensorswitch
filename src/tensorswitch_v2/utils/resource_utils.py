@@ -404,18 +404,32 @@ def calculate_upsample_resources(
     non_zoom_axes = [i for i, f in enumerate(zoom_factors) if abs(f - 1.0) < 1e-6]
     zoom_axes = [i for i, f in enumerate(zoom_factors) if abs(f - 1.0) >= 1e-6]
 
-    # Count XY-column chunks (iterate over non-zoom spatial axes)
+    # Mirror Upsampler.upsample() chunk_axes selection:
+    #   Anisotropic: iterate over non-zoom axes, read zoom axes at full extent.
+    #   Isotropic (all zoomed): iterate over first two zoom axes, read the rest
+    #   at full extent — keeps per-slab memory bounded same as anisotropic case.
+    if non_zoom_axes:
+        iter_axes = non_zoom_axes
+        full_axes = zoom_axes
+    else:
+        iter_axes = zoom_axes[:2] if len(zoom_axes) >= 2 else zoom_axes
+        full_axes = zoom_axes[2:] if len(zoom_axes) > 2 else []
+
+    # Count chunks along iteration axes
     n_xy_chunks = 1
-    for ax in non_zoom_axes:
+    for ax in iter_axes:
         if ax < len(source_shape) and ax < len(source_chunks):
             n_xy_chunks *= math.ceil(source_shape[ax] / source_chunks[ax])
 
     # --- Memory ---
-    # Per-chunk memory: read_slab + scipy_intermediate + write_slab
+    # Per-chunk: read_slab (iter_axes × chunk_size, full_axes × full_shape)
+    #            + scipy float64 intermediate + write_slab.
+    # Border expansion for order > 0 on zoom iter axes is ≤ 2 source voxels per
+    # axis — negligible relative to chunk size, ignored for estimation.
     read_elements = 1
-    for ax in non_zoom_axes:
+    for ax in iter_axes:
         read_elements *= min(source_chunks[ax], source_shape[ax]) if ax < len(source_chunks) else 1
-    for ax in zoom_axes:
+    for ax in full_axes:
         read_elements *= source_shape[ax]
 
     max_zoom = max(zoom_factors) if zoom_factors else 1.0
