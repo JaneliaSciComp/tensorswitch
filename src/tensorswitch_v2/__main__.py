@@ -2335,26 +2335,26 @@ def main(argv=None):
             compression_level=args.compression_level,
         )
 
+        # Safe write: rename .tmp → final before pyramid so pyramid finds s0
+        _finalize_tmp_path(tmp_output, final_output, verbose=verbose)
+
         # Auto-pyramid after upsampling if requested
         if args.auto_multiscale:
-            root_path = os.path.dirname(tmp_s0)
-            resolved_method = resolve_downsample_method(args.downsample_method, tmp_s0)
+            root_path = os.path.dirname(final_output)
+            resolved_method = resolve_downsample_method(args.downsample_method, final_output)
 
             custom_per_level_factors = None
             if args.per_level_factors:
                 custom_per_level_factors = parse_per_level_factors(args.per_level_factors)
 
             run_local_pyramid(
-                s0_path=tmp_s0,
+                s0_path=final_output,
                 root_path=root_path,
                 downsample_method=resolved_method,
                 custom_per_level_factors=custom_per_level_factors,
                 include_translation=not args.no_translation,
                 verbose=verbose,
             )
-
-        # Safe write: rename .tmp → final
-        _finalize_tmp_path(tmp_output, final_output, verbose=verbose)
 
         if verbose:
             print(f"\nUpsampling complete.")
