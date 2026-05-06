@@ -605,6 +605,7 @@ def upsample_to_isotropic(
         raise ValueError("No spatial axes found in source metadata.")
 
     # Determine target voxel size
+    _target_was_auto = target_voxel_size is None
     if target_voxel_size is None:
         target_voxel_size = min(spatial_voxels)
 
@@ -614,16 +615,22 @@ def upsample_to_isotropic(
         print(f"Source voxels (spatial): {spatial_voxels}")
         print(f"Target voxels: {target_voxels}")
 
-    # Check if already isotropic
+    # Check if source is already at target resolution
     all_close = all(
         abs(sv - target_voxel_size) / target_voxel_size < 0.01
         for sv in spatial_voxels
     )
     if all_close:
-        raise ValueError(
-            f"Source is already isotropic at {spatial_voxels}. "
-            f"No upsampling needed."
-        )
+        if _target_was_auto:
+            raise ValueError(
+                f"Source is already isotropic at {spatial_voxels}. "
+                f"Specify --target_voxel_size explicitly to upsample to a finer resolution."
+            )
+        else:
+            raise ValueError(
+                f"Source is already at the target resolution {target_voxel_size} nm "
+                f"(source: {spatial_voxels}). No upsampling needed."
+            )
 
     # Build full target voxel list (including non-spatial axes)
     full_target = []
