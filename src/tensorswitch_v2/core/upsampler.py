@@ -534,6 +534,31 @@ class Upsampler:
                         sl[ax] = slice(lt, sz - rt if rt > 0 else sz)
                     upsampled = upsampled[tuple(sl)]
 
+                # Reconcile rounding discrepancy for zoom chunk axes.
+                # round(a*z) + round(b*z) != round((a+b)*z), so the zoomed+
+                # trimmed slab can be ±1 voxel off from the write region.
+                # Pad (edge) or trim to match exactly.
+                for ax in chunk_axes:
+                    if ax in zoom_axes_set:
+                        expected = write_slices[ax].stop - write_slices[ax].start
+                        actual = upsampled.shape[ax]
+                        diff = abs(actual - expected)
+                        if diff > 2:
+                            raise RuntimeError(
+                                f"Zoom tiling discrepancy too large on axis {ax}: "
+                                f"got {actual} voxels, expected {expected} "
+                                f"(diff={diff}, zoom={zoom_factors[ax]:.4f}). "
+                                f"This is a bug — please report it."
+                            )
+                        if actual < expected:
+                            pw = [(0, 0)] * upsampled.ndim
+                            pw[ax] = (0, expected - actual)
+                            upsampled = np.pad(upsampled, pw, mode='edge')
+                        elif actual > expected:
+                            sl = [slice(None)] * upsampled.ndim
+                            sl[ax] = slice(0, expected)
+                            upsampled = upsampled[tuple(sl)]
+
                 # For full-extent zoom axes: trim any rounding overshoot and set
                 # write slices to cover the full zoomed output along those axes.
                 for ax in zoom_axes_full:
