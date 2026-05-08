@@ -1199,7 +1199,14 @@ echo "=========================================="
         os.makedirs(log_dir, exist_ok=True)
 
         dataset_name = os.path.basename(self.root_path)
-        script_path = os.path.join(log_dir, f"chained_pyramid_{dataset_name}.sh")
+        # Include parent container name to avoid collisions when multiple
+        # pyramids share the same group name (e.g. "raw") and log directory.
+        container_name = os.path.basename(os.path.dirname(self.root_path))
+        if container_name and container_name != dataset_name:
+            script_label = f"{container_name}_{dataset_name}"
+        else:
+            script_label = dataset_name
+        script_path = os.path.join(log_dir, f"chained_pyramid_{script_label}.sh")
 
         if verbose:
             print(f"\nCoordinator script: {script_path}")
@@ -1246,7 +1253,7 @@ echo "=========================================="
         coord_wall_time = f"{coord_wall_hours}:00"
 
         # Submit coordinator job
-        job_name = f"tsv2_pyramid_{dataset_name}"[:128]
+        job_name = f"tsv2_pyramid_{script_label}"[:128]
         log_path = os.path.join(log_dir, f"output__{job_name}_%J.log")
         error_path = os.path.join(log_dir, f"error__{job_name}_%J.log")
 
