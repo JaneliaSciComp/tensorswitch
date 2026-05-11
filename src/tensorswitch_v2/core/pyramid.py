@@ -822,9 +822,9 @@ class PyramidPlanner:
             }
             zarr_dtype = dtype_map.get(dtype_str, '<u2')
 
-        # Use compression from level 0, or default
+        # Use compression from level 0, or default (blosc(zstd) for numcodecs compatibility)
         if compressor is None:
-            compressor = {"id": "zstd", "level": 5}
+            compressor = {"id": "blosc", "cname": "zstd", "clevel": 5, "shuffle": 1, "blocksize": 0}
 
         # Write .zarray
         zarray = {

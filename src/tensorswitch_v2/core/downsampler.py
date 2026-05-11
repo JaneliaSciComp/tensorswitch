@@ -365,9 +365,23 @@ class Downsampler:
             zarr2_compressor = source_compression
             if zarr2_compressor and 'name' in zarr2_compressor:
                 # Convert zarr3 codec format to zarr2 compressor format
+                codec_name = zarr2_compressor['name']
+                codec_level = zarr2_compressor.get('configuration', {}).get('level', 5)
+                if codec_name == 'zstd':
+                    # Wrap zstd in blosc — bare zstd from TensorStore is
+                    # incompatible with numcodecs/zarr-python 2.x
+                    zarr2_compressor = {
+                        'id': 'blosc', 'cname': 'zstd',
+                        'clevel': codec_level, 'shuffle': 1, 'blocksize': 0
+                    }
+                else:
+                    zarr2_compressor = {'id': codec_name, 'level': codec_level}
+            elif zarr2_compressor and zarr2_compressor.get('id') == 'zstd':
+                # Source is zarr2 with bare zstd — wrap in blosc
                 zarr2_compressor = {
-                    'id': zarr2_compressor['name'],
-                    'level': zarr2_compressor.get('configuration', {}).get('level', 5)
+                    'id': 'blosc', 'cname': 'zstd',
+                    'clevel': zarr2_compressor.get('level', 5),
+                    'shuffle': 1, 'blocksize': 0
                 }
 
             # For Zarr2, use original dtype from source metadata (e.g., ">u2" not "uint16")

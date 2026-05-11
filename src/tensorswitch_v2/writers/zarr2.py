@@ -307,25 +307,34 @@ class Zarr2Writer(BaseWriter):
         Build compressor configuration based on compression type.
 
         Different compressors have different parameter names:
-        - zstd: uses 'level'
+        - zstd: wrapped in blosc (TensorStore bare zstd is incompatible with numcodecs)
         - blosc: uses 'clevel', 'cname', 'shuffle', 'blocksize'
         - gzip: uses 'level'
 
         Returns:
             dict: Compressor configuration for TensorStore
         """
-        if self.compression == 'blosc':
-            # Blosc uses different parameter names
-            # Default to lz4 codec with shuffle enabled (standard for OME-NGFF)
+        if self.compression == 'zstd':
+            # Wrap zstd in blosc — TensorStore writes bare zstd frames without
+            # Frame_Content_Size, which numcodecs/zarr-python 2.x cannot decode.
+            # Blosc includes decompressed size in its own header, avoiding this.
             return {
                 'id': 'blosc',
-                'cname': 'lz4',
+                'cname': 'zstd',
+                'clevel': self.compression_level,
+                'shuffle': 1,
+                'blocksize': 0
+            }
+        elif self.compression == 'blosc':
+            return {
+                'id': 'blosc',
+                'cname': 'zstd',
                 'clevel': self.compression_level,
                 'shuffle': 1,
                 'blocksize': 0
             }
         else:
-            # zstd, gzip, and others use 'level'
+            # gzip and others use 'level'
             return {
                 'id': self.compression,
                 'level': self.compression_level
