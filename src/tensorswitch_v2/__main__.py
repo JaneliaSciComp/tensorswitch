@@ -1307,11 +1307,12 @@ def submit_job(args, return_job_id=False):
         "-M", f"{memory_gb}GB",
         "-R", f"rusage[mem={memory_gb * 1024}]",  # GB to MB for LSF
         "-P", args.project,
-        "-g", args.job_group,
         "-o", log_path,
         "-e", error_path,
-        "/bin/bash", "-c", reinvoke_str,
     ]
+    if args.job_group:
+        command += ["-g", args.job_group]
+    command += ["/bin/bash", "-c", reinvoke_str]
 
     # Print summary and submit
     print("=" * 72)
@@ -1411,12 +1412,13 @@ def _submit_dependent_pyramid(args, conversion_job_id: str):
         "-M", "15GB",
         "-R", "rusage[mem=15360]",
         "-P", args.project,
-        "-g", args.job_group,
         "-w", f"done({conversion_job_id})",
         "-o", os.path.join(log_dir, f"output__{job_name}_%J.log"),
         "-e", os.path.join(log_dir, f"error__{job_name}_%J.log"),
-        "/bin/bash", "-c", reinvoke_str,
     ]
+    if args.job_group:
+        command += ["-g", args.job_group]
+    command += ["/bin/bash", "-c", reinvoke_str]
 
     result = subprocess.run(command, capture_output=True, text=True)
     if result.returncode == 0:
@@ -1563,11 +1565,12 @@ def _submit_upsample_job(args, verbose=True):
         "-M", f"{memory_gb}GB",
         "-R", f"rusage[mem={memory_gb * 1024}]",
         "-P", args.project,
-        "-g", args.job_group,
         "-o", log_path,
         "-e", error_path,
-        "/bin/bash", "-c", reinvoke_str,
     ]
+    if args.job_group:
+        command += ["-g", args.job_group]
+    command += ["/bin/bash", "-c", reinvoke_str]
 
     print("=" * 72)
     print("LSF Upsample Job Submission")
@@ -1678,11 +1681,12 @@ def submit_downsample_job(args, cumulative_factors):
         "-M", f"{memory_gb}GB",
         "-R", f"rusage[mem={memory_gb * 1024}]",  # GB to MB for LSF
         "-P", args.project,
-        "-g", args.job_group,
         "-o", log_path,
         "-e", error_path,
-        "/bin/bash", "-c", reinvoke_str,
     ]
+    if args.job_group:
+        command += ["-g", args.job_group]
+    command += ["/bin/bash", "-c", reinvoke_str]
 
     # Print summary and submit
     print("=" * 72)

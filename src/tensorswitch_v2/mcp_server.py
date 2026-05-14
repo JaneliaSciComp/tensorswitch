@@ -1067,6 +1067,9 @@ def submit_job(
 
             # Detect whether input is an existing dataset (pyramid-only)
             # or a raw source file (conversion + dependent pyramid).
+            # Only use pyramid-only shortcut when input and output resolve to
+            # the same directory — otherwise the user wants format conversion
+            # first, then pyramid on the *output*.
             is_existing_dataset = False
             try:
                 find_base_level(input_path)
@@ -1074,8 +1077,9 @@ def submit_job(
             except (ValueError, OSError):
                 pass
 
-            if is_existing_dataset:
-                # Pyramid-only: input already has s0
+            same_path = os.path.abspath(input_path) == os.path.abspath(output_path)
+            if is_existing_dataset and same_path:
+                # Pyramid-only: input already has s0, no conversion needed
                 subgroup = _resolve_conversion_subgroup(
                     output_format, data_type, is_label, image_key, label_key,
                 )
@@ -1131,6 +1135,7 @@ def submit_job(
             no_ome_xml_attr=no_ome_xml_attr,
             job_group=job_group if job_group else None,
             omero=omero,
+            no_omero=not omero,
             no_translation=no_translation,
             dtype=output_dtype if output_dtype else None,
         )
