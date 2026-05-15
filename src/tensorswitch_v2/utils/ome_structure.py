@@ -558,11 +558,9 @@ class OMEStructure:
         elif 'labels' in existing_ome and 'labels' not in new_ome:
             new_ome['labels'] = existing_ome['labels']
 
-        # Add OMERO metadata (preserve existing if not provided)
-        if omero:
-            new_ome['omero'] = omero
-        elif 'omero' in existing_ome and 'omero' not in new_ome:
-            new_ome['omero'] = existing_ome['omero']
+        # Note: omero is intentionally NOT written to root zarr.json.
+        # It belongs at the image group level (raw/zarr.json) only.
+        # Writing it at root breaks Neuroglancer's nested label discovery.
 
         metadata['attributes']['ome'] = new_ome
 
@@ -1071,11 +1069,9 @@ class OMEStructureZarr2:
         elif 'labels' in existing_metadata and 'labels' not in metadata:
             metadata['labels'] = existing_metadata['labels']
 
-        # Add OMERO metadata (preserve existing if not provided)
-        if omero:
-            metadata['omero'] = omero
-        elif 'omero' in existing_metadata and 'omero' not in metadata:
-            metadata['omero'] = existing_metadata['omero']
+        # Note: omero is intentionally NOT written to root .zattrs.
+        # It belongs at the image group level (raw/.zattrs) only.
+        # Writing it at root breaks Neuroglancer's nested label discovery.
 
         # Preserve existing non-ome attributes (e.g., source provenance)
         for key, value in existing_metadata.items():

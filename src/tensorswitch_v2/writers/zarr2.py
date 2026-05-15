@@ -770,7 +770,7 @@ class Zarr2Writer(BaseWriter):
                 omero=omero_block,
             )
 
-            # Write root metadata (image only)
+            # Write root metadata (image only, no omero — kept at raw/ level)
             self._ome_structure.write_root_metadata(
                 image_multiscales=multiscales,
                 has_labels=False,
@@ -779,7 +779,6 @@ class Zarr2Writer(BaseWriter):
                 source_format=source_format,
                 no_ome_meta_export=no_ome_meta_export,
                 no_ome_xml_attr=no_ome_xml_attr,
-                omero=omero_block,
             )
 
             print(f"Wrote nested image metadata to {self.output_path}")
