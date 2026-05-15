@@ -316,7 +316,9 @@ class OMEStructure:
         self,
         image_multiscales: Optional[List[Dict]] = None,
         has_labels: bool = False,
-        image_name: str = 'image'
+        image_name: str = 'image',
+        label_multiscales: Optional[Dict] = None,
+        label_name: Optional[str] = None,
     ) -> Dict:
         """
         Create root zarr.json metadata.
@@ -325,6 +327,10 @@ class OMEStructure:
             image_multiscales: Image multiscales data (axes, datasets)
             has_labels: Whether labels directory exists
             image_name: Name for image multiscales
+            label_multiscales: Label multiscales data (axes, datasets).
+                When provided for labels-only containers (no image), included
+                at root level so viewers can discover the label data.
+            label_name: Label name for path prefix (uses config default if None)
 
         Returns:
             Root zarr.json metadata
@@ -342,6 +348,20 @@ class OMEStructure:
                 'datasets': adjusted_multiscales['datasets'],
                 'name': image_name,
                 'type': 'image'
+            }]
+        elif label_multiscales and has_labels:
+            # Labels-only container: include label multiscales at root
+            # so viewers can discover and navigate the data
+            lname = label_name or self.config.label_name
+            prefix = f"{self.config.labels_container}/{lname}"
+            adjusted_multiscales = self._adjust_dataset_paths(
+                label_multiscales,
+                prefix
+            )
+            metadata['attributes']['ome']['multiscales'] = [{
+                'axes': adjusted_multiscales['axes'],
+                'datasets': adjusted_multiscales['datasets'],
+                'name': lname,
             }]
 
         if has_labels:
@@ -485,6 +505,8 @@ class OMEStructure:
         no_ome_meta_export: bool = False,
         no_ome_xml_attr: bool = False,
         omero: Optional[Dict] = None,
+        label_multiscales: Optional[Dict] = None,
+        label_name: Optional[str] = None,
     ) -> None:
         """
         Write root zarr.json metadata, merging with existing if present.
@@ -498,6 +520,8 @@ class OMEStructure:
             no_ome_meta_export: If True, skip writing OME/METADATA.ome.xml file
             no_ome_xml_attr: If True, skip embedding OME/CZI XML in zarr.json
             omero: Optional OMERO rendering metadata block
+            label_multiscales: Label multiscales data for labels-only containers
+            label_name: Label name for path prefix (uses config default if None)
         """
         path = os.path.join(self.output_path, 'zarr.json')
 
@@ -514,7 +538,9 @@ class OMEStructure:
         metadata = self.create_root_metadata(
             image_multiscales=image_multiscales,
             has_labels=has_labels,
-            image_name=image_name
+            image_name=image_name,
+            label_multiscales=label_multiscales,
+            label_name=label_name,
         )
 
         # Merge: preserve existing multiscales if we're not providing new ones
@@ -869,9 +895,19 @@ class OMEStructureZarr2:
         self,
         image_multiscales: Optional[Dict] = None,
         has_labels: bool = False,
-        image_name: str = 'image'
+        image_name: str = 'image',
+        label_multiscales: Optional[Dict] = None,
+        label_name: Optional[str] = None,
     ) -> Dict:
-        """Create root .zattrs metadata."""
+        """Create root .zattrs metadata.
+
+        Args:
+            image_multiscales: Image multiscales data (axes, datasets)
+            has_labels: Whether labels directory exists
+            image_name: Name for image multiscales
+            label_multiscales: Label multiscales data for labels-only containers
+            label_name: Label name for path prefix (uses config default if None)
+        """
         metadata = {}
 
         if image_multiscales:
@@ -888,6 +924,23 @@ class OMEStructureZarr2:
                 'name': image_name,
                 'type': 'image',
                 'axes': image_multiscales.get('axes', []),
+                'datasets': adjusted_datasets
+            }]
+        elif label_multiscales and has_labels:
+            # Labels-only container: include label multiscales at root
+            lname = label_name or self.config.label_name
+            prefix = f"{self.config.labels_container}/{lname}"
+            adjusted_datasets = []
+            for ds in label_multiscales.get('datasets', []):
+                new_ds = ds.copy()
+                original_path = ds.get('path', '0')
+                new_ds['path'] = f"{prefix}/{original_path}"
+                adjusted_datasets.append(new_ds)
+
+            metadata['multiscales'] = [{
+                'version': self.config.ome_version,
+                'name': lname,
+                'axes': label_multiscales.get('axes', []),
                 'datasets': adjusted_datasets
             }]
 
@@ -980,6 +1033,8 @@ class OMEStructureZarr2:
         no_ome_meta_export: bool = False,
         no_ome_xml_attr: bool = False,
         omero: Optional[Dict] = None,
+        label_multiscales: Optional[Dict] = None,
+        label_name: Optional[str] = None,
     ) -> None:
         """Write root .zattrs metadata, merging with existing if present."""
         self._write_zgroup(self.output_path)
@@ -998,7 +1053,9 @@ class OMEStructureZarr2:
         metadata = self.create_root_metadata(
             image_multiscales=image_multiscales,
             has_labels=has_labels,
-            image_name=image_name
+            image_name=image_name,
+            label_multiscales=label_multiscales,
+            label_name=label_name,
         )
 
         # Merge: preserve existing multiscales if we're not providing new ones

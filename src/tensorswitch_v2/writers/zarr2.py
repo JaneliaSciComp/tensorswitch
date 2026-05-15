@@ -67,7 +67,8 @@ class Zarr2Writer(BaseWriter):
         use_nested_structure: bool = False,
         data_type: str = 'image',
         image_key: str = 'raw',
-        label_key: str = 'segmentation'
+        label_key: str = 'segmentation',
+        labels_container: str = 'labels',
     ):
         """
         Initialize Zarr2 writer.
@@ -82,6 +83,8 @@ class Zarr2Writer(BaseWriter):
             data_type: Type of data being written ('image' or 'labels')
             image_key: Name for image group in nested structure
             label_key: Name for label image in nested structure
+            labels_container: Name for labels container dir (default: "labels").
+                Use "labels.tmp" with --add-to-existing for safe subgroup writes.
         """
         super().__init__(output_path)
         self.compression = compression
@@ -105,7 +108,8 @@ class Zarr2Writer(BaseWriter):
             from ..utils.ome_structure import OMEStructureZarr2, OMEStructureZarr2Config
             config = OMEStructureZarr2Config(
                 image_key=image_key,
-                label_name=label_key
+                labels_container=labels_container,
+                label_name=label_key,
             )
             self._ome_structure = OMEStructureZarr2(output_path, config)
 
@@ -744,7 +748,8 @@ class Zarr2Writer(BaseWriter):
             # Write labels container metadata
             self._ome_structure.write_labels_container_metadata()
 
-            # Write root metadata (labels only)
+            # Write root metadata (labels only, include label multiscales
+            # so viewers can discover the data at root level)
             self._ome_structure.write_root_metadata(
                 image_multiscales=None,
                 has_labels=True,
@@ -753,6 +758,7 @@ class Zarr2Writer(BaseWriter):
                 source_format=source_format,
                 no_ome_meta_export=no_ome_meta_export,
                 no_ome_xml_attr=no_ome_xml_attr,
+                label_multiscales=multiscales,
             )
 
             print(f"Wrote nested labels metadata to {self.output_path}")

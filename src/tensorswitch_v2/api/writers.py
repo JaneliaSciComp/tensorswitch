@@ -64,6 +64,7 @@ class Writers:
         data_type: str = "image",
         image_key: str = "raw",
         label_key: str = "segmentation",
+        labels_container: str = "labels",
         **kwargs
     ) -> BaseWriter:
         """
@@ -113,7 +114,8 @@ class Writers:
             use_nested_structure=use_nested_structure,
             data_type=data_type,
             image_key=image_key,
-            label_key=label_key
+            label_key=label_key,
+            labels_container=labels_container,
         )
 
     @staticmethod
@@ -127,6 +129,7 @@ class Writers:
         data_type: str = 'image',
         image_key: str = 'raw',
         label_key: str = 'segmentation',
+        labels_container: str = 'labels',
         **kwargs
     ) -> BaseWriter:
         """
@@ -178,7 +181,8 @@ class Writers:
             use_nested_structure=use_nested_structure,
             data_type=data_type,
             image_key=image_key,
-            label_key=label_key
+            label_key=label_key,
+            labels_container=labels_container,
         )
 
     @staticmethod

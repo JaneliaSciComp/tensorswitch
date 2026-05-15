@@ -699,6 +699,7 @@ output.zarr/
 | `--image-key NAME` | Name for image group (default: "raw") |
 | `--label-key NAME` | Name for label image (default: "segmentation") |
 | `--no-nested-structure` | Disable nested structure |
+| `--add-to-existing` | Add data to existing container (subgroup-level safe write) |
 
 **Examples:**
 
@@ -708,6 +709,9 @@ tensorswitch -i data.tif -o output.zarr
 
 # Convert as labels/segmentation
 tensorswitch -i segmentation.tif -o output.zarr --data-type labels
+
+# Add labels to existing container (preserves raw/ data)
+tensorswitch -i segmentation.tif -o existing.zarr --data-type labels --add-to-existing
 
 # Auto-detect from folder (Neuroglancer Precomputed)
 tensorswitch -i /path/to/folder/ -o output.zarr

@@ -403,6 +403,7 @@ def convert(
     omero: bool = True,
     no_translation: bool = False,
     output_dtype: str = "",
+    add_to_existing: bool = False,
 ) -> str:
     """Convert a microscopy dataset between formats.
 
@@ -448,6 +449,8 @@ def convert(
         omero: Include structured omero channel metadata for visualization tools (default: True).
         no_translation: Disable translation transforms in OME-NGFF multiscale metadata.
         output_dtype: Output dtype override (e.g., "uint8", "int16", "uint16"). Empty = preserve source dtype.
+        add_to_existing: Add data to existing container without destroying it.
+            Safe write applies to the subgroup (e.g., labels/) not the container root.
     """
     try:
         import contextlib
@@ -522,10 +525,27 @@ def convert(
 
         # Safe write: write to .tmp, rename on completion
         final_output = output_path
-        tmp_output = output_path.rstrip('/\\') + '.tmp'
-        if os.path.exists(tmp_output):
-            shutil.rmtree(tmp_output)
-        output_path = tmp_output
+        _add_to_existing_parent = None  # Track subgroup parent for --add-to-existing
+
+        if add_to_existing:
+            # Subgroup-level safe write
+            if not os.path.exists(final_output):
+                return json.dumps({"error": f"--add-to-existing: container does not exist: {final_output}"}, indent=2)
+            subgroup = _resolve_conversion_subgroup(output_format, data_type, is_label, image_key, label_key)
+            if not subgroup:
+                return json.dumps({"error": "--add-to-existing requires data_type='labels' or 'image'"}, indent=2)
+            _add_to_existing_parent = subgroup.split('/')[0]
+            tmp_subgroup = os.path.join(final_output, _add_to_existing_parent + '.tmp')
+            if os.path.exists(tmp_subgroup):
+                shutil.rmtree(tmp_subgroup)
+            labels_container = 'labels.tmp' if _add_to_existing_parent == 'labels' else 'labels'
+            tmp_output = None  # No container-level .tmp
+        else:
+            tmp_output = output_path.rstrip('/\\') + '.tmp'
+            if os.path.exists(tmp_output):
+                shutil.rmtree(tmp_output)
+            output_path = tmp_output
+            labels_container = 'labels'
 
         # Create writer
         if output_format == "zarr3":
@@ -539,6 +559,7 @@ def convert(
                 image_key=image_key,
                 label_key=label_key,
                 include_omero=omero,
+                labels_container=labels_container,
             )
         elif output_format == "zarr2":
             writer = Writers.zarr2(
@@ -550,6 +571,7 @@ def convert(
                 image_key=image_key,
                 label_key=label_key,
                 include_omero=omero,
+                labels_container=labels_container,
             )
         elif output_format == "n5":
             writer = Writers.n5(
@@ -617,12 +639,18 @@ def convert(
             # Resolve the subgroup the converter just wrote to (e.g. 'raw'
             # or 'labels/segmentation') so find_base_level targets the right
             # levels instead of a stale subgroup from a prior stage.
-            subgroup = _resolve_conversion_subgroup(
+            pyramid_subgroup = _resolve_conversion_subgroup(
                 output_format, data_type, is_label, image_key, label_key,
             )
-            find_target = (
-                os.path.join(output_path, subgroup) if subgroup else output_path
-            )
+            if _add_to_existing_parent and pyramid_subgroup:
+                # Pyramid runs on .tmp subgroup before rename
+                parts = pyramid_subgroup.split('/', 1)
+                pyramid_subgroup = parts[0] + '.tmp' + ('/' + parts[1] if len(parts) > 1 else '')
+                find_target = os.path.join(final_output, pyramid_subgroup)
+            else:
+                find_target = (
+                    os.path.join(output_path, pyramid_subgroup) if pyramid_subgroup else output_path
+                )
             s0_path, _ = find_base_level(find_target)
             root_path = os.path.dirname(s0_path)
 
@@ -657,7 +685,15 @@ def convert(
                 ]
 
         # Safe write: rename .tmp → final path
-        if os.path.exists(tmp_output):
+        if _add_to_existing_parent:
+            from tensorswitch_v2.__main__ import _finalize_add_to_existing
+            _finalize_add_to_existing(
+                final_output=final_output,
+                subgroup_parent=_add_to_existing_parent,
+                output_format=output_format,
+                verbose=False,
+            )
+        elif tmp_output and os.path.exists(tmp_output):
             if os.path.exists(final_output):
                 shutil.rmtree(final_output)
             os.rename(tmp_output, final_output)
@@ -973,6 +1009,7 @@ def submit_job(
     omero: bool = True,
     no_translation: bool = False,
     output_dtype: str = "",
+    add_to_existing: bool = False,
 ) -> str:
     """Submit a conversion job to the LSF cluster (bsub).
 
@@ -1021,6 +1058,8 @@ def submit_job(
         omero: Include structured omero channel metadata for visualization tools.
         no_translation: Disable translation transforms in OME-NGFF multiscale metadata.
         output_dtype: Output dtype override (e.g., "uint8", "int16", "uint16"). Empty = preserve source dtype.
+        add_to_existing: Add data to existing container without destroying it.
+            Safe write applies to the subgroup (e.g., labels/) not the container root.
     """
     try:
         import argparse
@@ -1137,6 +1176,7 @@ def submit_job(
             no_omero=not omero,
             no_translation=no_translation,
             dtype=output_dtype if output_dtype else None,
+            add_to_existing=add_to_existing,
         )
 
         # Import and call the CLI submit_job function

@@ -1050,7 +1050,15 @@ def submit_discovered_folder_lsf(
             'dtype': seg_ds.dtype,
         })
 
-    # Submit jobs
+    # Determine if both image and labels will be submitted to the same output.
+    # If so, chain the label job after image to avoid safe-write data loss.
+    has_both = (
+        any(j['data_type'] == 'image' for j in jobs_to_submit)
+        and any(j['data_type'] == 'labels' for j in jobs_to_submit)
+    )
+    image_job_id = None  # Track image job ID for chaining
+
+    # Submit jobs (image first if both present)
     for job_info in jobs_to_submit:
         job_name = f"tsv2_disc_{job_info['data_type']}_{job_info['name']}"
         job_name = job_name.replace(" ", "_")[:64]
@@ -1098,6 +1106,11 @@ def submit_discovered_folder_lsf(
             worker_cmd += ["--shard_shape", shard_shape]
         if job_info['data_type'] == 'labels':
             worker_cmd.append("--is-label")
+            # When both image and labels go to the same output, the label
+            # job must use --add-to-existing so it doesn't destroy the
+            # image data written by the (already-completed) image job.
+            if has_both:
+                worker_cmd.append("--add-to-existing")
 
         # Convert to properly quoted shell command string
         # This handles paths with spaces correctly when bsub creates its wrapper
@@ -1115,8 +1128,14 @@ def submit_discovered_folder_lsf(
             "-g", job_group,
             "-o", log_path,
             "-e", error_path,
-            "/bin/bash", "-c", worker_cmd_str,
         ]
+
+        # Chain label job after image job so image conversion (+ pyramid)
+        # completes before labels start writing to the same container.
+        if has_both and job_info['data_type'] == 'labels' and image_job_id:
+            bsub_cmd.extend(["-w", f"done({image_job_id})"])
+
+        bsub_cmd += ["/bin/bash", "-c", worker_cmd_str]
 
         print(f"\n{'='*60}")
         print(f"LSF Job: {job_info['data_type'].upper()}")
@@ -1126,6 +1145,8 @@ def submit_discovered_folder_lsf(
         print(f"  Output:    {output_path}")
         print(f"  Data type: {job_info['data_type']}")
         print(f"  Resources: {job_cores} cores, {job_memory} GB, {job_wall_time}")
+        if has_both and job_info['data_type'] == 'labels' and image_job_id:
+            print(f"  Depends on: image job {image_job_id} (--add-to-existing)")
 
         if dry_run:
             print(f"\n[DRY RUN] Would submit:")
@@ -1138,7 +1159,11 @@ def submit_discovered_folder_lsf(
                 import re
                 match = re.search(r'Job <(\d+)>', submit_result.stdout)
                 if match:
-                    result['job_ids'].append(match.group(1))
+                    this_job_id = match.group(1)
+                    result['job_ids'].append(this_job_id)
+                    # Remember image job ID for chaining
+                    if job_info['data_type'] == 'image':
+                        image_job_id = this_job_id
             else:
                 print(f"\nJob submission failed: {submit_result.stderr}")
                 result['error'] = submit_result.stderr

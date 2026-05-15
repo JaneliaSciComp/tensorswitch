@@ -429,6 +429,12 @@ Supported output formats:
         help="Disable nested structure (write directly to output path).",
     )
     parser.add_argument(
+        "--add-to-existing", action="store_true",
+        dest="add_to_existing",
+        help="Add data to existing container without destroying it. "
+             "Safe write applies to the subgroup (e.g., labels/) not the container root.",
+    )
+    parser.add_argument(
         "--image-only", action="store_true",
         help="Only convert image data (skip labels) when both are found in source folder.",
     )
@@ -801,6 +807,86 @@ def _finalize_tmp_path(tmp_path: str, final_path: str, verbose: bool = True) -> 
         print(f"Renamed {tmp_path} → {final_path}")
 
 
+def _finalize_add_to_existing(
+    final_output: str,
+    subgroup_parent: str,
+    output_format: str,
+    verbose: bool = True,
+) -> None:
+    """Rename subgroup .tmp → final and fix root metadata after --add-to-existing.
+
+    During --add-to-existing conversion, data is written to e.g.
+    ``labels.tmp/`` inside the existing container.  This function:
+
+    1. Removes the old subgroup if it exists (e.g. old ``labels/``).
+    2. Renames the ``.tmp`` variant to the final name.
+    3. Patches the root metadata so references to ``labels.tmp`` become
+       ``labels`` (labels list + multiscale dataset paths).
+
+    Args:
+        final_output: Container root path (e.g. ``/data/out.zarr``).
+        subgroup_parent: Top-level subgroup name (``"labels"`` or ``"raw"``).
+        output_format: ``"zarr3"`` or ``"zarr2"``.
+        verbose: Print progress messages.
+    """
+    import json as _json
+
+    tmp_name = subgroup_parent + '.tmp'
+    tmp_path = os.path.join(final_output, tmp_name)
+    final_path = os.path.join(final_output, subgroup_parent)
+
+    if not os.path.exists(tmp_path):
+        return
+
+    # 1. Remove old subgroup (e.g. old labels/)
+    if os.path.exists(final_path):
+        shutil.rmtree(final_path)
+    os.rename(tmp_path, final_path)
+    if verbose:
+        print(f"Renamed {tmp_path} → {final_path}")
+
+    # 2. Patch root metadata: labels.tmp → labels
+    if output_format == 'zarr3':
+        meta_path = os.path.join(final_output, 'zarr.json')
+        if os.path.exists(meta_path):
+            with open(meta_path) as f:
+                meta = _json.load(f)
+            ome = meta.get('attributes', {}).get('ome', {})
+            # Fix labels list
+            labels_list = ome.get('labels', [])
+            labels_list = [subgroup_parent if l == tmp_name else l for l in labels_list]
+            if labels_list:
+                ome['labels'] = labels_list
+            # Fix multiscale dataset paths
+            for ms in ome.get('multiscales', []):
+                for ds in ms.get('datasets', []):
+                    path = ds.get('path', '')
+                    if path.startswith(tmp_name + '/'):
+                        ds['path'] = subgroup_parent + path[len(tmp_name):]
+            meta['attributes']['ome'] = ome
+            with open(meta_path, 'w') as f:
+                _json.dump(meta, f, indent=2)
+    elif output_format == 'zarr2':
+        meta_path = os.path.join(final_output, '.zattrs')
+        if os.path.exists(meta_path):
+            with open(meta_path) as f:
+                meta = _json.load(f)
+            labels_list = meta.get('labels', [])
+            labels_list = [subgroup_parent if l == tmp_name else l for l in labels_list]
+            if labels_list:
+                meta['labels'] = labels_list
+            for ms in meta.get('multiscales', []):
+                for ds in ms.get('datasets', []):
+                    path = ds.get('path', '')
+                    if path.startswith(tmp_name + '/'):
+                        ds['path'] = subgroup_parent + path[len(tmp_name):]
+            with open(meta_path, 'w') as f:
+                _json.dump(meta, f, indent=2)
+
+    if verbose:
+        print(f"Updated root metadata: {tmp_name} → {subgroup_parent}")
+
+
 def parse_shape(s: str, param_name: str = "shape") -> Tuple[int, ...]:
     """Parse a comma-separated shape string into a tuple of ints.
 
@@ -928,6 +1014,7 @@ def create_writer(args, data_type: str = 'image'):
     use_nested = getattr(args, 'use_nested_structure', True) and fmt in ["zarr3", "zarr2"]
     image_key = getattr(args, 'image_key', 'raw')
     label_key = getattr(args, 'label_key', 'segmentation')
+    labels_container = getattr(args, '_labels_container_override', 'labels')
 
     include_omero = not getattr(args, 'no_omero', False)
     if fmt == "zarr3":
@@ -942,6 +1029,7 @@ def create_writer(args, data_type: str = 'image'):
             data_type=data_type,
             image_key=image_key,
             label_key=label_key,
+            labels_container=labels_container,
         )
     elif fmt == "zarr2":
         return Writers.zarr2(
@@ -954,6 +1042,7 @@ def create_writer(args, data_type: str = 'image'):
             data_type=data_type,
             image_key=image_key,
             label_key=label_key,
+            labels_container=labels_container,
         )
     elif fmt == "n5":
         return Writers.n5(
@@ -1294,6 +1383,8 @@ def submit_job(args, return_job_id=False):
         reinvoke.append("--no-omero")
     if getattr(args, 'dtype', None):
         reinvoke += ["--dtype", args.dtype]
+    if getattr(args, 'add_to_existing', False):
+        reinvoke.append("--add-to-existing")
     # Convert to properly quoted shell command string
     # This handles paths with spaces correctly when bsub creates its wrapper
     reinvoke_str = shlex.join(reinvoke)
@@ -2419,16 +2510,57 @@ def main(argv=None):
         return
 
     # --- Safe write: write to .tmp, rename on completion ---
+    add_to_existing = getattr(args, 'add_to_existing', False)
     final_output = args.output
-    tmp_output = _tmp_path_for(final_output)
-    # Clean up leftover .tmp from a prior failed run
-    if os.path.exists(tmp_output):
-        shutil.rmtree(tmp_output)
+
+    if add_to_existing:
+        # Subgroup-level safe write: write to labels.tmp/ inside existing container
+        if not os.path.exists(final_output):
+            raise FileNotFoundError(
+                f"--add-to-existing: target container does not exist: {final_output}"
+            )
+        # Validate it's a zarr container
+        is_zarr3 = os.path.exists(os.path.join(final_output, 'zarr.json'))
+        is_zarr2 = os.path.exists(os.path.join(final_output, '.zgroup'))
+        if not is_zarr3 and not is_zarr2:
+            raise ValueError(
+                f"--add-to-existing: target is not a zarr container: {final_output}"
+            )
+        subgroup = _resolve_conversion_subgroup(args)
+        if not subgroup:
+            raise ValueError(
+                "--add-to-existing requires --data-type labels or --data-type image "
+                "(or --is-label for label data)"
+            )
+        subgroup_parent = subgroup.split('/')[0]  # "labels" or "raw"
+        tmp_subgroup_path = os.path.join(final_output, subgroup_parent + '.tmp')
+        # Clean leftover .tmp subgroup from prior failed run
+        if os.path.exists(tmp_subgroup_path):
+            shutil.rmtree(tmp_subgroup_path)
+            if verbose:
+                print(f"Removed leftover temporary subgroup: {tmp_subgroup_path}")
+        # Warn if target subgroup already exists
+        existing_subgroup = os.path.join(final_output, subgroup_parent)
+        if os.path.exists(existing_subgroup) and verbose:
+            print(f"Warning: existing {subgroup_parent}/ will be replaced on completion")
+        # Route writer to .tmp subgroup via labels_container override
+        if subgroup_parent == 'labels':
+            args._labels_container_override = 'labels.tmp'
+        else:
+            args._image_key_override = subgroup_parent + '.tmp'
+        tmp_output = None  # Signal: no container-level .tmp
         if verbose:
-            print(f"Removed leftover temporary path: {tmp_output}")
-    args.output = tmp_output
-    if verbose:
-        print(f"Writing to temporary path: {tmp_output}")
+            print(f"Writing to subgroup: {tmp_subgroup_path}")
+    else:
+        tmp_output = _tmp_path_for(final_output)
+        # Clean up leftover .tmp from a prior failed run
+        if os.path.exists(tmp_output):
+            shutil.rmtree(tmp_output)
+            if verbose:
+                print(f"Removed leftover temporary path: {tmp_output}")
+        args.output = tmp_output
+        if verbose:
+            print(f"Writing to temporary path: {tmp_output}")
 
     reader = create_reader(args)
 
@@ -2589,10 +2721,17 @@ def main(argv=None):
         # container root reads stale multiscales from a prior stage and may
         # return the wrong subgroup, causing the pyramid to overwrite the
         # wrong levels.
-        subgroup = _resolve_conversion_subgroup(args)
-        base_level_input = (
-            os.path.join(args.output, subgroup) if subgroup else args.output
-        )
+        pyramid_subgroup = _resolve_conversion_subgroup(args)
+        if add_to_existing and pyramid_subgroup:
+            # Pyramid runs on .tmp subgroup before rename
+            # e.g. labels/segmentation → labels.tmp/segmentation
+            parts = pyramid_subgroup.split('/', 1)
+            pyramid_subgroup = parts[0] + '.tmp' + ('/' + parts[1] if len(parts) > 1 else '')
+            base_level_input = os.path.join(final_output, pyramid_subgroup)
+        else:
+            base_level_input = (
+                os.path.join(args.output, pyramid_subgroup) if pyramid_subgroup else args.output
+            )
         s0_path, _ = find_base_level(base_level_input, verbose=verbose)
         # root_path must be the direct parent of s0 (e.g., raw/) not the container root
         root_path = os.path.dirname(s0_path)
@@ -2613,7 +2752,15 @@ def main(argv=None):
         )
 
     # --- Safe write: rename .tmp → final path ---
-    _finalize_tmp_path(tmp_output, final_output, verbose=verbose)
+    if add_to_existing:
+        _finalize_add_to_existing(
+            final_output=final_output,
+            subgroup_parent=subgroup_parent,
+            output_format=args.output_format,
+            verbose=verbose,
+        )
+    else:
+        _finalize_tmp_path(tmp_output, final_output, verbose=verbose)
 
 
 if __name__ == "__main__":
