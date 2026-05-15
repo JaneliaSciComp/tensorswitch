@@ -12,12 +12,32 @@ Non-spatial axes (c, t, v, channel) always get size 1.
 """
 
 import math
+import os
 import numpy as np
 from typing import Tuple, List, Optional
 
 from .tensorstore_utils import adaptive_spatial_chunk, build_default_shape
 
 _ZARR3_SHARD_SPATIAL = 1024    # tensorstore_utils.py zarr3_store_spec default
+
+_NATIVE_EXTENSIONS = {'.zarr', '.n5'}
+
+
+def is_native_source(path: str) -> bool:
+    """Check if a path refers to a TensorStore-native format (Zarr, N5, remote).
+
+    Scans all path components for .zarr/.n5 extensions, so sub-paths like
+    ``/data/volume.zarr/raw/s0`` are correctly detected as native.
+    Remote URLs (containing ``://``) are always native.
+    """
+    if '://' in path:
+        return True
+    parts = path.replace('\\', '/').split('/')
+    for part in parts:
+        ext = os.path.splitext(part)[1].lower()
+        if ext in _NATIVE_EXTENSIONS:
+            return True
+    return False
 
 
 def calculate_memory(volume_shape, dtype_str, shard_shape, total_shards, use_bioio=False, output_format='zarr3'):
@@ -160,14 +180,15 @@ def calculate_wall_time(volume_shape, dtype_str, shard_shape, total_shards, use_
         # Zarr3: per-shard time estimate
         shard_size_gb = (np.prod(shard_shape) * dtype_bytes) / (1024 ** 3)
 
-        # Per-shard time estimate (recalibrated from H01/MICRONS/Lila benchmarks, Mar 2026)
-        # TensorStore's internal thread pool pipelines reads/writes/compression efficiently
+        # Per-shard time estimate (recalibrated May 2026 from Jiefu zarr2→zarr3 benchmark)
+        # Large shards (>= 1 GB) require reading many source chunks per shard on NFS,
+        # especially for zarr2→zarr3 where each 1024³ shard reads 64 separate 256³ files.
         if is_native_source:
-            # TensorStore-native (Zarr, N5, Precomputed, GCS/S3/HTTP): 1-3 sec/shard
+            # TensorStore-native (Zarr, N5, Precomputed, GCS/S3/HTTP)
             if shard_size_gb < 1.0:
-                minutes_per_shard = 0.05     # ~3 sec
+                minutes_per_shard = 0.1      # ~6 sec
             else:
-                minutes_per_shard = 0.083    # ~5 sec
+                minutes_per_shard = 0.2      # ~12 sec
         else:
             # File-decoded (TIFF, ND2, CZI, IMS, HDF5): tifffile/dask decode overhead
             if shard_size_gb < 0.5:
@@ -180,9 +201,9 @@ def calculate_wall_time(volume_shape, dtype_str, shard_shape, total_shards, use_
         base_minutes = minutes_per_shard * total_shards
 
         # Scale down by cores — TensorStore processes shards in parallel
-        # Higher efficiency (0.85) than non-sharded because shards are large sequential I/O
+        # Use 0.7 efficiency (same as non-sharded) — NFS contention limits scaling
         if cores > 1:
-            parallel_factor = cores * 0.85
+            parallel_factor = cores * 0.7
             base_minutes = base_minutes / parallel_factor
 
         # Overhead for file loading
@@ -193,8 +214,8 @@ def calculate_wall_time(volume_shape, dtype_str, shard_shape, total_shards, use_
         else:
             overhead = 2
 
-        # 1.5x safety, round to nearest 30 min
-        safe_minutes = int(math.ceil((base_minutes + overhead) * 1.5 / 30) * 30)
+        # 2x safety, round to nearest 30 min
+        safe_minutes = int(math.ceil((base_minutes + overhead) * 2.0 / 30) * 30)
 
     # BioIO is ~10-50x slower due to Dask overhead, apply 10x multiplier
     if use_bioio:

@@ -1051,6 +1051,7 @@ def _estimate_shard_info(args, volume_shape, dtype_str, axes_order=None):
 from .utils.resource_utils import calculate_memory as _calculate_memory
 from .utils.resource_utils import calculate_wall_time as _calculate_wall_time
 from .utils.resource_utils import calculate_job_resources as _calculate_job_resources
+from .utils.resource_utils import is_native_source as _is_native_source
 
 
 def run_local_pyramid(s0_path, root_path, downsample_method="auto",
@@ -1178,10 +1179,9 @@ def submit_job(args, return_job_id=False):
             print(f"  {mode_name} mode: applying 10x wall time and 3x memory multipliers")
 
         # Detect source type: TensorStore-native (fast) vs file-decoded (slower)
-        _NATIVE_EXTENSIONS = {'.zarr', '.n5'}
-        _input_ext = os.path.splitext(args.input)[1].lower()
-        is_native = _input_ext in _NATIVE_EXTENSIONS or '://' in args.input
+        is_native = _is_native_source(args.input)
         if not is_native:
+            _input_ext = os.path.splitext(args.input)[1].lower()
             print(f"  Source type: file-decoded ({_input_ext})")
 
         if memory_gb is None:
@@ -2051,9 +2051,7 @@ def main(argv=None):
                     finally:
                         args.input = original_input
 
-                    _NATIVE_EXTENSIONS = {'.zarr', '.n5'}
-                    _ext = os.path.splitext(first_file)[1].lower()
-                    is_native = _ext in _NATIVE_EXTENSIONS or '://' in first_file
+                    is_native = _is_native_source(first_file)
 
                     auto_mem, auto_wall, auto_cores = _calculate_job_resources(
                         shape=list(volume_shape), dtype=dtype_str,

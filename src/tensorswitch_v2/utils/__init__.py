@@ -100,6 +100,7 @@ from .resource_utils import (
     calculate_wall_time,
     estimate_shard_info,
     calculate_job_resources,
+    is_native_source,
 )
 
 __all__ = [
@@ -169,4 +170,5 @@ __all__ = [
     'calculate_wall_time',
     'estimate_shard_info',
     'calculate_job_resources',
+    'is_native_source',
 ]

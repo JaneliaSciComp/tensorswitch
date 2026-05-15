@@ -872,6 +872,7 @@ def estimate_resources(
         from tensorswitch_v2.utils.resource_utils import (
             calculate_job_resources,
             estimate_shard_info,
+            is_native_source,
         )
 
         input_path = input_path.strip()
@@ -884,9 +885,7 @@ def estimate_resources(
         dtype_str = get_dtype_name(store.dtype)
 
         # Detect native source (TensorStore-backed = fast, file-decoded = slow)
-        _NATIVE_EXTENSIONS = {'.zarr', '.n5'}
-        _input_ext = os.path.splitext(input_path)[1].lower()
-        is_native = _input_ext in _NATIVE_EXTENSIONS or '://' in input_path
+        is_native = is_native_source(input_path)
 
         cs_str = chunk_shape if chunk_shape else None
         ss_str = shard_shape if shard_shape else None
