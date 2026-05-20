@@ -1199,13 +1199,24 @@ echo "=========================================="
         os.makedirs(log_dir, exist_ok=True)
 
         dataset_name = os.path.basename(self.root_path)
-        # Include parent container name to avoid collisions when multiple
-        # pyramids share the same group name (e.g. "raw") and log directory.
-        container_name = os.path.basename(os.path.dirname(self.root_path))
-        if container_name and container_name != dataset_name:
-            script_label = f"{container_name}_{dataset_name}"
-        else:
-            script_label = dataset_name
+        # Build a unique script label from the path to avoid collisions when
+        # multiple containers share the same subgroup names (e.g. all have
+        # "labels/seg").  Walk up from root_path to find the .zarr/.n5
+        # container, then join all components below it.
+        parts = []
+        cur = os.path.abspath(self.root_path)
+        while cur and cur != os.path.dirname(cur):
+            name = os.path.basename(cur)
+            parts.append(name)
+            ext = os.path.splitext(name)[1].lower()
+            if ext in ('.zarr', '.n5'):
+                break
+            cur = os.path.dirname(cur)
+        # Reverse so container comes first: e.g. "nisb-seed0-zarr3_labels_seg"
+        parts.reverse()
+        script_label = "_".join(parts) if parts else dataset_name
+        # Strip .zarr/.n5 extension from container name for cleaner filenames
+        script_label = script_label.replace('.zarr', '').replace('.n5', '')
         script_path = os.path.join(log_dir, f"chained_pyramid_{script_label}.sh")
 
         if verbose:
