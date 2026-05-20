@@ -79,11 +79,21 @@ def detect_input_mode(input_path: str, output_path: str = None) -> str:
     ext = os.path.splitext(input_path)[1].lower()
 
     if ext in SUPPORTED_EXTENSIONS:
+        # For .zarr/.n5 directories, check for OME-NGFF structure first
+        if ext in ('.zarr', '.n5') and os.path.isdir(input_path):
+            from ..utils.folder_discovery import is_ome_ngff_container
+            if is_ome_ngff_container(input_path):
+                return 'discovered_folder'
         return 'single_file'
     elif is_local_precomputed(input_path):
         # Local precomputed directory (has info file) - treat as single file
         return 'single_file'
     elif os.path.isdir(input_path) or input_path.endswith('/'):
+        # Check for OME-NGFF zarr containers (raw/ + labels/ subgroups)
+        # before the generic zarr check so they route to discovered_folder
+        from ..utils.folder_discovery import is_ome_ngff_container
+        if is_ome_ngff_container(input_path):
+            return 'discovered_folder'
         # Check for zarr/n5 marker files — directory IS the dataset
         if (os.path.exists(os.path.join(input_path, '.zarray')) or
             os.path.exists(os.path.join(input_path, '.zgroup')) or
@@ -1022,6 +1032,12 @@ def submit_discovered_folder_lsf(
         result['error'] = error
         print(f"\nError: {error}")
         return result
+
+    # Use OME-NGFF discovered keys if available (overrides defaults)
+    if image_ds and 'image_key' in image_ds.info:
+        image_key = image_ds.info['image_key']
+    if seg_ds and 'label_key' in seg_ds.info:
+        label_key = seg_ds.info['label_key']
 
     # Create log directory
     output_parent = os.path.dirname(os.path.abspath(output_path))

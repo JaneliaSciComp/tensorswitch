@@ -37,6 +37,12 @@ SEGMENTATION_DTYPES = {'uint64', 'int64', 'uint32', 'int32'}
 # Keywords in filename/path that indicate segmentation/label data
 SEGMENTATION_KEYWORDS = {'label', 'mask', 'seg', 'annotation', 'roi', 'binary', 'instance'}
 
+# Common OME-NGFF image group names at the root of a zarr container
+OME_NGFF_IMAGE_GROUPS = {'raw', 'data', 'image', 'images', 'img', 'em'}
+
+# Common OME-NGFF labels group names (may contain named label subgroups)
+OME_NGFF_LABELS_GROUPS = {'labels', 'label', 'seg'}
+
 # Supported file extensions for discovery
 DISCOVERABLE_EXTENSIONS = {'.tif', '.tiff', '.nd2', '.czi', '.ims', '.h5', '.hdf5'}
 
@@ -216,6 +222,85 @@ def is_n5_dataset(path: str) -> bool:
     if not os.path.isdir(path):
         return False
     return os.path.isfile(os.path.join(path, 'attributes.json'))
+
+
+def is_ome_ngff_container(path: str) -> bool:
+    """Check if path is a zarr container with OME-NGFF nested structure.
+
+    OME-NGFF containers have a root zarr group with recognizable subgroups
+    for image data (``raw/``, ``data/``, etc.) and/or labels (``labels/``).
+    Each subgroup must contain array data (directly or via ``s0/``).
+    """
+    if not os.path.isdir(path):
+        return False
+
+    # Must be a zarr group at root (not a bare array)
+    is_group = (
+        os.path.isfile(os.path.join(path, 'zarr.json'))
+        or os.path.isfile(os.path.join(path, '.zgroup'))
+    )
+    if not is_group:
+        return False
+
+    has_image = any(
+        os.path.isdir(os.path.join(path, name))
+        for name in OME_NGFF_IMAGE_GROUPS
+    )
+    has_labels = any(
+        os.path.isdir(os.path.join(path, name))
+        for name in OME_NGFF_LABELS_GROUPS
+    )
+
+    if not has_image and not has_labels:
+        return False
+
+    # Verify at least one subgroup actually contains array data
+    for name in OME_NGFF_IMAGE_GROUPS:
+        sub = os.path.join(path, name)
+        if os.path.isdir(sub) and _has_array_data(sub):
+            return True
+
+    for labels_name in OME_NGFF_LABELS_GROUPS:
+        labels_dir = os.path.join(path, labels_name)
+        if not os.path.isdir(labels_dir):
+            continue
+        # Labels group may contain arrays directly (e.g., seg/s0)
+        # or contain named subgroups (e.g., labels/seg/s0)
+        if _has_array_data(labels_dir):
+            return True
+        for entry in os.listdir(labels_dir):
+            entry_path = os.path.join(labels_dir, entry)
+            if os.path.isdir(entry_path) and _has_array_data(entry_path):
+                return True
+
+    return False
+
+
+def _has_array_data(path: str) -> bool:
+    """Check if a zarr group contains array data directly or via s0/."""
+    # Direct array (zarr3)
+    zj = os.path.join(path, 'zarr.json')
+    if os.path.isfile(zj):
+        try:
+            with open(zj, 'r') as f:
+                meta = json.load(f)
+            if meta.get('node_type') == 'array':
+                return True
+        except (json.JSONDecodeError, IOError):
+            pass
+
+    # Direct array (zarr2)
+    if os.path.isfile(os.path.join(path, '.zarray')):
+        return True
+
+    # Multiscale: s0/ or 0/ contains an array
+    for subdir in ['s0', '0']:
+        s0 = os.path.join(path, subdir)
+        if (os.path.isfile(os.path.join(s0, 'zarr.json'))
+                or os.path.isfile(os.path.join(s0, '.zarray'))):
+            return True
+
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -446,6 +531,83 @@ def _normalize_numpy_dtype(dtype_str: str) -> str:
 # Main discovery
 # ---------------------------------------------------------------------------
 
+def _discover_ome_ngff_container(path: str, verbose: bool = True) -> DiscoveryResult:
+    """Discover image and label datasets inside an OME-NGFF zarr container.
+
+    Scans for:
+    - Image groups: ``raw/``, ``data/``, ``image/``, etc. with multiscale arrays
+    - Label groups: ``labels/<name>/`` with multiscale arrays
+
+    Stores discovered group keys in the dataset ``info`` dict so that
+    downstream code (e.g. ``submit_discovered_folder_lsf``) can set the
+    correct ``--image-key`` and ``--label-key`` automatically.
+    """
+    result = DiscoveryResult()
+
+    if verbose:
+        print(f"Detected OME-NGFF zarr container: {os.path.basename(path)}")
+
+    # --- Image groups ---
+    for group_name in OME_NGFF_IMAGE_GROUPS:
+        group_path = os.path.join(path, group_name)
+        if not os.path.isdir(group_path):
+            continue
+
+        dataset = _read_zarr3_dataset(group_path) or _read_zarr2_dataset(group_path)
+        if dataset:
+            dataset.data_type = 'image'
+            dataset.name = group_name
+            dataset.info['image_key'] = group_name
+            _add_dataset(result, dataset, verbose)
+
+    # --- Label groups ---
+    # Labels may be structured as:
+    #   labels/<name>/s0  (nested: labels/seg/s0, labels/nuclei/s0)
+    #   label/s0          (direct: label group IS the array)
+    #   seg/s0            (direct: seg group IS the array)
+    for labels_name in OME_NGFF_LABELS_GROUPS:
+        labels_dir = os.path.join(path, labels_name)
+        if not os.path.isdir(labels_dir):
+            continue
+
+        # Check if this group directly contains array data (e.g., seg/s0)
+        direct_ds = _read_zarr3_dataset(labels_dir) or _read_zarr2_dataset(labels_dir)
+        if direct_ds:
+            direct_ds.data_type = 'segmentation'
+            direct_ds.name = labels_name
+            direct_ds.info['label_key'] = labels_name
+            _add_dataset(result, direct_ds, verbose)
+            continue
+
+        # Otherwise scan subgroups (e.g., labels/seg/s0, labels/nuclei/s0)
+        for entry in sorted(os.listdir(labels_dir)):
+            entry_path = os.path.join(labels_dir, entry)
+            if not os.path.isdir(entry_path):
+                continue
+            # Skip zarr metadata / hidden files
+            if entry.startswith('.') or entry == 'zarr.json':
+                continue
+
+            dataset = _read_zarr3_dataset(entry_path) or _read_zarr2_dataset(entry_path)
+            if dataset:
+                dataset.data_type = 'segmentation'
+                dataset.name = f"{labels_name}/{entry}"
+                dataset.info['label_key'] = entry
+                _add_dataset(result, dataset, verbose)
+
+    # Set primary datasets
+    if len(result.all_images) == 1:
+        result.image = result.all_images[0]
+    if len(result.all_segmentations) == 1:
+        result.segmentation = result.all_segmentations[0]
+
+    if verbose:
+        print(f"OME-NGFF discovery: {len(result.all_images)} image(s), "
+              f"{len(result.all_segmentations)} label(s)")
+
+    return result
+
+
 def _add_dataset(result: DiscoveryResult, dataset: DiscoveredDataset, verbose: bool):
     """Add a discovered dataset to the result."""
     if verbose:
@@ -531,6 +693,12 @@ def discover_datasets(
             print(f"Pattern discovery complete: {len(result.all_images)} images, "
                   f"{len(result.all_segmentations)} segmentations")
         return result
+
+    # Check if directory is an OME-NGFF zarr container (raw/ + labels/ subgroups)
+    # This must come BEFORE the single-dataset check because zarr containers
+    # would otherwise be classified as a single dataset.
+    if is_ome_ngff_container(directory):
+        return _discover_ome_ngff_container(directory, verbose)
 
     # Check if directory itself is a single dataset
     dataset = _try_read_directory_dataset(directory)
