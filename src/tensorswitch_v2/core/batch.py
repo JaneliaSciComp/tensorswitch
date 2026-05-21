@@ -965,6 +965,150 @@ def convert_discovered_folder(
     return result
 
 
+def _generate_coordinator_script(
+    steps: List[Dict],
+    project: str,
+    job_group: str,
+    log_dir: str,
+) -> str:
+    """Generate a coordinator bash script with sequential bsub -K steps.
+
+    Each step runs as a blocking LSF job (bsub -K).  The coordinator ensures
+    strict ordering, e.g.:
+        image s0 → image pyramid → label s0 → label pyramid.
+
+    Args:
+        steps: List of step dicts, each with keys:
+            name, job_name, worker_cmd (list), memory_gb, wall_time, cores.
+        project: LSF project name.
+        job_group: LSF job group path.
+        log_dir: Directory for per-step log files.
+
+    Returns:
+        Coordinator script content as a string.
+    """
+    lines = [
+        '#!/bin/bash',
+        'set -e',
+        '',
+        '# Auto-generated coordinator script for discovered folder conversion.',
+        '# Each step uses bsub -K (blocking) to ensure strict ordering.',
+        '',
+    ]
+
+    total = len(steps)
+    for i, step in enumerate(steps, 1):
+        job_name = step['job_name']
+        worker_cmd_str = shlex.join(step['worker_cmd'])
+        mem = step['memory_gb']
+        wt = step['wall_time']
+        nc = step['cores']
+        log_path = os.path.join(log_dir, f"output__{job_name}_%J.log")
+        err_path = os.path.join(log_dir, f"error__{job_name}_%J.log")
+
+        lines.append(f'echo "=== Step {i}/{total}: {step["name"]} ==="')
+        bsub_parts = [
+            'bsub', '-K',
+            '-J', shlex.quote(job_name),
+            '-n', str(nc),
+            '-W', wt,
+            '-M', f'{mem}GB',
+            '-R', shlex.quote(f'rusage[mem={mem * 1024}]'),
+            '-P', project,
+            '-g', job_group,
+            '-o', shlex.quote(log_path),
+            '-e', shlex.quote(err_path),
+            '/bin/bash', '-c', shlex.quote(worker_cmd_str),
+        ]
+        lines.append(' '.join(bsub_parts))
+        lines.append(f'echo "=== Step {i}/{total} complete ==="')
+        lines.append('')
+
+    lines.append('echo "=== All steps complete ==="')
+    return '\n'.join(lines) + '\n'
+
+
+def _build_s0_worker_cmd(
+    input_path: str,
+    output_path: str,
+    data_type: str,
+    output_format: str,
+    compression: str,
+    compression_level: int,
+    image_key: str,
+    label_key: str,
+    use_nested_structure: bool,
+    chunk_shape: Optional[str],
+    shard_shape: Optional[str],
+    add_to_existing: bool = False,
+) -> List[str]:
+    """Build the worker command list for an s0 conversion step."""
+    cmd = [
+        sys.executable, "-m", "tensorswitch_v2",
+        "--input", input_path,
+        "--output", output_path,
+        "--output_format", output_format,
+        "--data-type", data_type,
+        "--compression", compression,
+        "--compression_level", str(compression_level),
+        "--image-key", image_key,
+        "--label-key", label_key,
+    ]
+    if use_nested_structure:
+        cmd.append("--use-nested-structure")
+    else:
+        cmd.append("--no-nested-structure")
+    if chunk_shape:
+        cmd += ["--chunk_shape", chunk_shape]
+    if shard_shape:
+        cmd += ["--shard_shape", shard_shape]
+    if data_type == 'labels':
+        cmd.append("--is-label")
+        if add_to_existing:
+            cmd.append("--add-to-existing")
+    return cmd
+
+
+def _build_pyramid_worker_cmd(pyramid_input: str) -> List[str]:
+    """Build the worker command list for a pyramid (auto_multiscale) step.
+
+    The command runs auto_multiscale locally (no --submit) so the process
+    blocks until all pyramid levels are generated.
+    """
+    return [
+        sys.executable, "-m", "tensorswitch_v2",
+        "--input", pyramid_input,
+        "--auto_multiscale",
+    ]
+
+
+def _calculate_step_resources(
+    job_info: Dict,
+    output_format: str,
+    chunk_shape: Optional[str],
+    shard_shape: Optional[str],
+    memory_gb: Optional[int],
+    wall_time: Optional[str],
+    cores: Optional[int],
+) -> tuple:
+    """Calculate (memory_gb, wall_time, cores) for a conversion step."""
+    if memory_gb is not None and wall_time is not None and cores is not None:
+        return memory_gb, wall_time, cores
+
+    auto_mem, auto_wt, auto_cores = calculate_job_resources(
+        shape=job_info['shape'],
+        dtype=job_info['dtype'],
+        output_format=output_format,
+        chunk_shape_str=chunk_shape,
+        shard_shape_str=shard_shape,
+    )
+    return (
+        memory_gb if memory_gb is not None else auto_mem,
+        wall_time if wall_time is not None else auto_wt,
+        cores if cores is not None else auto_cores,
+    )
+
+
 def submit_discovered_folder_lsf(
     input_dir: str,
     output_path: str,
@@ -984,11 +1128,23 @@ def submit_discovered_folder_lsf(
     cores: Optional[int] = None,  # None = auto-calculate per dataset
     job_group: str = "/scicompsoft/chend/tensorstore",
     dry_run: bool = False,
+    auto_multiscale: bool = False,
 ) -> Dict:
     """
     Submit LSF jobs for discovered folder conversion.
 
-    Submits separate jobs for image and segmentation datasets if both are found.
+    Supports three modes:
+
+    1. **Full coordinator** (auto_multiscale=True): Generates a coordinator
+       bash script that sequences up to 4 steps via ``bsub -K`` (blocking):
+       image s0 → image pyramid → label s0 → label pyramid.
+
+    2. **Direct submission** (auto_multiscale=False): Submits separate jobs
+       for image and segmentation, chaining labels after image via
+       ``bsub -w done()``.
+
+    3. **Single dataset** (image_only or labels_only): Works with either
+       mode above, submitting only the relevant steps.
 
     Args:
         input_dir: Directory containing datasets to discover
@@ -1004,11 +1160,12 @@ def submit_discovered_folder_lsf(
         shard_shape: Shard shape string
         compression: Compression codec
         compression_level: Compression level
-        memory_gb: Memory per job
-        wall_time: Wall time per job
-        cores: Cores per job
+        memory_gb: Memory per job (None = auto-calculate)
+        wall_time: Wall time per job (None = auto-calculate)
+        cores: Cores per job (None = auto-calculate)
         job_group: LSF job group
         dry_run: Print commands without submitting
+        auto_multiscale: Use coordinator mode with pyramid generation
 
     Returns:
         Dict with job_ids for submitted jobs
@@ -1044,9 +1201,8 @@ def submit_discovered_folder_lsf(
     log_dir = os.path.join(output_parent, "output")
     os.makedirs(log_dir, exist_ok=True)
 
+    # Collect datasets to convert
     jobs_to_submit = []
-
-    # Prepare image job
     if image_ds and not labels_only:
         jobs_to_submit.append({
             'input_path': image_ds.path,
@@ -1055,8 +1211,6 @@ def submit_discovered_folder_lsf(
             'shape': image_ds.shape,
             'dtype': image_ds.dtype,
         })
-
-    # Prepare segmentation job
     if seg_ds and not image_only:
         jobs_to_submit.append({
             'input_path': seg_ds.path,
@@ -1066,15 +1220,130 @@ def submit_discovered_folder_lsf(
             'dtype': seg_ds.dtype,
         })
 
-    # Determine if both image and labels will be submitted to the same output.
-    # If so, chain the label job after image to avoid safe-write data loss.
     has_both = (
         any(j['data_type'] == 'image' for j in jobs_to_submit)
         and any(j['data_type'] == 'labels' for j in jobs_to_submit)
     )
-    image_job_id = None  # Track image job ID for chaining
 
-    # Submit jobs (image first if both present)
+    output_abs = os.path.abspath(output_path)
+    output_name = os.path.basename(output_abs.rstrip('/'))
+
+    # ----------------------------------------------------------------
+    # Mode 1: Full coordinator (auto_multiscale=True)
+    # Generates a bash script with bsub -K steps for strict ordering.
+    # ----------------------------------------------------------------
+    if auto_multiscale:
+        steps = []
+
+        for job_info in jobs_to_submit:
+            dt = job_info['data_type']
+            step_mem, step_wt, step_cores = _calculate_step_resources(
+                job_info, output_format, chunk_shape, shard_shape,
+                memory_gb, wall_time, cores,
+            )
+
+            # --- s0 conversion step ---
+            add_to_existing = (dt == 'labels' and has_both)
+            s0_cmd = _build_s0_worker_cmd(
+                input_path=job_info['input_path'],
+                output_path=output_abs,
+                data_type=dt,
+                output_format=output_format,
+                compression=compression,
+                compression_level=compression_level,
+                image_key=image_key,
+                label_key=label_key,
+                use_nested_structure=use_nested_structure,
+                chunk_shape=chunk_shape,
+                shard_shape=shard_shape,
+                add_to_existing=add_to_existing,
+            )
+            steps.append({
+                'name': f'{dt} s0 conversion',
+                'job_name': f'tsv2_{dt}_s0_{output_name}'[:64],
+                'worker_cmd': s0_cmd,
+                'memory_gb': step_mem,
+                'wall_time': step_wt,
+                'cores': step_cores,
+            })
+
+            # --- pyramid step ---
+            if dt == 'image':
+                pyramid_input = os.path.join(output_abs, image_key)
+            else:
+                pyramid_input = os.path.join(output_abs, 'labels', label_key)
+            pyramid_cmd = _build_pyramid_worker_cmd(pyramid_input)
+            steps.append({
+                'name': f'{dt} pyramid (auto_multiscale)',
+                'job_name': f'tsv2_{dt}_pyramid_{output_name}'[:64],
+                'worker_cmd': pyramid_cmd,
+                'memory_gb': step_mem,
+                'wall_time': step_wt,
+                'cores': step_cores,
+            })
+
+        # Generate coordinator script
+        script_content = _generate_coordinator_script(
+            steps, project, job_group, log_dir,
+        )
+        script_path = os.path.join(log_dir, f"coordinator_{output_name}.sh")
+        with open(script_path, 'w') as f:
+            f.write(script_content)
+        os.chmod(script_path, 0o775)
+
+        # Print plan
+        print(f"\n{'='*60}")
+        print(f"COORDINATOR: {len(steps)} sequential steps")
+        print(f"{'='*60}")
+        for i, step in enumerate(steps, 1):
+            print(f"  Step {i}: {step['name']}")
+            print(f"          {step['cores']} cores, {step['memory_gb']} GB, {step['wall_time']}")
+        print(f"  Script: {script_path}")
+        print(f"{'='*60}")
+
+        if dry_run:
+            print(f"\n[DRY RUN] Would submit coordinator. Script saved to:")
+            print(f"  {script_path}")
+            result['job_ids'].append('DRY_RUN')
+            return result
+
+        # Submit coordinator as lightweight LSF job
+        coord_job_name = f"tsv2_coordinator_{output_name}"[:64]
+        coord_log = os.path.join(log_dir, f"output__{coord_job_name}_%J.log")
+        coord_err = os.path.join(log_dir, f"error__{coord_job_name}_%J.log")
+
+        bsub_cmd = [
+            "bsub",
+            "-J", coord_job_name,
+            "-n", "1",
+            "-W", "12:00",
+            "-M", "4GB",
+            "-R", "rusage[mem=4096]",
+            "-P", project,
+            "-g", job_group,
+            "-o", coord_log,
+            "-e", coord_err,
+            "/bin/bash", script_path,
+        ]
+        submit_result = subprocess.run(bsub_cmd, capture_output=True, text=True)
+        if submit_result.returncode == 0:
+            print(f"\nCoordinator submitted: {submit_result.stdout.strip()}")
+            import re
+            match = re.search(r'Job <(\d+)>', submit_result.stdout)
+            if match:
+                result['job_ids'].append(match.group(1))
+        else:
+            print(f"\nCoordinator submission failed: {submit_result.stderr}")
+            result['error'] = submit_result.stderr
+
+        return result
+
+    # ----------------------------------------------------------------
+    # Mode 2: Direct submission (auto_multiscale=False)
+    # Submit individual jobs, chaining labels after image via bsub -w.
+    # ----------------------------------------------------------------
+    image_job_id = None
+
     for job_info in jobs_to_submit:
         job_name = f"tsv2_disc_{job_info['data_type']}_{job_info['name']}"
         job_name = job_name.replace(" ", "_")[:64]
@@ -1082,57 +1351,30 @@ def submit_discovered_folder_lsf(
         log_path = os.path.join(log_dir, f"output__{job_name}_%J.log")
         error_path = os.path.join(log_dir, f"error__{job_name}_%J.log")
 
-        # Calculate resources per-dataset if not explicitly provided
-        if memory_gb is None or wall_time is None or cores is None:
-            job_memory, job_wall_time, job_cores = calculate_job_resources(
-                shape=job_info['shape'],
-                dtype=job_info['dtype'],
-                output_format=output_format,
-                chunk_shape_str=chunk_shape,
-                shard_shape_str=shard_shape,
-            )
-            # Use calculated values unless user provided overrides
-            job_memory = memory_gb if memory_gb is not None else job_memory
-            job_wall_time = wall_time if wall_time is not None else job_wall_time
-            job_cores = cores if cores is not None else job_cores
-        else:
-            job_memory = memory_gb
-            job_wall_time = wall_time
-            job_cores = cores
+        job_memory, job_wall_time, job_cores = _calculate_step_resources(
+            job_info, output_format, chunk_shape, shard_shape,
+            memory_gb, wall_time, cores,
+        )
 
-        # Build worker command
-        worker_cmd = [
-            sys.executable, "-m", "tensorswitch_v2",
-            "--input", job_info['input_path'],
-            "--output", output_path,
-            "--output_format", output_format,
-            "--data-type", job_info['data_type'],
-            "--compression", compression,
-            "--compression_level", str(compression_level),
-            "--image-key", image_key,
-            "--label-key", label_key,
-        ]
-        if use_nested_structure:
-            worker_cmd.append("--use-nested-structure")
-        else:
-            worker_cmd.append("--no-nested-structure")
-        if chunk_shape:
-            worker_cmd += ["--chunk_shape", chunk_shape]
-        if shard_shape:
-            worker_cmd += ["--shard_shape", shard_shape]
-        if job_info['data_type'] == 'labels':
-            worker_cmd.append("--is-label")
-            # When both image and labels go to the same output, the label
-            # job must use --add-to-existing so it doesn't destroy the
-            # image data written by the (already-completed) image job.
-            if has_both:
-                worker_cmd.append("--add-to-existing")
-
-        # Convert to properly quoted shell command string
-        # This handles paths with spaces correctly when bsub creates its wrapper
+        add_to_existing = (
+            job_info['data_type'] == 'labels' and has_both
+        )
+        worker_cmd = _build_s0_worker_cmd(
+            input_path=job_info['input_path'],
+            output_path=output_path,
+            data_type=job_info['data_type'],
+            output_format=output_format,
+            compression=compression,
+            compression_level=compression_level,
+            image_key=image_key,
+            label_key=label_key,
+            use_nested_structure=use_nested_structure,
+            chunk_shape=chunk_shape,
+            shard_shape=shard_shape,
+            add_to_existing=add_to_existing,
+        )
         worker_cmd_str = shlex.join(worker_cmd)
 
-        # Build bsub command - use bash -c to run the quoted command
         bsub_cmd = [
             "bsub",
             "-J", job_name,
@@ -1146,8 +1388,7 @@ def submit_discovered_folder_lsf(
             "-e", error_path,
         ]
 
-        # Chain label job after image job so image conversion (+ pyramid)
-        # completes before labels start writing to the same container.
+        # Chain label job after image job
         if has_both and job_info['data_type'] == 'labels' and image_job_id:
             bsub_cmd.extend(["-w", f"done({image_job_id})"])
 
@@ -1177,7 +1418,6 @@ def submit_discovered_folder_lsf(
                 if match:
                     this_job_id = match.group(1)
                     result['job_ids'].append(this_job_id)
-                    # Remember image job ID for chaining
                     if job_info['data_type'] == 'image':
                         image_job_id = this_job_id
             else:

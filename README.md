@@ -951,6 +951,52 @@ pixi run python -m tensorswitch_v2 \
   --dry_run
 ```
 
+### OME-NGFF Container Conversion (Image + Labels)
+
+Convert zarr containers with nested OME-NGFF structure (e.g., `data.zarr` with `img/s0` + `labels/seg/s0`) in a single command. TensorSwitch auto-discovers image and label datasets and sequences the conversion with proper ordering.
+
+```bash
+# Convert container with auto-discovery + pyramid generation
+pixi run python -m tensorswitch_v2 \
+  -i /data/source.zarr \
+  -o /output/converted.zarr \
+  --auto_multiscale \
+  --submit -P scicompsoft
+
+# With custom chunk/shard shapes
+pixi run python -m tensorswitch_v2 \
+  -i /data/source.zarr \
+  -o /output/converted.zarr \
+  --chunk_shape 256,256,64 \
+  --shard_shape 512,512,512 \
+  --auto_multiscale \
+  --submit -P scicompsoft
+
+# Convert only image or only labels
+pixi run python -m tensorswitch_v2 \
+  -i /data/source.zarr \
+  -o /output/converted.zarr \
+  --image-only --auto_multiscale --submit -P scicompsoft
+
+# Dry run to preview the coordinator plan
+pixi run python -m tensorswitch_v2 \
+  -i /data/source.zarr \
+  -o /output/converted.zarr \
+  --auto_multiscale --submit -P scicompsoft --dry_run
+```
+
+**Coordinator pattern** (with `--auto_multiscale`): Submits a lightweight coordinator LSF job that sequences 4 blocking steps via `bsub -K`:
+1. Image s0 conversion
+2. Image pyramid (`--auto_multiscale`, runs locally)
+3. Label s0 conversion (`--add-to-existing`)
+4. Label pyramid (`--auto_multiscale`, runs locally)
+
+Each step blocks until completion before the next starts, ensuring no race conditions.
+
+**Direct submission** (without `--auto_multiscale`): Submits separate jobs for image and labels, with labels chained after image via `bsub -w done()`.
+
+**Recognized groups**: Image: `raw`, `data`, `image`, `images`, `img`, `em`. Labels: `labels`, `label`, `seg`.
+
 ### Rechunking (Same Format, Different Chunks)
 
 For rechunking existing data (e.g., N5 → N5 with different chunk shape), the **output path determines the behavior**:

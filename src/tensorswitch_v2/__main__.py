@@ -2036,7 +2036,7 @@ def main(argv=None):
         return
 
     # Detect batch mode (input is directory, not file)
-    if not args.batch_worker and not args.downsample and not args.auto_multiscale:
+    if not args.batch_worker and not args.downsample:
         from .core.batch import (
             detect_input_mode,
             BatchConverter,
@@ -2078,6 +2078,7 @@ def main(argv=None):
                     cores=args.cores,  # None = auto-calculate per dataset
                     job_group=args.job_group,
                     dry_run=args.dry_run,
+                    auto_multiscale=getattr(args, 'auto_multiscale', False),
                 )
                 if result.get('error'):
                     print(f"\nError: {result['error']}")

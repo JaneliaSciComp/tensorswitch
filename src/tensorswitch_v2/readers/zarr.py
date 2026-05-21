@@ -40,10 +40,14 @@ def _extract_voxel_sizes_from_multiscales(metadata, dataset_path, default_paths)
         axis_name = axis.get('name', '').lower()
         axis_units[axis_name] = axis.get('unit', 'micrometer')
 
-    # Find the dataset matching our path
+    # Find the dataset matching our path.
+    # Try exact match first, then basename match for nested paths like "img/s0".
     for ds in datasets:
         ds_path = ds.get('path', '')
-        if ds_path == dataset_path or (not dataset_path and ds_path in default_paths):
+        ds_basename = ds_path.rsplit('/', 1)[-1] if '/' in ds_path else ds_path
+        if (ds_path == dataset_path
+                or (not dataset_path and ds_path in default_paths)
+                or (not dataset_path and ds_basename in default_paths)):
             transforms = ds.get('coordinateTransformations', [])
             for t in transforms:
                 if t.get('type') == 'scale':
@@ -385,18 +389,31 @@ class Zarr2Reader(BaseReader):
                 if 'multiscales' in zattrs:
                     metadata['multiscales'] = zattrs['multiscales']
         except FileNotFoundError:
-            # Try root .zattrs for OME-NGFF
-            root_zattrs = os.path.join(self.path, '.zattrs')
-            try:
-                with open(root_zattrs, 'r') as f:
-                    root_attrs = json.load(f)
-                    metadata['root_attributes'] = root_attrs
-                    if 'multiscales' in root_attrs:
-                        metadata['multiscales'] = root_attrs['multiscales']
-            except Exception:
-                pass
+            pass
         except Exception as e:
             print(f"Warning: Failed to read .zattrs: {e}")
+
+        # If no multiscales found at array level, walk up parent directories.
+        # OME-NGFF multiscales live on the group .zattrs (e.g. img/.zattrs)
+        # or the container root .zattrs (e.g. data.zarr/.zattrs).
+        if 'multiscales' not in metadata:
+            current = os.path.dirname(os.path.abspath(base_path))
+            stop_at = os.path.dirname(os.path.abspath(self.path))
+            # Walk up at most 5 levels to avoid runaway traversal
+            for _ in range(5):
+                parent_zattrs = os.path.join(current, '.zattrs')
+                try:
+                    with open(parent_zattrs, 'r') as f:
+                        parent_attrs = json.load(f)
+                        if 'multiscales' in parent_attrs:
+                            metadata['multiscales'] = parent_attrs['multiscales']
+                            metadata['_multiscales_source'] = current
+                            break
+                except (FileNotFoundError, json.JSONDecodeError):
+                    pass
+                if current == stop_at or current == os.path.dirname(current):
+                    break
+                current = os.path.dirname(current)
 
         return metadata
 

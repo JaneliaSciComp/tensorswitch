@@ -370,6 +370,9 @@ def _read_zarr3_dataset(path: str) -> Optional[DiscoveredDataset]:
     except (json.JSONDecodeError, IOError):
         return None
 
+    # Resolve to the actual array directory (may be s0/ or 0/ subdirectory)
+    array_dir = os.path.dirname(meta_path)
+
     # zarr.json for arrays has node_type='array' and data_type/shape fields
     if meta.get('node_type') != 'array':
         # Could be a group zarr.json — check if s0/ has an array
@@ -380,10 +383,14 @@ def _read_zarr3_dataset(path: str) -> Optional[DiscoveredDataset]:
                 try:
                     with open(sub_path, 'r') as f:
                         meta = json.load(f)
+                    array_dir = os.path.dirname(sub_path)
                 except (json.JSONDecodeError, IOError):
                     return None
             else:
                 return None
+
+    # Count scales relative to the group (parent dir if we resolved to s0)
+    group_dir = path
 
     dtype = str(meta.get('data_type', 'unknown'))
     shape = meta.get('shape', [])
@@ -393,13 +400,13 @@ def _read_zarr3_dataset(path: str) -> Optional[DiscoveredDataset]:
     # Count scales by checking s0, s1, s2, ... subdirectories
     num_scales = 1
     for i in range(1, 20):
-        if os.path.isdir(os.path.join(path, f's{i}')):
+        if os.path.isdir(os.path.join(group_dir, f's{i}')):
             num_scales += 1
         else:
             break
 
     return DiscoveredDataset(
-        path=path,
+        path=array_dir,
         name=name,
         data_type=data_type,
         dtype=dtype,
@@ -421,6 +428,14 @@ def _read_zarr2_dataset(path: str) -> Optional[DiscoveredDataset]:
     except (json.JSONDecodeError, IOError):
         return None
 
+    # Resolve to the actual array directory (may be s0/ or 0/ subdirectory)
+    array_dir = os.path.dirname(meta_path)
+    # Count scales relative to the group (parent of s0), not array_dir
+    if array_dir != path:
+        group_dir = path
+    else:
+        group_dir = path
+
     dtype = str(meta.get('dtype', 'unknown'))
     # Strip numpy dtype prefix (e.g., '<u2' -> 'uint16')
     dtype = _normalize_numpy_dtype(dtype)
@@ -430,13 +445,13 @@ def _read_zarr2_dataset(path: str) -> Optional[DiscoveredDataset]:
 
     num_scales = 1
     for i in range(1, 20):
-        if os.path.isdir(os.path.join(path, f's{i}')):
+        if os.path.isdir(os.path.join(group_dir, f's{i}')):
             num_scales += 1
         else:
             break
 
     return DiscoveredDataset(
-        path=path,
+        path=array_dir,
         name=name,
         data_type=data_type,
         dtype=dtype,
