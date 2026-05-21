@@ -375,9 +375,14 @@ class DistributedConverter:
         except Exception:
             pass
 
-        # 3b. Auto-cap chunk/shard shape for frame-based DaskReader sources.
+        # 3b. Auto-cap chunk shape for frame-based DaskReader sources.
         # When native chunks have small dims (e.g., Z=1 for ND2 full-frame),
-        # cap output chunk/shard to native to prevent cache-thrashing reads.
+        # cap output *chunk* to native to prevent cache-thrashing reads.
+        # Shard shape is NOT capped — it's a write-side grouping with no
+        # read-side impact (reads go through virtual_chunked at
+        # read_chunk_shape granularity; the frame cache handles aggregation).
+        # Capping shard to native Z=1 created hundreds of thousands of tiny
+        # shard files for CZI/ND2 sources, causing OOM and poor performance.
         from ..readers.base import DaskReader
         if isinstance(self.reader, DaskReader):
             native = getattr(self.reader, '_native_chunk_shape', None)
@@ -407,25 +412,20 @@ class DistributedConverter:
                             print(f"  Auto-capped chunk shape for frame-based "
                                   f"source: {chunk_shape}")
 
+                    # Shard uses standard defaults (no capping to native).
                     if shard_shape is None:
-                        default_shard = build_default_shape(
-                            list(input_shape), axes_order, 1024)
-                        shard_shape = tuple(
-                            min(d, n) if n < a else d
-                            for d, n, a in zip(
-                                default_shard, native, input_shape))
+                        shard_shape = tuple(build_default_shape(
+                            list(input_shape), axes_order, 1024))
 
                     # Zarr3 requires shard dims to be multiples of chunk dims.
-                    # Auto-capping chunk and shard independently can produce
-                    # misaligned values (e.g. shard=640, chunk=256 → 640/256=2.5).
                     # Round shard down to nearest chunk multiple per dim.
                     if chunk_shape is not None and shard_shape is not None:
                         shard_shape = tuple(
                             max(c, (s // c) * c)
                             for s, c in zip(shard_shape, chunk_shape))
 
-                    if verbose and shard_shape is not None:
-                        print(f"  Auto-capped shard shape for frame-based "
+                    if verbose:
+                        print(f"  Shard shape for frame-based "
                               f"source: {shard_shape}")
 
         # 4. Apply spatial axis reorder (--axes_order)

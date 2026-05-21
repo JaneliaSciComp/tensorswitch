@@ -920,6 +920,14 @@ def estimate_resources(
         shape = tuple(store.shape)
         dtype_str = get_dtype_name(store.dtype)
 
+        # Extract axes_order from TensorStore domain labels
+        axes_order = None
+        if hasattr(store, 'domain') and hasattr(store.domain, 'labels'):
+            labels = store.domain.labels
+            if labels and all(labels):
+                axes_order = ['c' if l.lower() == 'channel' else l.lower()
+                              for l in labels]
+
         # Detect native source (TensorStore-backed = fast, file-decoded = slow)
         is_native = is_native_source(input_path)
 
@@ -932,6 +940,7 @@ def estimate_resources(
             output_format=output_format,
             chunk_shape_str=cs_str,
             shard_shape_str=ss_str,
+            axes_order=axes_order,
             no_sharding=no_sharding,
             is_native_source=is_native,
         )
@@ -940,7 +949,8 @@ def estimate_resources(
         cs = tuple(int(x) for x in chunk_shape.split(",")) if chunk_shape else None
         ss = tuple(int(x) for x in shard_shape.split(",")) if shard_shape else None
         est_shape, total_units = estimate_shard_info(
-            shape, dtype_str, output_format, cs, ss, no_sharding=no_sharding,
+            shape, dtype_str, output_format, cs, ss,
+            axes_order=axes_order, no_sharding=no_sharding,
         )
 
         dtype_bytes = np.dtype(dtype_str).itemsize
