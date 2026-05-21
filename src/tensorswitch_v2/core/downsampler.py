@@ -361,28 +361,10 @@ class Downsampler:
             output_spec = n5_store_spec(output_level_path)
         elif output_format == 'zarr2':
             # For Zarr2: use chunk_shape directly (no sharding)
-            # Convert compression to zarr2 format if needed
-            zarr2_compressor = source_compression
-            if zarr2_compressor and 'name' in zarr2_compressor:
-                # Convert zarr3 codec format to zarr2 compressor format
-                codec_name = zarr2_compressor['name']
-                codec_level = zarr2_compressor.get('configuration', {}).get('level', 5)
-                if codec_name == 'zstd':
-                    # Wrap zstd in blosc — bare zstd from TensorStore is
-                    # incompatible with numcodecs/zarr-python 2.x
-                    zarr2_compressor = {
-                        'id': 'blosc', 'cname': 'zstd',
-                        'clevel': codec_level, 'shuffle': 1, 'blocksize': 0
-                    }
-                else:
-                    zarr2_compressor = {'id': codec_name, 'level': codec_level}
-            elif zarr2_compressor and zarr2_compressor.get('id') == 'zstd':
-                # Source is zarr2 with bare zstd — wrap in blosc
-                zarr2_compressor = {
-                    'id': 'blosc', 'cname': 'zstd',
-                    'clevel': zarr2_compressor.get('level', 5),
-                    'shuffle': 1, 'blocksize': 0
-                }
+            # Normalize compressor to TensorStore-compatible format (e.g., bare
+            # zstd → blosc-wrapped zstd, zarr3 codec format → zarr2 format)
+            from tensorswitch_v2.utils.metadata_utils import normalize_zarr2_compressor_for_tensorstore
+            zarr2_compressor = normalize_zarr2_compressor_for_tensorstore(source_compression)
 
             # For Zarr2, use original dtype from source metadata (e.g., ">u2" not "uint16")
             # TensorStore's zarr driver requires the endian-prefixed format

@@ -822,9 +822,11 @@ class PyramidPlanner:
             }
             zarr_dtype = dtype_map.get(dtype_str, '<u2')
 
-        # Use compression from level 0, or default (blosc(zstd) for numcodecs compatibility)
-        if compressor is None:
-            compressor = {"id": "blosc", "cname": "zstd", "clevel": 5, "shuffle": 1, "blocksize": 0}
+        # Normalize compressor to TensorStore-compatible format.
+        # numcodecs raw zstd {"id": "zstd", "level": N} is not understood by
+        # TensorStore's zarr2 driver — must be blosc-wrapped.
+        from tensorswitch_v2.utils.metadata_utils import normalize_zarr2_compressor_for_tensorstore
+        compressor = normalize_zarr2_compressor_for_tensorstore(compressor)
 
         # Write .zarray
         zarray = {

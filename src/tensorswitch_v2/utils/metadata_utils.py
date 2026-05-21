@@ -321,6 +321,66 @@ def extract_compression_from_zarr2_metadata(zarray: dict) -> Optional[dict]:
     return zarray.get('compressor')
 
 
+def normalize_zarr2_compressor_for_tensorstore(compressor: Optional[dict]) -> dict:
+    """
+    Normalize a zarr2 compressor dict to a format TensorStore understands.
+
+    TensorStore's zarr2 driver does not support bare numcodecs compressors like
+    {"id": "zstd", "level": 5}. It requires blosc-wrapped equivalents like
+    {"id": "blosc", "cname": "zstd", "clevel": 5, "shuffle": 1, "blocksize": 0}.
+
+    This function translates numcodecs-style compressor dicts to TensorStore-
+    compatible blosc-wrapped equivalents. It is used by both the pyramid pre-
+    creation step and the downsample step to ensure consistent compressor
+    metadata across all pyramid levels.
+
+    Args:
+        compressor: Zarr2 compressor dict from .zarray metadata, or None.
+                    Examples:
+                    - {"id": "zstd", "level": 5} (numcodecs raw zstd)
+                    - {"id": "blosc", "cname": "zstd", "clevel": 5, ...} (already OK)
+                    - {"id": "gzip", "level": 6} (gzip, pass through)
+                    - {"name": "zstd", "configuration": {"level": 5}} (zarr3 format)
+                    - None
+
+    Returns:
+        TensorStore-compatible compressor dict. Defaults to blosc(zstd, level=5)
+        if input is None.
+    """
+    default = {"id": "blosc", "cname": "zstd", "clevel": 5, "shuffle": 1, "blocksize": 0}
+
+    if compressor is None:
+        return default
+
+    # Handle zarr3-style codec format {"name": "zstd", "configuration": {"level": N}}
+    if 'name' in compressor:
+        codec_name = compressor['name']
+        codec_level = compressor.get('configuration', {}).get('level', 5)
+        if codec_name == 'zstd':
+            return {
+                "id": "blosc", "cname": "zstd",
+                "clevel": codec_level, "shuffle": 1, "blocksize": 0
+            }
+        return {"id": codec_name, "level": codec_level}
+
+    comp_id = compressor.get('id')
+
+    # Bare zstd from numcodecs — wrap in blosc for TensorStore
+    if comp_id == 'zstd':
+        return {
+            "id": "blosc", "cname": "zstd",
+            "clevel": compressor.get('level', 5),
+            "shuffle": 1, "blocksize": 0
+        }
+
+    # Already blosc-wrapped or gzip — pass through as-is
+    if comp_id in ('blosc', 'gzip'):
+        return compressor
+
+    # Unknown compressor — return as-is and let TensorStore handle it
+    return compressor
+
+
 # ============================================================================
 # OME-XML and Channel Metadata
 # ============================================================================
