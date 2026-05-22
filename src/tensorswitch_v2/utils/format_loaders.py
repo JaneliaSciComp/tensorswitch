@@ -12,9 +12,37 @@ This module contains functions to load various microscopy file formats:
 All voxel sizes are returned in nanometers (standard unit).
 """
 
+import atexit
 import os
+import threading
 import numpy as np
 import dask.array as da
+
+# Process-level cache of open CZI readers.
+# Opening a CZI file parses the full subblock directory (tens of MB for large
+# files with 100K+ planes), which takes seconds on NFS. Re-opening per plane
+# read multiplies that cost by the number of planes and causes jobs to hang.
+_czi_reader_cache: dict = {}
+_czi_reader_locks: dict = {}
+_czi_cache_init_lock = threading.Lock()
+
+
+def _get_czidoc(czi_file: str):
+    """Return a cached (czidoc, read_lock) pair for the given CZI path.
+
+    The file is opened once per process; subsequent calls return the cached
+    reader without re-parsing the subblock directory.  A per-file Lock
+    serialises concurrent reads because czidoc.read() is not thread-safe.
+    """
+    with _czi_cache_init_lock:
+        if czi_file not in _czi_reader_cache:
+            from pylibCZIrw import czi as _czi_mod
+            ctx = _czi_mod.open_czi(czi_file)
+            czidoc = ctx.__enter__()
+            atexit.register(ctx.__exit__, None, None, None)
+            _czi_reader_cache[czi_file] = czidoc
+            _czi_reader_locks[czi_file] = threading.Lock()
+    return _czi_reader_cache[czi_file], _czi_reader_locks[czi_file]
 
 
 def convert_to_nanometers(value: float, unit: str) -> float:
@@ -618,19 +646,20 @@ def extract_ims_metadata(ims_file):
 
 
 def _read_czi_plane(czi_file, plane_dict, y_size, x_size):
-    """
-    Read a single plane from CZI file.
+    """Read a single plane from a CZI file using the process-level cached reader.
 
-    This function opens and closes the file for each read, which is necessary
-    for dask delayed execution where each task runs independently.
+    The first call for a given path opens the file and caches the reader.
+    Subsequent calls reuse the cached reader, avoiding repeated subblock-
+    directory parsing (which dominates wall time for large CZI files on NFS).
+    Reads are serialised with a per-file Lock because czidoc.read() is not
+    thread-safe.
     """
-    from pylibCZIrw import czi
-
-    with czi.open_czi(czi_file) as czidoc:
+    czidoc, lock = _get_czidoc(czi_file)
+    with lock:
         result = czidoc.read(plane=plane_dict)
         if result.ndim == 3 and result.shape[2] == 1:
             result = result[:, :, 0]
-        return result
+        return result.copy()
 
 
 def load_czi_stack(czi_file, view_index=None):
