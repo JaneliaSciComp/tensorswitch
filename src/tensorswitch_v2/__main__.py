@@ -2046,6 +2046,17 @@ def main(argv=None):
 
         input_mode = detect_input_mode(args.input, output_path=args.output)
 
+        # Pyramid-only intent takes precedence over discovered_folder routing.
+        # When --auto_multiscale is used on an existing OME-NGFF zarr without
+        # --output (e.g., the pyramid coordinator job), _is_pyramid_only_intent
+        # returns True and we should fall through to the pyramid-only handler
+        # at line ~2196 instead of calling submit_discovered_folder_lsf with
+        # output_path=None.
+        if (input_mode == 'discovered_folder'
+                and getattr(args, 'auto_multiscale', False)
+                and _is_pyramid_only_intent(args.input, args.output)):
+            input_mode = 'single_file'
+
         if input_mode == 'discovered_folder':
             # Discovered folder mode: convert image and/or segmentation datasets
             # to a single zarr with nested structure
