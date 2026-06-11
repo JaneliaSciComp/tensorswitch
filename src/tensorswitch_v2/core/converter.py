@@ -526,11 +526,16 @@ class DistributedConverter:
             try:
                 read_domain = chunk_domain
                 write_domain = chunk_domain
+                _writer_handled_reorder = False
                 if hasattr(self.writer, 'get_input_domain_from_output'):
                     read_domain = self.writer.get_input_domain_from_output(chunk_domain)
+                    # Track if the writer already applied the spatial permutation
+                    # (get_input_domain_from_output handles it when _transpose_order is set)
+                    _writer_handled_reorder = getattr(self.writer, '_transpose_order', None) is not None
 
                 # Inverse-transpose read domain for --axes_order spatial reorder
-                if _inverse_spatial_perm is not None:
+                # Skip if writer's get_input_domain_from_output already handled it
+                if _inverse_spatial_perm is not None and not _writer_handled_reorder:
                     if hasattr(read_domain, 'origin'):
                         slices = []
                         for i in range(read_domain.ndim):
@@ -564,7 +569,8 @@ class DistributedConverter:
                     data = np.squeeze(data, axis=self._squeeze_axis)
 
                 # Transpose data for --axes_order spatial reorder
-                if spatial_transpose:
+                # Skip if writer already handles transpose in write_chunk (_transpose_order set)
+                if spatial_transpose and not _writer_handled_reorder:
                     data = np.ascontiguousarray(np.transpose(data, spatial_transpose))
 
                 # Cast dtype if requested
