@@ -854,7 +854,9 @@ def extract_precomputed_metadata(path, scale_index=0):
                     kvstore['path'] = kvstore['path'].rstrip('/') + '/info'
                 spec = {'driver': 'json', 'kvstore': kvstore}
                 result = ts.open(spec).result()
-                info = result.read().result()
+                raw = result.read().result()
+                # TensorStore JSON driver returns numpy array with dtype=object
+                info = raw.item() if hasattr(raw, 'item') else raw
         except Exception as e:
             print(f"Warning: Failed to read remote precomputed info: {e}")
             return None, None
