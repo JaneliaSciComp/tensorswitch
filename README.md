@@ -49,7 +49,7 @@ A high-performance microscopy data conversion tool with TensorStore as the unifi
 - **LSF Cluster Support**: Auto-calculated resources (memory, wall time, cores)
 - **Preserve Source Layout**: Maintains source dimensionality (3D/4D/5D) and axis order per OME-NGFF RFC-3
 - **Compression**: zstd compression with configurable levels
-- **Frame-Based Optimization**: Auto-capped chunk/shard defaults for large ND2/TIFF files with frame-level read cache (63x speedup)
+- **Frame-Based Optimization**: Auto-capped chunk defaults for large ND2/TIFF/IMS/CZI files with frame-level read cache (63x speedup)
 - **Remote Sources**: Read from GCS, S3, HTTP URLs with optional bounding box subvolume extraction
 - **Software Attribution**: All output metadata includes `_software` field with TensorSwitch version and GitHub link
 - **OME XML Export**: Writes `OME/METADATA.ome.xml` (or `.czi.xml`) as standalone file for easy access and tool compatibility
@@ -57,6 +57,7 @@ A high-performance microscopy data conversion tool with TensorStore as the unifi
 - **Dtype Casting**: Convert output to a different numeric dtype (e.g., float32 → int16) with upfront range validation and per-chunk clipping safety
 - **Safe Write**: Writes to `.tmp` during conversion and renames on completion — interrupted jobs never leave corrupted output
 - **Chunk Write Retry**: Automatic retry with exponential backoff (3 attempts) for transient I/O errors on network storage — failed chunks are tracked and the job fails with a summary of failed indices
+- **Add to Existing Container**: `--add-to-existing` safely adds labels to a container that already has image data (subgroup-level safe write to `labels.tmp/`) — no risk of overwriting existing `raw/` data. Supported in CLI, MCP, and LSF `--submit`.
 - **MCP Server**: AI/agent integration via Model Context Protocol (Claude Code, LLM agents)
 
 ---
@@ -1111,7 +1112,7 @@ info         → Precomputed
 - **Zarr3 sharded** (default): inner chunk = 64, shard = 1024
 - **Zarr3 non-sharded / Zarr2**: adaptive spatial chunk based on dataset size:
   - < 20 GB → 64, 20–100 GB → 128, > 100 GB → 256
-- **Frame-based source auto-cap**: For ND2/TIFF/IMS/HDF5/CZI files where native chunks have small dims (e.g., Z=1 for full-frame ND2), default chunk and shard shapes are automatically capped to native dims. This prevents cache-thrashing defaults like shard Z=1024 on a Z=157 dataset. No `--chunk_shape` needed for most cases.
+- **Frame-based source auto-cap**: For ND2/TIFF/IMS/HDF5/CZI files where native chunks have small dims (e.g., Z=1 for full-frame ND2), default chunk shapes are automatically capped to native dims. Shard shapes use standard defaults (non-spatial=1, spatial=1024) and are not capped — shard size has no read-side impact since reads go through frame-level cache. No `--chunk_shape` needed for most cases.
 
 ### LSF Resource Auto-Calculation
 
@@ -1215,11 +1216,12 @@ TensorSwitch v2 includes an MCP (Model Context Protocol) server that allows Clau
 |------|-------------|
 | `inspect_dataset` | Returns shape, dtype, voxel sizes, axes, pyramid levels, OME metadata. Supports remote S3/HTTP URLs with auto-discovery: groups with OME-NGFF multiscales auto-resolve; S3 containers use bounded directory listing (BFS, max 4 levels) to find arrays automatically; non-S3 URLs require full array path. |
 | `discover_datasets` | Scans a directory for image/segmentation layers. Supports `pattern` (e.g., `"*.tif"`) and `recursive` for finding proprietary files (TIFF, ND2, CZI, IMS, HDF5) in subdirectories. |
-| `convert` | Converts between formats with full CLI parity. Supports `auto_multiscale` (one-step convert + pyramid), `omero` channel metadata (default ON, opt out with `omero=False`), `no_translation`, `force_order` (C/F memory layout), remote S3/HTTP with `--bbox`. 2 GB size guard — larger datasets redirect to `submit_job`. |
+| `convert` | Converts between formats with full CLI parity. Supports `auto_multiscale` (one-step convert + pyramid), `omero` channel metadata (default ON, opt out with `omero=False`), `no_translation`, `force_order` (C/F memory layout), remote S3/HTTP with `--bbox`, `add_to_existing` (safe label addition to existing containers). 2 GB size guard — larger datasets redirect to `submit_job`. |
+| `upsample_to_isotropic` | Resamples anisotropic data to isotropic resolution using `scipy.ndimage.zoom`. Supports zarr2, zarr3, zarr3+sharding output via TensorStore backend. Safe write, auto-pyramid, size guard. |
 | `generate_pyramid` | Creates multiscale pyramid locally with chained downsampling, anisotropic handling, optional `no_translation`, and custom `per_level_factors` |
 | `list_formats` | Lists all supported input/output formats by tier |
 | `estimate_resources` | Estimates memory, wall time, and cores needed for a conversion |
-| `submit_job` | Submits conversion to LSF cluster. With `auto_multiscale`: auto-detects whether to run pyramid-only or conversion + dependent pyramid coordinator. Supports `force_order`. |
+| `submit_job` | Submits conversion to LSF cluster. With `auto_multiscale`: auto-detects whether to run pyramid-only or conversion + dependent pyramid coordinator. Supports `force_order`, `add_to_existing`. |
 | `check_job_status` | Checks LSF job status (supports multiple job IDs) |
 
 ### Setup (Claude Code)
