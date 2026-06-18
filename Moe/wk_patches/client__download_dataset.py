@@ -1,0 +1,191 @@
+import logging
+import time
+from typing import TypeVar, cast
+
+import httpx
+import numpy as np
+from rich.progress import track
+from upath import UPath
+
+from ..dataset import Dataset
+from ..dataset.defaults import DEFAULT_CHUNK_SHAPE, DEFAULT_DATA_FORMAT
+from ..dataset.layer.abstract_layer import LayerCategoryType
+from ..dataset_properties import DataFormat, LayerProperties
+from ..geometry import BoundingBox, Mag, Vec3Int
+from .api_client.models import ApiUnusableDataSource
+from .context import _get_context
+
+logger = logging.getLogger(__name__)
+
+_MAX_RETRIES = 5
+_INITIAL_BACKOFF_SEC = 5
+_MAX_BACKOFF_SEC = 120
+
+
+T = TypeVar("T")
+
+
+_DOWNLOAD_CHUNK_SHAPE = Vec3Int(512, 512, 512)
+
+
+def download_dataset(
+    dataset_id: str,
+    *,
+    sharing_token: str | None = None,
+    bbox: BoundingBox | None = None,
+    layers: list[str] | None = None,
+    mags: list[Mag] | None = None,
+    path: UPath | str | None = None,
+    exist_ok: bool = False,
+    data_format: DataFormat | None = None,
+) -> Dataset:
+    context = _get_context()
+    api_client = context.api_client
+    api_dataset = api_client.dataset_info(
+        dataset_id=dataset_id, sharing_token=sharing_token
+    )
+
+    datastore_client = context.get_datastore_api_client(api_dataset.data_store.url)
+
+    download_path = (
+        UPath(f"{api_dataset.name}-{api_dataset.id}") if path is None else UPath(path)
+    )
+    if download_path.exists():
+        logger.warning(f"{download_path} already exists, skipping download.")
+        return Dataset.open(download_path)
+    if isinstance(api_dataset.data_source, ApiUnusableDataSource):
+        raise RuntimeError(
+            f"The dataset {api_dataset.id} is unusable {api_dataset.data_source.status}"
+        )
+    api_data_layers = api_dataset.data_source.data_layers
+    scale = api_dataset.data_source.scale
+
+    dataset = Dataset(
+        download_path,
+        name=api_dataset.name,
+        voxel_size_with_unit=scale,
+        exist_ok=exist_ok,
+    )
+    for layer_name in layers or [i.name for i in api_data_layers]:
+        matching_api_data_layers = [i for i in api_data_layers if i.name == layer_name]
+        assert len(matching_api_data_layers) > 0, (
+            f"The provided layer name {layer_name} could not be found in the requested dataset."
+        )
+        assert len(matching_api_data_layers) == 1, (
+            f"The provided layer name {layer_name} was found multiple times in the requested dataset."
+        )
+        api_data_layer: LayerProperties = matching_api_data_layers[0]
+        category = cast(LayerCategoryType, api_data_layer.category)
+        layer = dataset.add_layer(
+            layer_name=layer_name,
+            category=category,
+            data_format=data_format or DEFAULT_DATA_FORMAT,
+            dtype=api_data_layer.dtype_np,
+            num_channels=api_data_layer.bounding_box.size.c,
+            largest_segment_id=getattr(api_data_layer, "largest_segment_id", None),
+        )
+
+        layer.default_view_configuration = api_data_layer.default_view_configuration
+
+        if bbox is None:
+            layer.bounding_box = api_data_layer.bounding_box
+        else:
+            assert isinstance(bbox, BoundingBox), (
+                f"Expected a BoundingBox object for the bbox parameter but got {type(bbox)}"
+            )
+            layer.bounding_box = bbox
+        if mags is None:
+            mags = [mag_view.mag for mag_view in api_data_layer.mags]
+        for mag in mags:
+            mag_view = layer.get_or_add_mag(
+                mag,
+                compress=True,
+                chunk_shape=DEFAULT_CHUNK_SHAPE,
+                shard_shape=_DOWNLOAD_CHUNK_SHAPE
+                if data_format != DataFormat.Zarr
+                else DEFAULT_CHUNK_SHAPE,
+            )
+            aligned_bbox = layer.bounding_box.align_with_mag(mag, ceil=True)
+            download_chunk_shape_in_mag = _DOWNLOAD_CHUNK_SHAPE * mag.to_vec3_int()
+            chunks = list(
+                aligned_bbox.chunk(
+                    download_chunk_shape_in_mag, download_chunk_shape_in_mag
+                )
+            )
+            total_chunks = len(chunks)
+            print(
+                f"Downloading layer={layer.name} mag={mag}: "
+                f"{total_chunks} chunks",
+                flush=True,
+            )
+            for chunk_idx, chunk in enumerate(chunks, 1):
+                chunk_in_mag = chunk.in_mag(mag)
+                if chunk_idx % 5 == 1 or chunk_idx == total_chunks:
+                    print(
+                        f"  chunk {chunk_idx}/{total_chunks} "
+                        f"at {chunk.topleft}",
+                        flush=True,
+                    )
+                backoff = _INITIAL_BACKOFF_SEC
+                for attempt in range(1, _MAX_RETRIES + 1):
+                    try:
+                        chunk_bytes, missing_buckets = datastore_client.dataset_get_raw_data(
+                            dataset_id=dataset_id,
+                            data_layer_name=layer_name,
+                            mag=mag.to_long_layer_name(),
+                            sharing_token=sharing_token,
+                            x=chunk.topleft.x,
+                            y=chunk.topleft.y,
+                            z=chunk.topleft.z,
+                            width=chunk_in_mag.size.x,
+                            height=chunk_in_mag.size.y,
+                            depth=chunk_in_mag.size.z,
+                        )
+                        if missing_buckets not in (None, "[]"):
+                            raise ValueError(
+                                f"Missing buckets: {missing_buckets}"
+                            )
+                        if len(chunk_bytes) == 0:
+                            raise ValueError("Empty response (0 bytes)")
+                        expected_bytes = (
+                            layer.num_channels
+                            * chunk_in_mag.size.x
+                            * chunk_in_mag.size.y
+                            * chunk_in_mag.size.z
+                            * layer.dtype.itemsize
+                        )
+                        if len(chunk_bytes) != expected_bytes:
+                            raise ValueError(
+                                f"Size mismatch: got {len(chunk_bytes)} bytes, "
+                                f"expected {expected_bytes}"
+                            )
+                        break  # success
+                    except (
+                        httpx.TransportError,
+                        httpx.HTTPStatusError,
+                        ValueError,
+                        AssertionError,
+                        OSError,
+                    ) as e:
+                        if attempt == _MAX_RETRIES:
+                            msg = (
+                                f"[RETRY FAILED] Chunk at {chunk.topleft} "
+                                f"FAILED after {_MAX_RETRIES} attempts: {e}"
+                            )
+                            print(msg, flush=True)
+                            logger.error(msg)
+                            raise
+                        msg = (
+                            f"[RETRY {attempt}/{_MAX_RETRIES}] Chunk at "
+                            f"{chunk.topleft}: {type(e).__name__}: {e} "
+                            f"(retry in {backoff}s)"
+                        )
+                        print(msg, flush=True)
+                        logger.warning(msg)
+                        time.sleep(backoff)
+                        backoff = min(backoff * 2, _MAX_BACKOFF_SEC)
+                data = np.frombuffer(chunk_bytes, dtype=layer.dtype).reshape(
+                    layer.num_channels, *chunk_in_mag.size, order="F"
+                )
+                mag_view.write(data, absolute_offset=chunk.topleft)
+    return dataset

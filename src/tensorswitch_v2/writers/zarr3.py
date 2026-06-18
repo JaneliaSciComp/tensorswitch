@@ -61,7 +61,8 @@ class Zarr3Writer(BaseWriter):
         use_nested_structure: bool = True,
         data_type: str = "image",
         image_key: str = "raw",
-        label_key: str = "segmentation"
+        label_key: str = "segmentation",
+        labels_container: str = "labels",
     ):
         """
         Initialize Zarr3 writer.
@@ -78,6 +79,8 @@ class Zarr3Writer(BaseWriter):
             data_type: 'image' or 'labels' - determines output subdirectory
             image_key: Name for image group (default: "raw")
             label_key: Name for label image (default: "segmentation")
+            labels_container: Name for labels container dir (default: "labels").
+                Use "labels.tmp" with --add-to-existing for safe subgroup writes.
         """
         super().__init__(output_path)
         self.use_sharding = use_sharding
@@ -104,7 +107,8 @@ class Zarr3Writer(BaseWriter):
             from ..utils.ome_structure import OMEStructure, OMEStructureConfig
             config = OMEStructureConfig(
                 image_key=image_key,
-                label_name=label_key
+                labels_container=labels_container,
+                label_name=label_key,
             )
             self._ome_structure = OMEStructure(output_path, config)
 
@@ -705,7 +709,8 @@ class Zarr3Writer(BaseWriter):
             # Write labels container metadata
             self._ome_structure.write_labels_container_metadata()
 
-            # Write root metadata (labels only, no image multiscales)
+            # Write root metadata (labels only, include label multiscales
+            # so viewers can discover the data at root level)
             self._ome_structure.write_root_metadata(
                 image_multiscales=None,
                 has_labels=True,
@@ -714,6 +719,7 @@ class Zarr3Writer(BaseWriter):
                 source_format=source_format,
                 no_ome_meta_export=no_ome_meta_export,
                 no_ome_xml_attr=no_ome_xml_attr,
+                label_multiscales=multiscales,
             )
 
             print(f"Wrote nested labels metadata to {self.output_path}")
@@ -725,7 +731,7 @@ class Zarr3Writer(BaseWriter):
                 omero=omero_block,
             )
 
-            # Write root metadata (image only)
+            # Write root metadata (image only, no omero — kept at raw/ level)
             self._ome_structure.write_root_metadata(
                 image_multiscales=multiscales,
                 has_labels=False,
@@ -734,7 +740,6 @@ class Zarr3Writer(BaseWriter):
                 source_format=source_format,
                 no_ome_meta_export=no_ome_meta_export,
                 no_ome_xml_attr=no_ome_xml_attr,
-                omero=omero_block,
             )
 
             print(f"Wrote nested image metadata to {self.output_path}")

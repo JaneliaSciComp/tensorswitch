@@ -67,7 +67,8 @@ class Zarr2Writer(BaseWriter):
         use_nested_structure: bool = False,
         data_type: str = 'image',
         image_key: str = 'raw',
-        label_key: str = 'segmentation'
+        label_key: str = 'segmentation',
+        labels_container: str = 'labels',
     ):
         """
         Initialize Zarr2 writer.
@@ -82,6 +83,8 @@ class Zarr2Writer(BaseWriter):
             data_type: Type of data being written ('image' or 'labels')
             image_key: Name for image group in nested structure
             label_key: Name for label image in nested structure
+            labels_container: Name for labels container dir (default: "labels").
+                Use "labels.tmp" with --add-to-existing for safe subgroup writes.
         """
         super().__init__(output_path)
         self.compression = compression
@@ -105,7 +108,8 @@ class Zarr2Writer(BaseWriter):
             from ..utils.ome_structure import OMEStructureZarr2, OMEStructureZarr2Config
             config = OMEStructureZarr2Config(
                 image_key=image_key,
-                label_name=label_key
+                labels_container=labels_container,
+                label_name=label_key,
             )
             self._ome_structure = OMEStructureZarr2(output_path, config)
 
@@ -307,25 +311,34 @@ class Zarr2Writer(BaseWriter):
         Build compressor configuration based on compression type.
 
         Different compressors have different parameter names:
-        - zstd: uses 'level'
+        - zstd: wrapped in blosc (TensorStore bare zstd is incompatible with numcodecs)
         - blosc: uses 'clevel', 'cname', 'shuffle', 'blocksize'
         - gzip: uses 'level'
 
         Returns:
             dict: Compressor configuration for TensorStore
         """
-        if self.compression == 'blosc':
-            # Blosc uses different parameter names
-            # Default to lz4 codec with shuffle enabled (standard for OME-NGFF)
+        if self.compression == 'zstd':
+            # Wrap zstd in blosc — TensorStore writes bare zstd frames without
+            # Frame_Content_Size, which numcodecs/zarr-python 2.x cannot decode.
+            # Blosc includes decompressed size in its own header, avoiding this.
             return {
                 'id': 'blosc',
-                'cname': 'lz4',
+                'cname': 'zstd',
+                'clevel': self.compression_level,
+                'shuffle': 1,
+                'blocksize': 0
+            }
+        elif self.compression == 'blosc':
+            return {
+                'id': 'blosc',
+                'cname': 'zstd',
                 'clevel': self.compression_level,
                 'shuffle': 1,
                 'blocksize': 0
             }
         else:
-            # zstd, gzip, and others use 'level'
+            # gzip and others use 'level'
             return {
                 'id': self.compression,
                 'level': self.compression_level
@@ -735,7 +748,8 @@ class Zarr2Writer(BaseWriter):
             # Write labels container metadata
             self._ome_structure.write_labels_container_metadata()
 
-            # Write root metadata (labels only)
+            # Write root metadata (labels only, include label multiscales
+            # so viewers can discover the data at root level)
             self._ome_structure.write_root_metadata(
                 image_multiscales=None,
                 has_labels=True,
@@ -744,6 +758,7 @@ class Zarr2Writer(BaseWriter):
                 source_format=source_format,
                 no_ome_meta_export=no_ome_meta_export,
                 no_ome_xml_attr=no_ome_xml_attr,
+                label_multiscales=multiscales,
             )
 
             print(f"Wrote nested labels metadata to {self.output_path}")
@@ -755,7 +770,7 @@ class Zarr2Writer(BaseWriter):
                 omero=omero_block,
             )
 
-            # Write root metadata (image only)
+            # Write root metadata (image only, no omero — kept at raw/ level)
             self._ome_structure.write_root_metadata(
                 image_multiscales=multiscales,
                 has_labels=False,
@@ -764,7 +779,6 @@ class Zarr2Writer(BaseWriter):
                 source_format=source_format,
                 no_ome_meta_export=no_ome_meta_export,
                 no_ome_xml_attr=no_ome_xml_attr,
-                omero=omero_block,
             )
 
             print(f"Wrote nested image metadata to {self.output_path}")
@@ -814,6 +828,7 @@ class Zarr2Writer(BaseWriter):
             "multiscales": [{
                 "version": "0.4",
                 "name": image_name,
+                "type": "image",
                 "axes": axes_metadata,
                 "datasets": [{
                     "path": self.level_path,

@@ -29,6 +29,7 @@ import subprocess
 import shlex
 import math
 import argparse
+import shutil
 from typing import Optional, Tuple
 
 import numpy as np
@@ -341,8 +342,11 @@ Supported output formats:
     # Presets for common use cases
     parser.add_argument(
         "--preset", default=None,
-        choices=["webknossos"],
-        help="Use preset configuration. 'webknossos': zarr3, chunk 32x32x32, shard 1024x1024x1024, zstd.",
+        choices=["webknossos", "paintera"],
+        help="Use preset configuration. "
+             "'webknossos': zarr3, chunk 32x32x32, shard 1024x1024x1024, zstd. "
+             "'paintera': n5, xyz axis order, gzip, chunk 64x64x64 "
+             "(or zarr2 with zyx if --output_format zarr2).",
     )
 
     # Dataset paths
@@ -377,6 +381,11 @@ Supported output formats:
     parser.add_argument(
         "--compression_level", type=int, default=5,
         help="Compression level (default: 5)",
+    )
+    parser.add_argument(
+        "--dtype", default=None,
+        help="Output dtype override (e.g., uint8, int16, uint16, float32). "
+             "Default: preserve source dtype.",
     )
 
     # Voxel size override
@@ -418,6 +427,12 @@ Supported output formats:
         "--no-nested-structure", action="store_false",
         dest="use_nested_structure",
         help="Disable nested structure (write directly to output path).",
+    )
+    parser.add_argument(
+        "--add-to-existing", action="store_true",
+        dest="add_to_existing",
+        help="Add data to existing container without destroying it. "
+             "Safe write applies to the subgroup (e.g., labels/) not the container root.",
     )
     parser.add_argument(
         "--image-only", action="store_true",
@@ -504,6 +519,24 @@ Supported output formats:
         "--no-translation", action="store_true",
         help="Disable translation transforms in OME-NGFF multiscale metadata. "
              "By default, translation offsets are included for Neuroglancer compatibility.",
+    )
+
+    # Upsampling mode
+    parser.add_argument(
+        "--upsample", action="store_true",
+        help="Upsample mode: resample anisotropic data to isotropic resolution. "
+             "Uses scipy.ndimage.zoom (trilinear for images, nearest for labels).",
+    )
+    parser.add_argument(
+        "--target_voxel_size", type=float, default=None,
+        help="Target isotropic voxel size in nm for --upsample mode. "
+             "Default: auto (use smallest source voxel size = highest resolution axis).",
+    )
+    parser.add_argument(
+        "--upsample_method", type=str, default="auto",
+        choices=["auto", "trilinear", "nearest", "cubic"],
+        help="Upsampling interpolation method: auto (default, trilinear for images, "
+             "nearest for labels), trilinear, nearest, cubic.",
     )
 
     # Subvolume extraction
@@ -748,6 +781,112 @@ def validate_output_path(path: str) -> None:
         )
 
 
+def _tmp_path_for(output_path: str) -> str:
+    """Return the temporary path used during conversion.
+
+    Appends '.tmp' to the output path so partial writes are never
+    confused with completed conversions.  Example:
+        /nrs/scicompsoft/rokicki/output.zarr  →
+        /nrs/scicompsoft/rokicki/output.zarr.tmp
+    """
+    return output_path.rstrip('/\\') + '.tmp'
+
+
+def _finalize_tmp_path(tmp_path: str, final_path: str, verbose: bool = True) -> None:
+    """Rename a completed .tmp output to its final path.
+
+    If the final path already exists (e.g. leftover from a prior run),
+    it is removed first.
+    """
+    if not os.path.exists(tmp_path):
+        return
+    if os.path.exists(final_path):
+        shutil.rmtree(final_path)
+    os.rename(tmp_path, final_path)
+    if verbose:
+        print(f"Renamed {tmp_path} → {final_path}")
+
+
+def _finalize_add_to_existing(
+    final_output: str,
+    subgroup_parent: str,
+    output_format: str,
+    verbose: bool = True,
+) -> None:
+    """Rename subgroup .tmp → final and fix root metadata after --add-to-existing.
+
+    During --add-to-existing conversion, data is written to e.g.
+    ``labels.tmp/`` inside the existing container.  This function:
+
+    1. Removes the old subgroup if it exists (e.g. old ``labels/``).
+    2. Renames the ``.tmp`` variant to the final name.
+    3. Patches the root metadata so references to ``labels.tmp`` become
+       ``labels`` (labels list + multiscale dataset paths).
+
+    Args:
+        final_output: Container root path (e.g. ``/data/out.zarr``).
+        subgroup_parent: Top-level subgroup name (``"labels"`` or ``"raw"``).
+        output_format: ``"zarr3"`` or ``"zarr2"``.
+        verbose: Print progress messages.
+    """
+    import json as _json
+
+    tmp_name = subgroup_parent + '.tmp'
+    tmp_path = os.path.join(final_output, tmp_name)
+    final_path = os.path.join(final_output, subgroup_parent)
+
+    if not os.path.exists(tmp_path):
+        return
+
+    # 1. Remove old subgroup (e.g. old labels/)
+    if os.path.exists(final_path):
+        shutil.rmtree(final_path)
+    os.rename(tmp_path, final_path)
+    if verbose:
+        print(f"Renamed {tmp_path} → {final_path}")
+
+    # 2. Patch root metadata: labels.tmp → labels
+    if output_format == 'zarr3':
+        meta_path = os.path.join(final_output, 'zarr.json')
+        if os.path.exists(meta_path):
+            with open(meta_path) as f:
+                meta = _json.load(f)
+            ome = meta.get('attributes', {}).get('ome', {})
+            # Fix labels list
+            labels_list = ome.get('labels', [])
+            labels_list = [subgroup_parent if l == tmp_name else l for l in labels_list]
+            if labels_list:
+                ome['labels'] = labels_list
+            # Fix multiscale dataset paths
+            for ms in ome.get('multiscales', []):
+                for ds in ms.get('datasets', []):
+                    path = ds.get('path', '')
+                    if path.startswith(tmp_name + '/'):
+                        ds['path'] = subgroup_parent + path[len(tmp_name):]
+            meta['attributes']['ome'] = ome
+            with open(meta_path, 'w') as f:
+                _json.dump(meta, f, indent=2)
+    elif output_format == 'zarr2':
+        meta_path = os.path.join(final_output, '.zattrs')
+        if os.path.exists(meta_path):
+            with open(meta_path) as f:
+                meta = _json.load(f)
+            labels_list = meta.get('labels', [])
+            labels_list = [subgroup_parent if l == tmp_name else l for l in labels_list]
+            if labels_list:
+                meta['labels'] = labels_list
+            for ms in meta.get('multiscales', []):
+                for ds in ms.get('datasets', []):
+                    path = ds.get('path', '')
+                    if path.startswith(tmp_name + '/'):
+                        ds['path'] = subgroup_parent + path[len(tmp_name):]
+            with open(meta_path, 'w') as f:
+                _json.dump(meta, f, indent=2)
+
+    if verbose:
+        print(f"Updated root metadata: {tmp_name} → {subgroup_parent}")
+
+
 def parse_shape(s: str, param_name: str = "shape") -> Tuple[int, ...]:
     """Parse a comma-separated shape string into a tuple of ints.
 
@@ -875,6 +1014,7 @@ def create_writer(args, data_type: str = 'image'):
     use_nested = getattr(args, 'use_nested_structure', True) and fmt in ["zarr3", "zarr2"]
     image_key = getattr(args, 'image_key', 'raw')
     label_key = getattr(args, 'label_key', 'segmentation')
+    labels_container = getattr(args, '_labels_container_override', 'labels')
 
     include_omero = not getattr(args, 'no_omero', False)
     if fmt == "zarr3":
@@ -889,6 +1029,7 @@ def create_writer(args, data_type: str = 'image'):
             data_type=data_type,
             image_key=image_key,
             label_key=label_key,
+            labels_container=labels_container,
         )
     elif fmt == "zarr2":
         return Writers.zarr2(
@@ -901,6 +1042,7 @@ def create_writer(args, data_type: str = 'image'):
             data_type=data_type,
             image_key=image_key,
             label_key=label_key,
+            labels_container=labels_container,
         )
     elif fmt == "n5":
         return Writers.n5(
@@ -998,6 +1140,7 @@ def _estimate_shard_info(args, volume_shape, dtype_str, axes_order=None):
 from .utils.resource_utils import calculate_memory as _calculate_memory
 from .utils.resource_utils import calculate_wall_time as _calculate_wall_time
 from .utils.resource_utils import calculate_job_resources as _calculate_job_resources
+from .utils.resource_utils import is_native_source as _is_native_source
 
 
 def run_local_pyramid(s0_path, root_path, downsample_method="auto",
@@ -1125,10 +1268,9 @@ def submit_job(args, return_job_id=False):
             print(f"  {mode_name} mode: applying 10x wall time and 3x memory multipliers")
 
         # Detect source type: TensorStore-native (fast) vs file-decoded (slower)
-        _NATIVE_EXTENSIONS = {'.zarr', '.n5'}
-        _input_ext = os.path.splitext(args.input)[1].lower()
-        is_native = _input_ext in _NATIVE_EXTENSIONS or '://' in args.input
+        is_native = _is_native_source(args.input)
         if not is_native:
+            _input_ext = os.path.splitext(args.input)[1].lower()
             print(f"  Source type: file-decoded ({_input_ext})")
 
         if memory_gb is None:
@@ -1239,6 +1381,10 @@ def submit_job(args, return_job_id=False):
         reinvoke.append("--no_ome_xml_attr")
     if getattr(args, 'no_omero', False):
         reinvoke.append("--no-omero")
+    if getattr(args, 'dtype', None):
+        reinvoke += ["--dtype", args.dtype]
+    if getattr(args, 'add_to_existing', False):
+        reinvoke.append("--add-to-existing")
     # Convert to properly quoted shell command string
     # This handles paths with spaces correctly when bsub creates its wrapper
     reinvoke_str = shlex.join(reinvoke)
@@ -1252,11 +1398,12 @@ def submit_job(args, return_job_id=False):
         "-M", f"{memory_gb}GB",
         "-R", f"rusage[mem={memory_gb * 1024}]",  # GB to MB for LSF
         "-P", args.project,
-        "-g", args.job_group,
         "-o", log_path,
         "-e", error_path,
-        "/bin/bash", "-c", reinvoke_str,
     ]
+    if args.job_group:
+        command += ["-g", args.job_group]
+    command += ["/bin/bash", "-c", reinvoke_str]
 
     # Print summary and submit
     print("=" * 72)
@@ -1356,12 +1503,13 @@ def _submit_dependent_pyramid(args, conversion_job_id: str):
         "-M", "15GB",
         "-R", "rusage[mem=15360]",
         "-P", args.project,
-        "-g", args.job_group,
         "-w", f"done({conversion_job_id})",
         "-o", os.path.join(log_dir, f"output__{job_name}_%J.log"),
         "-e", os.path.join(log_dir, f"error__{job_name}_%J.log"),
-        "/bin/bash", "-c", reinvoke_str,
     ]
+    if args.job_group:
+        command += ["-g", args.job_group]
+    command += ["/bin/bash", "-c", reinvoke_str]
 
     result = subprocess.run(command, capture_output=True, text=True)
     if result.returncode == 0:
@@ -1374,6 +1522,174 @@ def _submit_dependent_pyramid(args, conversion_job_id: str):
         print(f"\nWarning: Pyramid coordinator submission failed: {result.stderr.strip()}")
         print(f"  You can manually run pyramid after conversion finishes:")
         print(f"  python -m tensorswitch_v2 -i {args.output} --auto_multiscale --submit -P {args.project}")
+
+
+def _submit_upsample_job(args, verbose=True):
+    """Submit an LSF bsub job for upsampling anisotropic → isotropic.
+
+    Re-invokes tensorswitch_v2 --upsample (without --submit) on a cluster node.
+    Uses calculate_upsample_resources() for proper resource estimation.
+    """
+    if not args.project:
+        raise ValueError(
+            "Missing required argument: --project/-P\n"
+            "When using --submit, you must specify an LSF project for billing."
+        )
+
+    import json as _json
+    import tensorstore as _ts
+    from .utils.resource_utils import calculate_upsample_resources
+    from .utils.tensorstore_utils import get_zarr_store_spec as _get_spec
+    from .core.upsampler import Upsampler
+
+    # Use Upsampler to compute zoom factors (single source of truth, no duplication)
+    from .core.upsampler import upsample_to_isotropic as _upsample_fn
+    temp_up = Upsampler(
+        input_path=args.input.rstrip('/'),
+        output_path="/tmp/_placeholder_",
+        target_voxel_sizes=[],  # will read from metadata
+    )
+    src_voxels, axes_info = temp_up._get_source_voxel_sizes_and_axes()
+
+    # Determine target voxel size (same logic as upsample_to_isotropic)
+    spatial_voxels = []
+    if axes_info:
+        for i, ax in enumerate(axes_info):
+            if ax.get("type") == "space" and i < len(src_voxels):
+                spatial_voxels.append(src_voxels[i])
+    else:
+        spatial_voxels = list(src_voxels[:3])
+    target_voxel = args.target_voxel_size if args.target_voxel_size else min(spatial_voxels)
+
+    # Build full target voxel list and compute zoom factors via Upsampler
+    full_target = []
+    spatial_idx = 0
+    for i in range(len(src_voxels)):
+        if axes_info and i < len(axes_info) and axes_info[i].get("type") == "space":
+            full_target.append(target_voxel)
+            spatial_idx += 1
+        else:
+            full_target.append(src_voxels[i])
+    temp_up.target_voxel_sizes = full_target
+    zoom_factors = temp_up.compute_zoom_factors()
+
+    # Read source shape/chunks via TensorStore
+    _src_spec = _get_spec(args.input.rstrip('/'))
+    src = _ts.open(_src_spec, open=True).result()
+    src_shape = list(src.shape)
+    src_chunks = list(src.chunk_layout.read_chunk.shape)
+    dtype_str = src.dtype.numpy_dtype.name
+
+    # Auto-calculate resources using the proper system
+    shard_shape_list = [int(x) for x in args.shard_shape.split(',')] if args.shard_shape else None
+    auto_mem, auto_wall, auto_cores = calculate_upsample_resources(
+        source_shape=src_shape,
+        dtype=dtype_str,
+        source_chunks=src_chunks,
+        zoom_factors=zoom_factors,
+        output_format=args.output_format,
+        no_sharding=args.no_sharding,
+        shard_shape=shard_shape_list,
+    )
+
+    # Allow user overrides
+    memory_gb = args.memory or auto_mem
+    wall_time = args.wall_time or auto_wall
+    cores = args.cores or auto_cores
+
+    # Enforce cluster policy: 15 GB per core minimum
+    memory_gb = max(memory_gb, cores * 15)
+
+    # Job name
+    input_name = os.path.basename(os.path.dirname(os.path.dirname(args.input)))
+    job_name = f"tsv2_upsample_{input_name}"
+    job_name = job_name.replace(" ", "_")[:128]
+
+    # Log directory
+    output_parent = os.path.dirname(os.path.abspath(args.output))
+    log_dir = getattr(args, 'log_dir', None) or os.path.join(output_parent, "output")
+    os.makedirs(log_dir, exist_ok=True)
+
+    log_path = os.path.join(log_dir, f"output__{job_name}_%J.log")
+    error_path = os.path.join(log_dir, f"error__{job_name}_%J.log")
+
+    # Build re-invocation command (same args, without --submit and LSF flags)
+    reinvoke = [
+        sys.executable, "-m", "tensorswitch_v2",
+        "--upsample",
+        "--input", args.input,
+        "--output", args.output,
+    ]
+    if args.target_voxel_size is not None:
+        reinvoke += ["--target_voxel_size", str(args.target_voxel_size)]
+    if args.upsample_method != "auto":
+        reinvoke += ["--upsample_method", args.upsample_method]
+    if getattr(args, 'is_label', False):
+        reinvoke.append("--is-label")
+    if args.auto_multiscale:
+        reinvoke.append("--auto_multiscale")
+    if args.downsample_method != "auto":
+        reinvoke += ["--downsample_method", args.downsample_method]
+    if args.per_level_factors:
+        reinvoke += ["--per_level_factors", args.per_level_factors]
+    if args.no_translation:
+        reinvoke.append("--no-translation")
+    # Output format params
+    if args.output_format != "zarr3":
+        reinvoke += ["--output_format", args.output_format]
+    if args.no_sharding:
+        reinvoke.append("--no_sharding")
+    if args.shard_shape:
+        reinvoke += ["--shard_shape", args.shard_shape]
+    if args.compression != "zstd":
+        reinvoke += ["--compression", args.compression]
+    if args.compression_level != 5:
+        reinvoke += ["--compression_level", str(args.compression_level)]
+
+    reinvoke_str = shlex.join(reinvoke)
+
+    command = [
+        "bsub",
+        "-J", job_name,
+        "-n", str(cores),
+        "-W", wall_time,
+        "-M", f"{memory_gb}GB",
+        "-R", f"rusage[mem={memory_gb * 1024}]",
+        "-P", args.project,
+        "-o", log_path,
+        "-e", error_path,
+    ]
+    if args.job_group:
+        command += ["-g", args.job_group]
+    command += ["/bin/bash", "-c", reinvoke_str]
+
+    print("=" * 72)
+    print("LSF Upsample Job Submission")
+    print("=" * 72)
+    print(f"  Job name:    {job_name}")
+    print(f"  Source:      {args.input}")
+    print(f"  Output:      {args.output}")
+    print(f"  Source shape: {src_shape}")
+    print(f"  Zoom factors: {[round(f, 4) for f in zoom_factors]}")
+    print(f"  Format:      {args.output_format}")
+    print(f"  Cores:       {cores}")
+    print(f"  Memory:      {memory_gb} GB")
+    print(f"  Wall time:   {wall_time}")
+    print(f"  Project:     {args.project}")
+    print(f"  Log:         {log_path}")
+    print(f"  Command:     {reinvoke_str}")
+    print("=" * 72)
+
+    result = subprocess.run(command, capture_output=True, text=True)
+
+    if result.returncode == 0:
+        print("Job submitted successfully.")
+        print(result.stdout.strip())
+    else:
+        print(f"Job submission failed (exit code {result.returncode}).")
+        if result.stderr:
+            print(result.stderr.strip())
+        raise RuntimeError(f"bsub failed: {result.stderr.strip()}")
 
 
 def submit_downsample_job(args, cumulative_factors):
@@ -1456,11 +1772,12 @@ def submit_downsample_job(args, cumulative_factors):
         "-M", f"{memory_gb}GB",
         "-R", f"rusage[mem={memory_gb * 1024}]",  # GB to MB for LSF
         "-P", args.project,
-        "-g", args.job_group,
         "-o", log_path,
         "-e", error_path,
-        "/bin/bash", "-c", reinvoke_str,
     ]
+    if args.job_group:
+        command += ["-g", args.job_group]
+    command += ["/bin/bash", "-c", reinvoke_str]
 
     # Print summary and submit
     print("=" * 72)
@@ -1618,6 +1935,20 @@ def main(argv=None):
             args.shard_shape = "1024,1024,1024"
         if not args.quiet:
             print("Using WebKnossos preset: chunk=32x32x32, shard=1024x1024x1024, zarr3")
+    elif args.preset == "paintera":
+        # Paintera preset: n5 (default) with xyz, or zarr2 with zyx
+        # If user didn't explicitly set output_format (still default zarr3), use n5
+        if args.output_format == "zarr3":
+            args.output_format = "n5"
+        if not args.chunk_shape:
+            args.chunk_shape = "64,64,64"
+        if args.compression == "zstd":
+            args.compression = "gzip"
+        if not args.axes_order:
+            args.axes_order = "xyz" if args.output_format == "n5" else "zyx"
+        if not args.quiet:
+            print(f"Using Paintera preset: output={args.output_format}, "
+                  f"axes={args.axes_order}, chunk=64x64x64, compression=gzip")
 
     # Parse optional shapes
     chunk_shape = parse_shape(args.chunk_shape, "chunk_shape") if args.chunk_shape else None
@@ -1705,7 +2036,7 @@ def main(argv=None):
         return
 
     # Detect batch mode (input is directory, not file)
-    if not args.batch_worker and not args.downsample and not args.auto_multiscale:
+    if not args.batch_worker and not args.downsample:
         from .core.batch import (
             detect_input_mode,
             BatchConverter,
@@ -1714,6 +2045,17 @@ def main(argv=None):
         )
 
         input_mode = detect_input_mode(args.input, output_path=args.output)
+
+        # Pyramid-only intent takes precedence over discovered_folder routing.
+        # When --auto_multiscale is used on an existing OME-NGFF zarr without
+        # --output (e.g., the pyramid coordinator job), _is_pyramid_only_intent
+        # returns True and we should fall through to the pyramid-only handler
+        # at line ~2196 instead of calling submit_discovered_folder_lsf with
+        # output_path=None.
+        if (input_mode == 'discovered_folder'
+                and getattr(args, 'auto_multiscale', False)
+                and _is_pyramid_only_intent(args.input, args.output)):
+            input_mode = 'single_file'
 
         if input_mode == 'discovered_folder':
             # Discovered folder mode: convert image and/or segmentation datasets
@@ -1747,6 +2089,7 @@ def main(argv=None):
                     cores=args.cores,  # None = auto-calculate per dataset
                     job_group=args.job_group,
                     dry_run=args.dry_run,
+                    auto_multiscale=getattr(args, 'auto_multiscale', False),
                 )
                 if result.get('error'):
                     print(f"\nError: {result['error']}")
@@ -1811,9 +2154,7 @@ def main(argv=None):
                     finally:
                         args.input = original_input
 
-                    _NATIVE_EXTENSIONS = {'.zarr', '.n5'}
-                    _ext = os.path.splitext(first_file)[1].lower()
-                    is_native = _ext in _NATIVE_EXTENSIONS or '://' in first_file
+                    is_native = _is_native_source(first_file)
 
                     auto_mem, auto_wall, auto_cores = _calculate_job_resources(
                         shape=list(volume_shape), dtype=dtype_str,
@@ -2036,6 +2377,98 @@ def main(argv=None):
             )
         return
 
+    # Handle upsample mode (anisotropic → isotropic)
+    if args.upsample:
+        from .core.upsampler import upsample_to_isotropic as _upsample_fn
+
+        if not args.output:
+            raise ValueError("--output/-o is required with --upsample")
+
+        if args.submit:
+            # Submit upsample job to LSF cluster
+            _submit_upsample_job(args, verbose=verbose)
+            return
+
+        # Determine s0 output path: if output looks like a container root,
+        # mirror the input's subgroup structure (e.g., img/s0)
+        input_path = args.input.rstrip('/')
+        output_base = args.output.rstrip('/')
+
+        # Auto-detect subgroup from input (e.g., img/s0 → group=img, level=s0)
+        input_basename = os.path.basename(input_path)
+        input_group = os.path.basename(os.path.dirname(input_path))
+
+        # If output already ends with the level name, use as-is
+        # Otherwise, mirror the input structure
+        import re
+        level_pattern = re.compile(r'^(s?\d+)$')
+        if level_pattern.match(os.path.basename(output_base)):
+            s0_output = output_base
+        elif input_group and level_pattern.match(input_basename):
+            s0_output = os.path.join(output_base, input_group, input_basename)
+        else:
+            s0_output = os.path.join(output_base, "s0")
+
+        # Safe write: write to .tmp, rename on completion
+        final_output = args.output.rstrip('/')
+        tmp_output = _tmp_path_for(final_output)
+        if os.path.exists(tmp_output):
+            shutil.rmtree(tmp_output)
+            if verbose:
+                print(f"Removed leftover temporary path: {tmp_output}")
+
+        # Remap s0_output into tmp space
+        if s0_output.startswith(final_output):
+            tmp_s0 = tmp_output + s0_output[len(final_output):]
+        else:
+            tmp_s0 = s0_output  # Shouldn't happen, but be safe
+
+        if verbose:
+            print(f"Writing to temporary path: {tmp_output}")
+
+        stats = _upsample_fn(
+            input_path=input_path,
+            output_path=tmp_s0,
+            target_voxel_size=args.target_voxel_size,
+            upsample_method=args.upsample_method,
+            is_label=getattr(args, 'is_label', False),
+            verbose=verbose,
+            output_format=args.output_format,
+            no_sharding=args.no_sharding,
+            shard_shape=[int(x) for x in args.shard_shape.split(',')] if args.shard_shape else None,
+            compression=args.compression,
+            compression_level=args.compression_level,
+        )
+
+        # Safe write: rename .tmp → final before pyramid so pyramid finds s0
+        _finalize_tmp_path(tmp_output, final_output, verbose=verbose)
+
+        # Auto-pyramid after upsampling if requested
+        if args.auto_multiscale:
+            root_path = os.path.dirname(final_output)
+            resolved_method = resolve_downsample_method(args.downsample_method, final_output)
+
+            custom_per_level_factors = None
+            if args.per_level_factors:
+                custom_per_level_factors = parse_per_level_factors(args.per_level_factors)
+
+            run_local_pyramid(
+                s0_path=final_output,
+                root_path=root_path,
+                downsample_method=resolved_method,
+                custom_per_level_factors=custom_per_level_factors,
+                include_translation=not args.no_translation,
+                verbose=verbose,
+            )
+
+        if verbose:
+            print(f"\nUpsampling complete.")
+            print(f"  Output: {final_output}")
+            print(f"  Shape:  {stats['input_shape']} → {stats['output_shape']}")
+            print(f"  Method: {stats['upsample_method']}")
+            print(f"  Time:   {stats['elapsed_time']:.1f}s")
+        return
+
     # Handle downsample mode (single level from s0)
     if args.downsample:
         from .core.downsampler import downsample_level
@@ -2087,6 +2520,59 @@ def main(argv=None):
             _submit_dependent_pyramid(args, conversion_job_id=job_id)
 
         return
+
+    # --- Safe write: write to .tmp, rename on completion ---
+    add_to_existing = getattr(args, 'add_to_existing', False)
+    final_output = args.output
+
+    if add_to_existing:
+        # Subgroup-level safe write: write to labels.tmp/ inside existing container
+        if not os.path.exists(final_output):
+            raise FileNotFoundError(
+                f"--add-to-existing: target container does not exist: {final_output}"
+            )
+        # Validate it's a zarr container
+        is_zarr3 = os.path.exists(os.path.join(final_output, 'zarr.json'))
+        is_zarr2 = os.path.exists(os.path.join(final_output, '.zgroup'))
+        if not is_zarr3 and not is_zarr2:
+            raise ValueError(
+                f"--add-to-existing: target is not a zarr container: {final_output}"
+            )
+        subgroup = _resolve_conversion_subgroup(args)
+        if not subgroup:
+            raise ValueError(
+                "--add-to-existing requires --data-type labels or --data-type image "
+                "(or --is-label for label data)"
+            )
+        subgroup_parent = subgroup.split('/')[0]  # "labels" or "raw"
+        tmp_subgroup_path = os.path.join(final_output, subgroup_parent + '.tmp')
+        # Clean leftover .tmp subgroup from prior failed run
+        if os.path.exists(tmp_subgroup_path):
+            shutil.rmtree(tmp_subgroup_path)
+            if verbose:
+                print(f"Removed leftover temporary subgroup: {tmp_subgroup_path}")
+        # Warn if target subgroup already exists
+        existing_subgroup = os.path.join(final_output, subgroup_parent)
+        if os.path.exists(existing_subgroup) and verbose:
+            print(f"Warning: existing {subgroup_parent}/ will be replaced on completion")
+        # Route writer to .tmp subgroup via labels_container override
+        if subgroup_parent == 'labels':
+            args._labels_container_override = 'labels.tmp'
+        else:
+            args._image_key_override = subgroup_parent + '.tmp'
+        tmp_output = None  # Signal: no container-level .tmp
+        if verbose:
+            print(f"Writing to subgroup: {tmp_subgroup_path}")
+    else:
+        tmp_output = _tmp_path_for(final_output)
+        # Clean up leftover .tmp from a prior failed run
+        if os.path.exists(tmp_output):
+            shutil.rmtree(tmp_output)
+            if verbose:
+                print(f"Removed leftover temporary path: {tmp_output}")
+        args.output = tmp_output
+        if verbose:
+            print(f"Writing to temporary path: {tmp_output}")
 
     reader = create_reader(args)
 
@@ -2209,6 +2695,7 @@ def main(argv=None):
             axes_order_override=axes_order_override,
             no_ome_meta_export=no_ome_meta_export,
             no_ome_xml_attr=no_ome_xml_attr,
+            output_dtype=getattr(args, 'dtype', None),
         )
     else:
         # Full single-process conversion
@@ -2226,6 +2713,7 @@ def main(argv=None):
             axes_order_override=axes_order_override,
             no_ome_meta_export=no_ome_meta_export,
             no_ome_xml_attr=no_ome_xml_attr,
+            output_dtype=getattr(args, 'dtype', None),
         )
 
     # Write source provenance metadata when --bbox is used
@@ -2245,10 +2733,17 @@ def main(argv=None):
         # container root reads stale multiscales from a prior stage and may
         # return the wrong subgroup, causing the pyramid to overwrite the
         # wrong levels.
-        subgroup = _resolve_conversion_subgroup(args)
-        base_level_input = (
-            os.path.join(args.output, subgroup) if subgroup else args.output
-        )
+        pyramid_subgroup = _resolve_conversion_subgroup(args)
+        if add_to_existing and pyramid_subgroup:
+            # Pyramid runs on .tmp subgroup before rename
+            # e.g. labels/segmentation → labels.tmp/segmentation
+            parts = pyramid_subgroup.split('/', 1)
+            pyramid_subgroup = parts[0] + '.tmp' + ('/' + parts[1] if len(parts) > 1 else '')
+            base_level_input = os.path.join(final_output, pyramid_subgroup)
+        else:
+            base_level_input = (
+                os.path.join(args.output, pyramid_subgroup) if pyramid_subgroup else args.output
+            )
         s0_path, _ = find_base_level(base_level_input, verbose=verbose)
         # root_path must be the direct parent of s0 (e.g., raw/) not the container root
         root_path = os.path.dirname(s0_path)
@@ -2267,6 +2762,17 @@ def main(argv=None):
             include_translation=not args.no_translation,
             verbose=verbose,
         )
+
+    # --- Safe write: rename .tmp → final path ---
+    if add_to_existing:
+        _finalize_add_to_existing(
+            final_output=final_output,
+            subgroup_parent=subgroup_parent,
+            output_format=args.output_format,
+            verbose=verbose,
+        )
+    else:
+        _finalize_tmp_path(tmp_output, final_output, verbose=verbose)
 
 
 if __name__ == "__main__":

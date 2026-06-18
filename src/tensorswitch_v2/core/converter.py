@@ -4,6 +4,7 @@ DistributedConverter for TensorSwitch Phase 5 architecture.
 Provides format-agnostic conversion with LSF multi-job and Dask single-job support.
 """
 
+import json
 import os
 import time
 from typing import Optional, Tuple, List, Dict, Any
@@ -26,6 +27,7 @@ from ..utils import (
     update_ome_metadata_if_needed,
 )
 from ..utils.metadata_utils import NON_SPATIAL_AXES
+from .retry import retry_write, MAX_RETRIES
 
 
 class DistributedConverter:
@@ -72,6 +74,7 @@ class DistributedConverter:
         axes_order_override: Optional[List[str]] = None,
         no_ome_meta_export: bool = False,
         no_ome_xml_attr: bool = False,
+        output_dtype: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Convert data from reader to writer.
 
@@ -140,9 +143,47 @@ class DistributedConverter:
 
         input_shape = tuple(self._input_store.shape)
         input_dtype = get_dtype_name(self._input_store.dtype)
+        effective_dtype = output_dtype if output_dtype else input_dtype
 
         if verbose:
             print(f"  Shape: {input_shape}, dtype: {input_dtype}")
+            if output_dtype and output_dtype != input_dtype:
+                print(f"  Output dtype: {output_dtype} (casting from {input_dtype})")
+
+        # Validate dtype cast safety: check if target range can hold source values
+        if output_dtype and output_dtype != input_dtype:
+            out_np = np.dtype(output_dtype)
+            in_np = np.dtype(input_dtype)
+            if np.can_cast(in_np, out_np, casting='safe'):
+                if verbose:
+                    print(f"  Dtype cast {input_dtype} -> {output_dtype}: safe (no data loss)")
+            elif np.issubdtype(out_np, np.integer):
+                # Narrowing cast — sample data to check range
+                info = np.iinfo(out_np)
+                if verbose:
+                    print(f"  Dtype cast {input_dtype} -> {output_dtype}: narrowing "
+                          f"(target range [{info.min}, {info.max}]), sampling data to verify...")
+                # Sample up to 8 evenly-spaced chunks from the input
+                total_voxels = int(np.prod(input_shape))
+                n_sample = min(8, max(1, total_voxels // (256 * 256 * 256)))
+                sample_indices = np.linspace(0, max(0, input_shape[0] - 1), n_sample, dtype=int)
+                src_min, src_max = np.inf, -np.inf
+                for si in sample_indices:
+                    # Read a thin slab along first axis
+                    slab = self._input_store[int(si)].read().result()
+                    if slab.size > 0:
+                        src_min = min(src_min, float(slab.min()))
+                        src_max = max(src_max, float(slab.max()))
+                if src_min < info.min or src_max > info.max:
+                    raise ValueError(
+                        f"Dtype cast {input_dtype} -> {output_dtype} would clip data: "
+                        f"source range [{src_min:.2f}, {src_max:.2f}] exceeds target "
+                        f"range [{info.min}, {info.max}]. Use a wider dtype or pre-normalize "
+                        f"the data. (Sampled {n_sample} slabs along axis 0.)"
+                    )
+                if verbose:
+                    print(f"  Data range [{src_min:.2f}, {src_max:.2f}] fits in "
+                          f"{output_dtype} [{info.min}, {info.max}] — safe to cast")
 
         # 2. Detect source order and axes
         use_fortran_order = False
@@ -158,9 +199,42 @@ class DistributedConverter:
         except Exception:
             pass
 
+        # Fall back to OME-NGFF axes from reader metadata (zarr2 has no domain labels)
+        if not axes_order:
+            try:
+                metadata = self.reader.get_metadata()
+                multiscales = metadata.get('multiscales', [])
+                # If no multiscales at array level, try parent dir (OME-NGFF
+                # stores multiscales one level above the array, e.g. img/.zattrs
+                # for img/s0)
+                if not multiscales:
+                    parent_zattrs = os.path.join(
+                        os.path.dirname(self.reader.path), '.zattrs')
+                    if os.path.isfile(parent_zattrs):
+                        with open(parent_zattrs, 'r') as f:
+                            multiscales = json.load(f).get('multiscales', [])
+                if multiscales:
+                    ome_axes = multiscales[0].get('axes', [])
+                    if ome_axes and len(ome_axes) == len(input_shape):
+                        axes_order = [
+                            a['name'].lower() if isinstance(a, dict) else a.lower()
+                            for a in ome_axes
+                        ]
+                        if verbose:
+                            print(f"  Axes from OME-NGFF metadata: {axes_order}")
+            except Exception:
+                pass
+
         # Handle order: force_order overrides auto-detection
         if force_order is not None:
             use_fortran_order = (force_order.lower() == 'f')
+            # Still detect axes even when forcing order
+            if axes_order is None:
+                try:
+                    order_info = detect_source_order(self._input_store)
+                    axes_order = order_info.get('suggested_axes', None)
+                except Exception:
+                    pass
             if verbose:
                 order_name = "F-order" if use_fortran_order else "C-order"
                 print(f"  Forcing {order_name} (--force_{force_order.lower()}_order)")
@@ -206,7 +280,15 @@ class DistributedConverter:
         spatial_transpose = None
         _target_axes_order = None
         if axes_order_override and axes_order:
+            # Re-interpret 't' as 'z' if override contains 'z' but source has
+            # 't' instead (common with TIFF Z-stacks mis-labeled as time)
             source_spatial = [a for a in axes_order if a.lower() in {'x', 'y', 'z'}]
+            if ('z' in axes_order_override and 'z' not in source_spatial
+                    and 't' in [a.lower() for a in axes_order]):
+                axes_order = ['z' if a.lower() == 't' else a for a in axes_order]
+                source_spatial = [a for a in axes_order if a.lower() in {'x', 'y', 'z'}]
+                if verbose:
+                    print(f"  Re-interpreted 't' as 'z': axes now {axes_order}")
             if sorted(axes_order_override) != sorted(source_spatial):
                 raise ValueError(
                     f"--axes_order {axes_order_override} doesn't match "
@@ -293,9 +375,14 @@ class DistributedConverter:
         except Exception:
             pass
 
-        # 3b. Auto-cap chunk/shard shape for frame-based DaskReader sources.
+        # 3b. Auto-cap chunk shape for frame-based DaskReader sources.
         # When native chunks have small dims (e.g., Z=1 for ND2 full-frame),
-        # cap output chunk/shard to native to prevent cache-thrashing reads.
+        # cap output *chunk* to native to prevent cache-thrashing reads.
+        # Shard shape is NOT capped — it's a write-side grouping with no
+        # read-side impact (reads go through virtual_chunked at
+        # read_chunk_shape granularity; the frame cache handles aggregation).
+        # Capping shard to native Z=1 created hundreds of thousands of tiny
+        # shard files for CZI/ND2 sources, causing OOM and poor performance.
         from ..readers.base import DaskReader
         if isinstance(self.reader, DaskReader):
             native = getattr(self.reader, '_native_chunk_shape', None)
@@ -325,24 +412,47 @@ class DistributedConverter:
                             print(f"  Auto-capped chunk shape for frame-based "
                                   f"source: {chunk_shape}")
 
+                    # Shard uses standard defaults (no capping to native).
                     if shard_shape is None:
-                        default_shard = build_default_shape(
-                            list(input_shape), axes_order, 1024)
+                        shard_shape = tuple(build_default_shape(
+                            list(input_shape), axes_order, 1024))
+
+                    # Zarr3 requires shard dims to be multiples of chunk dims.
+                    # Round shard down to nearest chunk multiple per dim.
+                    if chunk_shape is not None and shard_shape is not None:
                         shard_shape = tuple(
-                            min(d, n) if n < a else d
-                            for d, n, a in zip(
-                                default_shard, native, input_shape))
-                        if verbose:
-                            print(f"  Auto-capped shard shape for frame-based "
-                                  f"source: {shard_shape}")
+                            max(c, (s // c) * c)
+                            for s, c in zip(shard_shape, chunk_shape))
+
+                    if verbose:
+                        print(f"  Shard shape for frame-based "
+                              f"source: {shard_shape}")
 
         # 4. Apply spatial axis reorder (--axes_order)
         if spatial_transpose:
             input_shape = tuple(input_shape[p] for p in spatial_transpose)
-            if chunk_shape:
-                chunk_shape = tuple(chunk_shape[p] for p in spatial_transpose)
-            if shard_shape:
-                shard_shape = tuple(shard_shape[p] for p in spatial_transpose)
+            # chunk/shard shapes may be spatial-only (e.g. 3 values for x,y,z)
+            # while spatial_transpose covers all dims (including c, t, etc).
+            # Pad them to full dimensionality (1 for non-spatial) before permuting.
+            for attr_name in ('chunk_shape', 'shard_shape'):
+                shape_val = chunk_shape if attr_name == 'chunk_shape' else shard_shape
+                if shape_val and len(shape_val) < len(spatial_transpose):
+                    padded = []
+                    spatial_iter = iter(shape_val)
+                    for a in axes_order:
+                        if a.lower() in {'x', 'y', 'z'}:
+                            padded.append(next(spatial_iter))
+                        else:
+                            padded.append(1)
+                    if attr_name == 'chunk_shape':
+                        chunk_shape = tuple(padded[p] for p in spatial_transpose)
+                    else:
+                        shard_shape = tuple(padded[p] for p in spatial_transpose)
+                elif shape_val:
+                    if attr_name == 'chunk_shape':
+                        chunk_shape = tuple(shape_val[p] for p in spatial_transpose)
+                    else:
+                        shard_shape = tuple(shape_val[p] for p in spatial_transpose)
             axes_order = _target_axes_order
             if verbose:
                 print(f"  Reordered shape: {input_shape}")
@@ -353,7 +463,7 @@ class DistributedConverter:
 
         output_spec = self.writer.create_output_spec(
             shape=input_shape,
-            dtype=input_dtype,
+            dtype=effective_dtype,
             chunk_shape=chunk_shape,
             shard_shape=shard_shape,
             use_fortran_order=use_fortran_order,
@@ -402,12 +512,39 @@ class DistributedConverter:
         channel_mins = [np.inf] * num_channels
         channel_maxs = [-np.inf] * num_channels
 
+        failed_chunks = []
+
+        # Pre-compute inverse permutation for spatial transpose
+        _inverse_spatial_perm = None
+        if spatial_transpose:
+            _inverse_spatial_perm = [0] * len(spatial_transpose)
+            for i, j in enumerate(spatial_transpose):
+                _inverse_spatial_perm[j] = i
+            _inverse_spatial_perm = tuple(_inverse_spatial_perm)
+
         for idx, chunk_domain in enumerate(chunk_domains, start=start_idx):
             try:
                 read_domain = chunk_domain
                 write_domain = chunk_domain
+                _writer_handled_reorder = False
                 if hasattr(self.writer, 'get_input_domain_from_output'):
                     read_domain = self.writer.get_input_domain_from_output(chunk_domain)
+                    # Track if the writer already applied the spatial permutation
+                    # (get_input_domain_from_output handles it when _transpose_order is set)
+                    _writer_handled_reorder = getattr(self.writer, '_transpose_order', None) is not None
+
+                # Inverse-transpose read domain for --axes_order spatial reorder
+                # Skip if writer's get_input_domain_from_output already handled it
+                if _inverse_spatial_perm is not None and not _writer_handled_reorder:
+                    if hasattr(read_domain, 'origin'):
+                        slices = []
+                        for i in range(read_domain.ndim):
+                            start_val = int(read_domain.origin[i])
+                            stop_val = start_val + int(read_domain.shape[i])
+                            slices.append(slice(start_val, stop_val))
+                        read_domain = tuple(slices[p] for p in _inverse_spatial_perm)
+                    else:
+                        read_domain = tuple(read_domain[p] for p in _inverse_spatial_perm)
 
                 # If we squeezed a singleton channel, expand domain back for reading
                 if self._squeeze_channel and self._squeeze_axis is not None:
@@ -431,6 +568,19 @@ class DistributedConverter:
                 if self._squeeze_channel and self._squeeze_axis is not None:
                     data = np.squeeze(data, axis=self._squeeze_axis)
 
+                # Transpose data for --axes_order spatial reorder
+                # Skip if writer already handles transpose in write_chunk (_transpose_order set)
+                if spatial_transpose and not _writer_handled_reorder:
+                    data = np.ascontiguousarray(np.transpose(data, spatial_transpose))
+
+                # Cast dtype if requested
+                if output_dtype and output_dtype != input_dtype:
+                    out_np = np.dtype(output_dtype)
+                    if np.issubdtype(data.dtype, np.floating) and np.issubdtype(out_np, np.integer):
+                        info = np.iinfo(out_np)
+                        data = np.clip(data, info.min, info.max)
+                    data = data.astype(out_np)
+
                 # Track per-channel min/max for OMERO display windows
                 if c_axis is not None:
                     # Determine which channels this chunk covers
@@ -451,8 +601,11 @@ class DistributedConverter:
                     channel_mins[0] = min(channel_mins[0], float(data.min()))
                     channel_maxs[0] = max(channel_maxs[0], float(data.max()))
 
-                # Write
-                self.writer.write_chunk(write_domain, data, self._output_store)
+                # Write with retry on transient I/O errors
+                def _do_write(wd=write_domain, d=data):
+                    self.writer.write_chunk(wd, d, self._output_store)
+
+                retry_write(_do_write, chunk_id=idx, verbose=verbose)
                 chunks_processed += 1
 
                 # Progress reporting
@@ -470,9 +623,20 @@ class DistributedConverter:
                 print(f"\nInterrupted at chunk {idx}. Exiting...")
                 raise
             except Exception as e:
+                failed_chunks.append((idx, str(e)))
                 if verbose:
-                    print(f"  Warning: Skipping chunk {idx}: {e}")
-                continue
+                    print(f"  FAILED chunk {idx} after retries: {e}")
+
+        if failed_chunks:
+            msg = (
+                f"Conversion failed: {len(failed_chunks)} chunk(s) could not be "
+                f"written after {MAX_RETRIES} retries each.\n"
+                f"Failed chunk indices: {[c[0] for c in failed_chunks]}"
+            )
+            if verbose:
+                for chunk_idx, err in failed_chunks:
+                    print(f"  Chunk {chunk_idx}: {err}")
+            raise RuntimeError(msg)
 
         # Build channel_minmax from accumulated stats (only if we saw real data)
         channel_minmax = None

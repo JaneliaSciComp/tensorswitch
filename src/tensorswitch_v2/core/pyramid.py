@@ -822,9 +822,11 @@ class PyramidPlanner:
             }
             zarr_dtype = dtype_map.get(dtype_str, '<u2')
 
-        # Use compression from level 0, or default
-        if compressor is None:
-            compressor = {"id": "zstd", "level": 5}
+        # Normalize compressor to TensorStore-compatible format.
+        # numcodecs raw zstd {"id": "zstd", "level": N} is not understood by
+        # TensorStore's zarr2 driver — must be blosc-wrapped.
+        from tensorswitch_v2.utils.metadata_utils import normalize_zarr2_compressor_for_tensorstore
+        compressor = normalize_zarr2_compressor_for_tensorstore(compressor)
 
         # Write .zarray
         zarray = {
@@ -1199,7 +1201,25 @@ echo "=========================================="
         os.makedirs(log_dir, exist_ok=True)
 
         dataset_name = os.path.basename(self.root_path)
-        script_path = os.path.join(log_dir, f"chained_pyramid_{dataset_name}.sh")
+        # Build a unique script label from the path to avoid collisions when
+        # multiple containers share the same subgroup names (e.g. all have
+        # "labels/seg").  Walk up from root_path to find the .zarr/.n5
+        # container, then join all components below it.
+        parts = []
+        cur = os.path.abspath(self.root_path)
+        while cur and cur != os.path.dirname(cur):
+            name = os.path.basename(cur)
+            parts.append(name)
+            ext = os.path.splitext(name)[1].lower()
+            if ext in ('.zarr', '.n5'):
+                break
+            cur = os.path.dirname(cur)
+        # Reverse so container comes first: e.g. "nisb-seed0-zarr3_labels_seg"
+        parts.reverse()
+        script_label = "_".join(parts) if parts else dataset_name
+        # Strip .zarr/.n5 extension from container name for cleaner filenames
+        script_label = script_label.replace('.zarr', '').replace('.n5', '')
+        script_path = os.path.join(log_dir, f"chained_pyramid_{script_label}.sh")
 
         if verbose:
             print(f"\nCoordinator script: {script_path}")
@@ -1246,7 +1266,7 @@ echo "=========================================="
         coord_wall_time = f"{coord_wall_hours}:00"
 
         # Submit coordinator job
-        job_name = f"tsv2_pyramid_{dataset_name}"[:128]
+        job_name = f"tsv2_pyramid_{script_label}"[:128]
         log_path = os.path.join(log_dir, f"output__{job_name}_%J.log")
         error_path = os.path.join(log_dir, f"error__{job_name}_%J.log")
 

@@ -12,12 +12,32 @@ Non-spatial axes (c, t, v, channel) always get size 1.
 """
 
 import math
+import os
 import numpy as np
 from typing import Tuple, List, Optional
 
 from .tensorstore_utils import adaptive_spatial_chunk, build_default_shape
 
 _ZARR3_SHARD_SPATIAL = 1024    # tensorstore_utils.py zarr3_store_spec default
+
+_NATIVE_EXTENSIONS = {'.zarr', '.n5'}
+
+
+def is_native_source(path: str) -> bool:
+    """Check if a path refers to a TensorStore-native format (Zarr, N5, remote).
+
+    Scans all path components for .zarr/.n5 extensions, so sub-paths like
+    ``/data/volume.zarr/raw/s0`` are correctly detected as native.
+    Remote URLs (containing ``://``) are always native.
+    """
+    if '://' in path:
+        return True
+    parts = path.replace('\\', '/').split('/')
+    for part in parts:
+        ext = os.path.splitext(part)[1].lower()
+        if ext in _NATIVE_EXTENSIONS:
+            return True
+    return False
 
 
 def calculate_memory(volume_shape, dtype_str, shard_shape, total_shards, use_bioio=False, output_format='zarr3'):
@@ -160,14 +180,15 @@ def calculate_wall_time(volume_shape, dtype_str, shard_shape, total_shards, use_
         # Zarr3: per-shard time estimate
         shard_size_gb = (np.prod(shard_shape) * dtype_bytes) / (1024 ** 3)
 
-        # Per-shard time estimate (recalibrated from H01/MICRONS/Lila benchmarks, Mar 2026)
-        # TensorStore's internal thread pool pipelines reads/writes/compression efficiently
+        # Per-shard time estimate (recalibrated May 2026 from Jiefu zarr2→zarr3 benchmark)
+        # Large shards (>= 1 GB) require reading many source chunks per shard on NFS,
+        # especially for zarr2→zarr3 where each 1024³ shard reads 64 separate 256³ files.
         if is_native_source:
-            # TensorStore-native (Zarr, N5, Precomputed, GCS/S3/HTTP): 1-3 sec/shard
+            # TensorStore-native (Zarr, N5, Precomputed, GCS/S3/HTTP)
             if shard_size_gb < 1.0:
-                minutes_per_shard = 0.05     # ~3 sec
+                minutes_per_shard = 0.1      # ~6 sec
             else:
-                minutes_per_shard = 0.083    # ~5 sec
+                minutes_per_shard = 0.2      # ~12 sec
         else:
             # File-decoded (TIFF, ND2, CZI, IMS, HDF5): tifffile/dask decode overhead
             if shard_size_gb < 0.5:
@@ -180,9 +201,9 @@ def calculate_wall_time(volume_shape, dtype_str, shard_shape, total_shards, use_
         base_minutes = minutes_per_shard * total_shards
 
         # Scale down by cores — TensorStore processes shards in parallel
-        # Higher efficiency (0.85) than non-sharded because shards are large sequential I/O
+        # Use 0.7 efficiency (same as non-sharded) — NFS contention limits scaling
         if cores > 1:
-            parallel_factor = cores * 0.85
+            parallel_factor = cores * 0.7
             base_minutes = base_minutes / parallel_factor
 
         # Overhead for file loading
@@ -193,8 +214,8 @@ def calculate_wall_time(volume_shape, dtype_str, shard_shape, total_shards, use_
         else:
             overhead = 2
 
-        # 1.5x safety, round to nearest 30 min
-        safe_minutes = int(math.ceil((base_minutes + overhead) * 1.5 / 30) * 30)
+        # 2x safety, round to nearest 30 min
+        safe_minutes = int(math.ceil((base_minutes + overhead) * 2.0 / 30) * 30)
 
     # BioIO is ~10-50x slower due to Dask overhead, apply 10x multiplier
     if use_bioio:
@@ -360,5 +381,151 @@ def calculate_job_resources(
 
     # Enforce cluster policy: 15 GB per core minimum
     memory_gb = max(memory_gb, cores * 15)
+
+    return memory_gb, wall_time, cores
+
+
+def calculate_upsample_resources(
+    source_shape: List[int],
+    dtype: str,
+    source_chunks: List[int],
+    zoom_factors: List[float],
+    output_format: str = "zarr2",
+    no_sharding: bool = False,
+    shard_shape: Optional[List[int]] = None,
+) -> Tuple[int, str, int]:
+    """Calculate memory, wall time, and cores for an upsample job.
+
+    Upsampling processes data in XY-column chunks: for each (x, y) chunk,
+    reads the full extent of the zoom axis (typically Z), runs scipy.ndimage.zoom,
+    and writes the upsampled result via TensorStore.
+
+    Three output format cases:
+      - zarr2: sequential chunk writes, 1 core sufficient
+      - zarr3 non-sharded: same as zarr2
+      - zarr3 sharded: TensorStore buffers full shards in memory before flushing,
+        needs shard buffer memory + extra cores for I/O concurrency
+
+    Args:
+        source_shape: Source array shape (e.g., [3000, 3000, 1350, 1])
+        dtype: Data type string (e.g., 'uint8', 'uint16')
+        source_chunks: Source chunk shape (e.g., [256, 256, 256, 1])
+        zoom_factors: Per-axis zoom factors (e.g., [1.0, 1.0, 2.222, 1.0])
+        output_format: 'zarr2', 'zarr3'
+        no_sharding: If True, zarr3 uses non-sharded mode
+        shard_shape: Custom shard shape for zarr3 sharded (default: 1024 spatial)
+
+    Returns:
+        tuple: (memory_gb, wall_time_str, cores)
+    """
+    dtype_bytes = np.dtype(dtype).itemsize
+    use_sharding = (output_format == "zarr3" and not no_sharding)
+
+    # Identify zoom and non-zoom axes
+    non_zoom_axes = [i for i, f in enumerate(zoom_factors) if abs(f - 1.0) < 1e-6]
+    zoom_axes = [i for i, f in enumerate(zoom_factors) if abs(f - 1.0) >= 1e-6]
+
+    # Mirror Upsampler.upsample() chunk_axes selection:
+    #   Anisotropic: iterate over non-zoom axes, read zoom axes at full extent.
+    #   Isotropic (all zoomed): iterate over first two zoom axes, read the rest
+    #   at full extent — keeps per-slab memory bounded same as anisotropic case.
+    if non_zoom_axes:
+        iter_axes = non_zoom_axes
+        full_axes = zoom_axes
+    else:
+        iter_axes = zoom_axes[:2] if len(zoom_axes) >= 2 else zoom_axes
+        full_axes = zoom_axes[2:] if len(zoom_axes) > 2 else []
+
+    # Count chunks along iteration axes
+    n_xy_chunks = 1
+    for ax in iter_axes:
+        if ax < len(source_shape) and ax < len(source_chunks):
+            n_xy_chunks *= math.ceil(source_shape[ax] / source_chunks[ax])
+
+    # --- Memory ---
+    # Per-chunk: read_slab (iter_axes × chunk_size, full_axes × full_shape)
+    #            + scipy float64 intermediate + write_slab.
+    # Border expansion for order > 0 on zoom iter axes is ≤ 2 source voxels per
+    # axis — negligible relative to chunk size, ignored for estimation.
+    read_elements = 1
+    for ax in iter_axes:
+        read_elements *= min(source_chunks[ax], source_shape[ax]) if ax < len(source_chunks) else 1
+    for ax in full_axes:
+        read_elements *= source_shape[ax]
+
+    max_zoom = max(zoom_factors) if zoom_factors else 1.0
+    write_elements = read_elements * max_zoom
+
+    read_gb = (read_elements * dtype_bytes) / (1024 ** 3)
+    write_gb = (write_elements * dtype_bytes) / (1024 ** 3)
+    scipy_gb = (read_elements * 8) / (1024 ** 3)  # float64 intermediate
+
+    per_chunk_gb = read_gb + write_gb + scipy_gb
+    task_overhead = 2  # GB for Python, TensorStore, scipy
+
+    total_mem = per_chunk_gb + task_overhead
+
+    # Zarr3 sharded: TensorStore buffers shard data in memory.
+    # Each shard = product(shard_dims) × dtype_bytes. Multiple shards may be
+    # in flight if a write straddles shard boundaries.
+    shard_buffer_gb = 0.0
+    if use_sharding:
+        default_shard_spatial = 1024
+        if shard_shape:
+            shard_elements = 1
+            for s in shard_shape:
+                shard_elements *= s
+        else:
+            # Default: 1024 for spatial, 1 for non-spatial
+            shard_elements = 1
+            for i, s in enumerate(source_shape):
+                shard_elements *= min(default_shard_spatial, s)
+        # 2 shard buffers (current + neighbor if write straddles boundary)
+        shard_buffer_gb = 2 * (shard_elements * dtype_bytes) / (1024 ** 3)
+        total_mem += shard_buffer_gb
+
+    recommended_mem = int(math.ceil(total_mem * 1.5 / 5) * 5)
+
+    # --- Cores ---
+    # scipy.ndimage.zoom is single-threaded (GIL-bound).
+    # zarr2/zarr3 non-sharded: 1 core sufficient
+    # zarr3 sharded: TensorStore uses I/O concurrency for shard writes.
+    #   2 cores allows overlapping zoom compute + shard I/O flush.
+    if use_sharding:
+        cores = 2
+    else:
+        cores = 1
+
+    # Enforce cluster policy: 15 GB per core minimum
+    memory_gb = max(recommended_mem, cores * 15)
+
+    # --- Wall time ---
+    # Empirical: ~25 sec per XY-column chunk on Janelia NFS for NISB-sized columns
+    #   (256×256×1350 uint8 read → scipy zoom → 256×256×3000 write)
+    reference_mb = 84.0
+    reference_sec = 25.0
+    actual_read_mb = (read_elements * dtype_bytes) / (1024 ** 2)
+
+    sec_per_chunk = reference_sec * (actual_read_mb / reference_mb)
+    sec_per_chunk = max(2.0, sec_per_chunk)  # 2 sec floor for small datasets
+
+    # Zarr3 sharded writes may be slightly faster due to fewer filesystem ops
+    # (one shard file vs many chunk files), but scipy remains the bottleneck.
+    # Conservative: no wall time reduction for sharding.
+    upsample_minutes = (n_xy_chunks * sec_per_chunk) / 60
+
+    # Pyramid overhead (~50% of upsample time, always budgeted)
+    pyramid_overhead_minutes = upsample_minutes * 0.5
+    overhead_minutes = 2  # setup
+
+    total_minutes = upsample_minutes + pyramid_overhead_minutes + overhead_minutes
+
+    # 1.5x safety margin, round to nearest 15 min
+    safe_minutes = int(math.ceil(total_minutes * 1.5 / 15) * 15)
+    safe_minutes = max(15, min(safe_minutes, 12 * 60))  # 15 min floor, 12 hour cap
+
+    hours = safe_minutes // 60
+    minutes = safe_minutes % 60
+    wall_time = f"{hours}:{minutes:02d}"
 
     return memory_gb, wall_time, cores

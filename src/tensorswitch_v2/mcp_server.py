@@ -12,11 +12,15 @@ Usage:
 import json
 import logging
 import os
+import shutil
 import sys
 import traceback
 from pathlib import Path
 
+import tensorstore as ts
+
 from tensorswitch_v2.readers.base import is_remote_path
+from tensorswitch_v2.utils.tensorstore_utils import get_zarr_store_spec
 
 from mcp.server.fastmcp import FastMCP
 
@@ -398,6 +402,8 @@ def convert(
     per_level_factors: str = "",
     omero: bool = True,
     no_translation: bool = False,
+    output_dtype: str = "",
+    add_to_existing: bool = False,
 ) -> str:
     """Convert a microscopy dataset between formats.
 
@@ -436,11 +442,15 @@ def convert(
         no_ome_meta_export: Disable writing OME/METADATA.ome.xml file.
         no_ome_xml_attr: Do not embed OME/CZI XML in zarr.json/.zattrs.
         preset: Preset configuration — "webknossos" (chunk 32x32x32, shard 1024x1024x1024).
+                          "paintera" (n5, xyz axis order, gzip, chunk 64x64x64; or zarr2 with zyx).
         auto_multiscale: Generate full multiscale pyramid after conversion. Default: False.
         downsample_method: Downsampling method for pyramid — "auto", "mean", "mode", etc. Used with auto_multiscale.
         per_level_factors: Custom per-level factors, semicolon-separated (e.g., "1,2,2;1,2,2"). Used with auto_multiscale.
         omero: Include structured omero channel metadata for visualization tools (default: True).
         no_translation: Disable translation transforms in OME-NGFF multiscale metadata.
+        output_dtype: Output dtype override (e.g., "uint8", "int16", "uint16"). Empty = preserve source dtype.
+        add_to_existing: Add data to existing container without destroying it.
+            Safe write applies to the subgroup (e.g., labels/) not the container root.
     """
     try:
         import contextlib
@@ -460,6 +470,15 @@ def convert(
                 chunk_shape = "32,32,32"
             if not shard_shape:
                 shard_shape = "1024,1024,1024"
+        elif preset == "paintera":
+            if output_format == "zarr3":
+                output_format = "n5"
+            if not chunk_shape:
+                chunk_shape = "64,64,64"
+            if compression == "zstd":
+                compression = "gzip"
+            if not axes_order:
+                axes_order = "xyz" if output_format == "n5" else "zyx"
 
         # Create reader (suppress stdout — MCP uses stdio transport)
         with contextlib.redirect_stdout(io.StringIO()):
@@ -479,7 +498,8 @@ def convert(
                 effective_shape = shape
         else:
             effective_shape = shape
-        dataset_size_gb = (np.prod(effective_shape) * np.dtype(dtype_str).itemsize) / (1024**3)
+        effective_dtype_str = output_dtype if output_dtype else dtype_str
+        dataset_size_gb = (np.prod(effective_shape) * np.dtype(effective_dtype_str).itemsize) / (1024**3)
 
         if dataset_size_gb > MCP_CONVERT_MAX_GB:
             return json.dumps({
@@ -503,6 +523,30 @@ def convert(
         else:
             resolved_data_type = data_type
 
+        # Safe write: write to .tmp, rename on completion
+        final_output = output_path
+        _add_to_existing_parent = None  # Track subgroup parent for --add-to-existing
+
+        if add_to_existing:
+            # Subgroup-level safe write
+            if not os.path.exists(final_output):
+                return json.dumps({"error": f"--add-to-existing: container does not exist: {final_output}"}, indent=2)
+            subgroup = _resolve_conversion_subgroup(output_format, data_type, is_label, image_key, label_key)
+            if not subgroup:
+                return json.dumps({"error": "--add-to-existing requires data_type='labels' or 'image'"}, indent=2)
+            _add_to_existing_parent = subgroup.split('/')[0]
+            tmp_subgroup = os.path.join(final_output, _add_to_existing_parent + '.tmp')
+            if os.path.exists(tmp_subgroup):
+                shutil.rmtree(tmp_subgroup)
+            labels_container = 'labels.tmp' if _add_to_existing_parent == 'labels' else 'labels'
+            tmp_output = None  # No container-level .tmp
+        else:
+            tmp_output = output_path.rstrip('/\\') + '.tmp'
+            if os.path.exists(tmp_output):
+                shutil.rmtree(tmp_output)
+            output_path = tmp_output
+            labels_container = 'labels'
+
         # Create writer
         if output_format == "zarr3":
             writer = Writers.zarr3(
@@ -515,6 +559,7 @@ def convert(
                 image_key=image_key,
                 label_key=label_key,
                 include_omero=omero,
+                labels_container=labels_container,
             )
         elif output_format == "zarr2":
             writer = Writers.zarr2(
@@ -526,6 +571,7 @@ def convert(
                 image_key=image_key,
                 label_key=label_key,
                 include_omero=omero,
+                labels_container=labels_container,
             )
         elif output_format == "n5":
             writer = Writers.n5(
@@ -572,6 +618,7 @@ def convert(
                 force_order=force_order if force_order else None,
                 no_ome_meta_export=no_ome_meta_export,
                 no_ome_xml_attr=no_ome_xml_attr,
+                output_dtype=output_dtype if output_dtype else None,
             )
 
         response = {
@@ -592,12 +639,18 @@ def convert(
             # Resolve the subgroup the converter just wrote to (e.g. 'raw'
             # or 'labels/segmentation') so find_base_level targets the right
             # levels instead of a stale subgroup from a prior stage.
-            subgroup = _resolve_conversion_subgroup(
+            pyramid_subgroup = _resolve_conversion_subgroup(
                 output_format, data_type, is_label, image_key, label_key,
             )
-            find_target = (
-                os.path.join(output_path, subgroup) if subgroup else output_path
-            )
+            if _add_to_existing_parent and pyramid_subgroup:
+                # Pyramid runs on .tmp subgroup before rename
+                parts = pyramid_subgroup.split('/', 1)
+                pyramid_subgroup = parts[0] + '.tmp' + ('/' + parts[1] if len(parts) > 1 else '')
+                find_target = os.path.join(final_output, pyramid_subgroup)
+            else:
+                find_target = (
+                    os.path.join(output_path, pyramid_subgroup) if pyramid_subgroup else output_path
+                )
             s0_path, _ = find_base_level(find_target)
             root_path = os.path.dirname(s0_path)
 
@@ -630,6 +683,21 @@ def convert(
                     }
                     for lv in plan.get("levels", [])
                 ]
+
+        # Safe write: rename .tmp → final path
+        if _add_to_existing_parent:
+            from tensorswitch_v2.__main__ import _finalize_add_to_existing
+            _finalize_add_to_existing(
+                final_output=final_output,
+                subgroup_parent=_add_to_existing_parent,
+                output_format=output_format,
+                verbose=False,
+            )
+        elif tmp_output and os.path.exists(tmp_output):
+            if os.path.exists(final_output):
+                shutil.rmtree(final_output)
+            os.rename(tmp_output, final_output)
+        response["output"] = final_output
 
         return json.dumps(response, indent=2)
     except Exception as e:
@@ -840,6 +908,7 @@ def estimate_resources(
         from tensorswitch_v2.utils.resource_utils import (
             calculate_job_resources,
             estimate_shard_info,
+            is_native_source,
         )
 
         input_path = input_path.strip()
@@ -851,10 +920,16 @@ def estimate_resources(
         shape = tuple(store.shape)
         dtype_str = get_dtype_name(store.dtype)
 
+        # Extract axes_order from TensorStore domain labels
+        axes_order = None
+        if hasattr(store, 'domain') and hasattr(store.domain, 'labels'):
+            labels = store.domain.labels
+            if labels and all(labels):
+                axes_order = ['c' if l.lower() == 'channel' else l.lower()
+                              for l in labels]
+
         # Detect native source (TensorStore-backed = fast, file-decoded = slow)
-        _NATIVE_EXTENSIONS = {'.zarr', '.n5'}
-        _input_ext = os.path.splitext(input_path)[1].lower()
-        is_native = _input_ext in _NATIVE_EXTENSIONS or '://' in input_path
+        is_native = is_native_source(input_path)
 
         cs_str = chunk_shape if chunk_shape else None
         ss_str = shard_shape if shard_shape else None
@@ -865,6 +940,7 @@ def estimate_resources(
             output_format=output_format,
             chunk_shape_str=cs_str,
             shard_shape_str=ss_str,
+            axes_order=axes_order,
             no_sharding=no_sharding,
             is_native_source=is_native,
         )
@@ -873,7 +949,8 @@ def estimate_resources(
         cs = tuple(int(x) for x in chunk_shape.split(",")) if chunk_shape else None
         ss = tuple(int(x) for x in shard_shape.split(",")) if shard_shape else None
         est_shape, total_units = estimate_shard_info(
-            shape, dtype_str, output_format, cs, ss, no_sharding=no_sharding,
+            shape, dtype_str, output_format, cs, ss,
+            axes_order=axes_order, no_sharding=no_sharding,
         )
 
         dtype_bytes = np.dtype(dtype_str).itemsize
@@ -941,6 +1018,8 @@ def submit_job(
     preset: str = "",
     omero: bool = True,
     no_translation: bool = False,
+    output_dtype: str = "",
+    add_to_existing: bool = False,
 ) -> str:
     """Submit a conversion job to the LSF cluster (bsub).
 
@@ -985,8 +1064,12 @@ def submit_job(
         downsample_method: Downsampling method for pyramid — "auto", "mean", "mode", etc.
         per_level_factors: Custom per-level factors, semicolon-separated (e.g., "1,2,2;1,2,2").
         preset: Preset configuration — "webknossos" (chunk 32, shard 1024).
+                          "paintera" (n5, xyz axis order, gzip, chunk 64x64x64; or zarr2 with zyx).
         omero: Include structured omero channel metadata for visualization tools.
         no_translation: Disable translation transforms in OME-NGFF multiscale metadata.
+        output_dtype: Output dtype override (e.g., "uint8", "int16", "uint16"). Empty = preserve source dtype.
+        add_to_existing: Add data to existing container without destroying it.
+            Safe write applies to the subgroup (e.g., labels/) not the container root.
     """
     try:
         import argparse
@@ -1016,6 +1099,15 @@ def submit_job(
                 chunk_shape = "32,32,32"
             if not shard_shape:
                 shard_shape = "1024,1024,1024"
+        elif preset == "paintera":
+            if output_format == "zarr3":
+                output_format = "n5"
+            if not chunk_shape:
+                chunk_shape = "64,64,64"
+            if compression == "zstd":
+                compression = "gzip"
+            if not axes_order:
+                axes_order = "xyz" if output_format == "n5" else "zyx"
 
         # Handle auto_multiscale mode
         if auto_multiscale:
@@ -1023,6 +1115,9 @@ def submit_job(
 
             # Detect whether input is an existing dataset (pyramid-only)
             # or a raw source file (conversion + dependent pyramid).
+            # Only use pyramid-only shortcut when input and output resolve to
+            # the same directory — otherwise the user wants format conversion
+            # first, then pyramid on the *output*.
             is_existing_dataset = False
             try:
                 find_base_level(input_path)
@@ -1030,8 +1125,9 @@ def submit_job(
             except (ValueError, OSError):
                 pass
 
-            if is_existing_dataset:
-                # Pyramid-only: input already has s0
+            same_path = os.path.abspath(input_path) == os.path.abspath(output_path)
+            if is_existing_dataset and same_path:
+                # Pyramid-only: input already has s0, no conversion needed
                 subgroup = _resolve_conversion_subgroup(
                     output_format, data_type, is_label, image_key, label_key,
                 )
@@ -1087,7 +1183,10 @@ def submit_job(
             no_ome_xml_attr=no_ome_xml_attr,
             job_group=job_group if job_group else None,
             omero=omero,
+            no_omero=not omero,
             no_translation=no_translation,
+            dtype=output_dtype if output_dtype else None,
+            add_to_existing=add_to_existing,
         )
 
         # Import and call the CLI submit_job function
@@ -1344,7 +1443,178 @@ def _submit_pyramid_job(
 
 
 # ---------------------------------------------------------------------------
-# Tool 8: check_job_status
+# Tool 8: upsample_to_isotropic
+# ---------------------------------------------------------------------------
+@mcp.tool()
+def upsample_to_isotropic(
+    input_path: str,
+    output_path: str,
+    target_voxel_size: float = 0,
+    upsample_method: str = "auto",
+    is_label: bool = False,
+    output_format: str = "auto",
+    no_sharding: bool = False,
+    compression: str = "zstd",
+    compression_level: int = 5,
+    auto_pyramid: bool = True,
+    downsample_method: str = "auto",
+    per_level_factors: str = "",
+    no_translation: bool = False,
+) -> str:
+    """Upsample anisotropic data to isotropic resolution.
+
+    Resamples data along anisotropic axes (e.g., Z in ssTEM/FIB-SEM) to
+    match the highest-resolution axis, producing isotropic voxels. Uses
+    scipy.ndimage.zoom for interpolation, TensorStore for output writes.
+
+    For datasets larger than 2 GB, use the CLI instead.
+
+    Args:
+        input_path: Path to source s0 array (e.g., /data/volume.zarr/img/s0).
+        output_path: Path for output (e.g., /data/output.zarr/img/s0).
+        target_voxel_size: Target isotropic voxel size in nm. 0 = auto
+            (use smallest source voxel size, i.e. highest resolution axis).
+        upsample_method: Interpolation method — "auto" (trilinear for images,
+            nearest for labels), "trilinear", "nearest", or "cubic".
+        is_label: Set True for segmentation/label data (forces nearest-neighbor).
+        output_format: Output format — "auto" (match source), "zarr2", "zarr3".
+        no_sharding: Disable sharding for zarr3 output. Default: False.
+        compression: Compression codec — "zstd" (default), "gzip", or "none".
+        compression_level: Compression level (1-22 for zstd, 1-9 for gzip).
+        auto_pyramid: Generate isotropic multiscale pyramid after upsampling.
+        downsample_method: Downsampling method for pyramid — "auto", "mean",
+            "mode", etc. Used with auto_pyramid.
+        per_level_factors: Custom per-level factors, semicolon-separated
+            (e.g., "1,2,2;1,2,2"). Used with auto_pyramid.
+        no_translation: Disable translation transforms in OME-NGFF metadata.
+    """
+    try:
+        import contextlib
+        import io
+
+        import numpy as np
+        from tensorswitch_v2.core.upsampler import (
+            upsample_to_isotropic as _upsample,
+        )
+
+        input_path = input_path.strip()
+        output_path = output_path.strip()
+
+        # Size guard
+        src = ts.open(get_zarr_store_spec(input_path), open=True).result()
+        shape = tuple(src.shape)
+        dtype_str = src.dtype.numpy_dtype.name
+        dataset_size_gb = (np.prod(shape) * np.dtype(dtype_str).itemsize) / (1024**3)
+
+        if dataset_size_gb > MCP_CONVERT_MAX_GB:
+            return json.dumps({
+                "error": "dataset_too_large",
+                "dataset_size_gb": round(dataset_size_gb, 2),
+                "threshold_gb": MCP_CONVERT_MAX_GB,
+                "shape": list(shape),
+                "dtype": dtype_str,
+                "recommendation": (
+                    f"Dataset is {dataset_size_gb:.1f} GB, exceeding the "
+                    f"{MCP_CONVERT_MAX_GB} GB MCP threshold. Use the CLI: "
+                    f"python -m tensorswitch_v2 --upsample "
+                    f"-i '{input_path}' -o '{output_path}'"
+                ),
+            }, indent=2)
+
+        # Safe write: write to .tmp, rename on completion
+        final_output = output_path
+        # Determine the container root (parent of the group containing s0)
+        # e.g., /data/out.zarr/img/s0 → container is /data/out.zarr
+        # We apply .tmp at the container level
+        s0_name = os.path.basename(output_path)
+        group_path = os.path.dirname(output_path)
+        container_path = os.path.dirname(group_path) if group_path else output_path
+
+        tmp_container = container_path.rstrip('/\\') + '.tmp'
+        tmp_group = os.path.join(tmp_container, os.path.basename(group_path)) if group_path != output_path else tmp_container
+        tmp_s0 = os.path.join(tmp_group, s0_name) if group_path != output_path else tmp_container
+
+        if os.path.exists(tmp_container):
+            shutil.rmtree(tmp_container)
+
+        target = target_voxel_size if target_voxel_size > 0 else None
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            stats = _upsample(
+                input_path=input_path,
+                output_path=tmp_s0,
+                target_voxel_size=target,
+                upsample_method=upsample_method,
+                is_label=is_label,
+                verbose=False,
+                output_format=output_format,
+                no_sharding=no_sharding,
+                compression=compression,
+                compression_level=compression_level,
+            )
+
+        response = {
+            "status": "success",
+            "input": input_path,
+            "output": final_output,
+            "input_shape": stats["input_shape"],
+            "output_shape": stats["output_shape"],
+            "zoom_factors": [round(f, 4) for f in stats["zoom_factors"]],
+            "upsample_method": stats["upsample_method"],
+            "time_seconds": round(stats["elapsed_time"], 1),
+        }
+
+        # Auto-pyramid after upsampling
+        if auto_pyramid:
+            from tensorswitch_v2.__main__ import run_local_pyramid
+            from tensorswitch_v2.utils.pyramid_utils import resolve_downsample_method
+
+            root_path = os.path.dirname(tmp_s0)
+            resolved_method = resolve_downsample_method(downsample_method, tmp_s0)
+
+            custom_factors = None
+            if per_level_factors:
+                custom_factors = [
+                    [int(x) for x in level.split(",")]
+                    for level in per_level_factors.split(";")
+                ]
+
+            with contextlib.redirect_stdout(io.StringIO()):
+                plan = run_local_pyramid(
+                    tmp_s0, root_path,
+                    downsample_method=resolved_method,
+                    custom_per_level_factors=custom_factors,
+                    include_translation=not no_translation,
+                    verbose=False,
+                )
+            response["auto_pyramid"] = True
+            response["pyramid_s0"] = tmp_s0
+            if plan and isinstance(plan, dict):
+                response["pyramid_levels"] = plan.get("num_levels", 0)
+                response["pyramid_info"] = [
+                    {
+                        "level": f"s{lv['level']}",
+                        "factors": lv["cumulative_factor"],
+                        "shape": lv["predicted_shape"],
+                    }
+                    for lv in plan.get("levels", [])
+                ]
+
+        # Safe write: rename .tmp → final path
+        if os.path.exists(tmp_container):
+            if os.path.exists(container_path):
+                shutil.rmtree(container_path)
+            os.rename(tmp_container, container_path)
+        response["output"] = final_output
+
+        return json.dumps(response, indent=2)
+    except Exception as e:
+        logger.error(f"upsample_to_isotropic failed: {e}\n{traceback.format_exc()}")
+        return f"Error upsampling {input_path}: {e}"
+
+
+# ---------------------------------------------------------------------------
+# Tool 9: check_job_status
 # ---------------------------------------------------------------------------
 @mcp.tool()
 def check_job_status(job_id: str) -> str:

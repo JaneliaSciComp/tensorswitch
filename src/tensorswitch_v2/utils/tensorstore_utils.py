@@ -591,9 +591,9 @@ def zarr2_store_spec(zarr_level_path, shape, chunks=None, use_fortran_order=Fals
         chunks = build_smart_chunks(shape, axes_order)
         print(f"Zarr2 smart chunking: axes={axes_order or infer_axes_from_shape(shape)}, chunks={chunks}")
 
-    # Default compressor
+    # Default compressor — use blosc(zstd) instead of bare zstd for numcodecs compatibility
     if compressor is None:
-        compressor = {'id': 'zstd', 'level': 5}
+        compressor = {'id': 'blosc', 'cname': 'zstd', 'clevel': 5, 'shuffle': 1, 'blocksize': 0}
 
     return {
         'driver': 'zarr',

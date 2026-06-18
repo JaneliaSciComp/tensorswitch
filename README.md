@@ -1,6 +1,6 @@
 # TensorSwitch v2
 
-**Version**: 2.0.2
+**Version**: 2.0.3
 **Status**: Production Ready
 **Branch**: `main`
 
@@ -49,10 +49,15 @@ A high-performance microscopy data conversion tool with TensorStore as the unifi
 - **LSF Cluster Support**: Auto-calculated resources (memory, wall time, cores)
 - **Preserve Source Layout**: Maintains source dimensionality (3D/4D/5D) and axis order per OME-NGFF RFC-3
 - **Compression**: zstd compression with configurable levels
-- **Frame-Based Optimization**: Auto-capped chunk/shard defaults for large ND2/TIFF files with frame-level read cache (63x speedup)
+- **Frame-Based Optimization**: Auto-capped chunk defaults for large ND2/TIFF/IMS/CZI files with frame-level read cache (63x speedup)
 - **Remote Sources**: Read from GCS, S3, HTTP URLs with optional bounding box subvolume extraction
 - **Software Attribution**: All output metadata includes `_software` field with TensorSwitch version and GitHub link
 - **OME XML Export**: Writes `OME/METADATA.ome.xml` (or `.czi.xml`) as standalone file for easy access and tool compatibility
+- **Isotropic Upsampling**: Upsample anisotropic data to isotropic resolution via `scipy.ndimage.zoom` (trilinear for images, nearest-neighbor for labels), with automatic pyramid generation
+- **Dtype Casting**: Convert output to a different numeric dtype (e.g., float32 → int16) with upfront range validation and per-chunk clipping safety
+- **Safe Write**: Writes to `.tmp` during conversion and renames on completion — interrupted jobs never leave corrupted output
+- **Chunk Write Retry**: Automatic retry with exponential backoff (3 attempts) for transient I/O errors on network storage — failed chunks are tracked and the job fails with a summary of failed indices
+- **Add to Existing Container**: `--add-to-existing` safely adds labels to a container that already has image data (subgroup-level safe write to `labels.tmp/`) — no risk of overwriting existing `raw/` data. Supported in CLI, MCP, and LSF `--submit`.
 - **MCP Server**: AI/agent integration via Model Context Protocol (Claude Code, LLM agents)
 
 ---
@@ -155,14 +160,14 @@ tensorswitch-v2 --version
 
 # Using pixi
 pixi run tensorswitch-v2 --version
-# Output: tensorswitch_v2 2.0.2
+# Output: tensorswitch_v2 2.0.3
 ```
 
 ### Python API
 
 ```python
 from tensorswitch_v2 import __version__, TensorSwitchDataset, Readers, Writers
-print(__version__)  # 2.0.2
+print(__version__)  # 2.0.3
 ```
 
 ### What's Included
@@ -232,10 +237,17 @@ pixi run python -m tensorswitch_v2 -i input.tif -o output.zarr \
 | Argument | Description |
 |----------|-------------|
 | `--preset webknossos` | WebKnossos-optimized settings: zarr3, chunk 32x32x32, shard 1024x1024x1024, zstd |
+| `--preset paintera` | Paintera-ready settings: n5, xyz axis order, gzip, chunk 64x64x64. Use with `--output_format zarr2` for zyx Zarr2 output. Output is consumed by [paintera-conversion-helper](https://github.com/saalfeldlab/paintera-conversion-helper) to produce Paintera-native format. |
 
 ```bash
 # Example: Convert for WebKnossos viewing
 pixi run python -m tensorswitch_v2 -i input.tif -o output.zarr --preset webknossos
+
+# Example: Convert TIFF for Paintera (N5 output, xyz axis order)
+pixi run python -m tensorswitch_v2 -i input.tif -o output.n5 --preset paintera
+
+# Example: Convert Zarr3 for Paintera (Zarr2 output, zyx axis order)
+pixi run python -m tensorswitch_v2 -i input.zarr -o output.zarr --preset paintera --output_format zarr2
 ```
 
 ### Chunk/Shard Configuration
@@ -247,6 +259,49 @@ pixi run python -m tensorswitch_v2 -i input.tif -o output.zarr --preset webknoss
 | `--no_sharding` | Disable sharding (Zarr3 only) | False |
 | `--compression` | Compression codec | `zstd` |
 | `--compression_level` | Compression level (1-22) | `5` |
+| `--dtype` | Output dtype override (e.g., `uint8`, `int16`, `uint16`, `float32`) | Source dtype |
+
+### Dtype Casting
+
+Cast the output to a different numeric dtype during conversion. Useful for reducing memory footprint (e.g., float32 → int16 for Neuroglancer viewing).
+
+```bash
+# Convert float32 zarr2 to int16 zarr3 with sharding
+pixi run python -m tensorswitch_v2 -i input.zarr -o output.zarr --dtype int16
+
+# Submit to cluster with dtype cast + pyramid
+pixi run python -m tensorswitch_v2 -i input.zarr -o output.zarr \
+  --dtype int16 --auto_multiscale --submit -P scicompsoft
+```
+
+**Safety**: Before conversion starts, the converter samples the source data and raises an error if values would be clipped by the target dtype range. For float → integer casts, values are clipped to the target range per chunk as a secondary safety net.
+
+### Upsampling (Anisotropic → Isotropic)
+
+| Argument | Description | Default |
+|----------|-------------|---------|
+| `--upsample` | Upsample mode: resample anisotropic data to isotropic resolution | False |
+| `--target_voxel_size` | Target isotropic voxel size in nm | Auto (smallest source voxel) |
+| `--upsample_method` | Interpolation method: `auto`, `trilinear`, `nearest`, `cubic` | `auto` |
+
+Combine with `--auto_multiscale` to generate an isotropic pyramid after upsampling. Combine with `--submit` for LSF cluster submission.
+
+```bash
+# Upsample anisotropic data (9x9x20 nm) to isotropic (9x9x9 nm) + pyramid
+pixi run python -m tensorswitch_v2 --upsample --auto_multiscale \
+  -i /data/anisotropic.zarr/img/s0 \
+  -o /data/isotropic.zarr \
+  --submit -P scicompsoft
+
+# Upsample labels with nearest-neighbor interpolation
+pixi run python -m tensorswitch_v2 --upsample --auto_multiscale \
+  -i /data/anisotropic.zarr/labels/seg/s0 \
+  -o /data/isotropic_labels.zarr \
+  --upsample_method nearest \
+  --submit -P scicompsoft
+```
+
+**How it works**: Processes in XY-column chunks (full Z per column), applies `scipy.ndimage.zoom(grid_mode=True)` for interpolation, writes via TensorStore. Supports zarr2 and zarr3 (with/without sharding) output formats.
 
 ### Downsampling
 
@@ -645,6 +700,7 @@ output.zarr/
 | `--image-key NAME` | Name for image group (default: "raw") |
 | `--label-key NAME` | Name for label image (default: "segmentation") |
 | `--no-nested-structure` | Disable nested structure |
+| `--add-to-existing` | Add data to existing container (subgroup-level safe write) |
 
 **Examples:**
 
@@ -654,6 +710,9 @@ tensorswitch -i data.tif -o output.zarr
 
 # Convert as labels/segmentation
 tensorswitch -i segmentation.tif -o output.zarr --data-type labels
+
+# Add labels to existing container (preserves raw/ data)
+tensorswitch -i segmentation.tif -o existing.zarr --data-type labels --add-to-existing
 
 # Auto-detect from folder (Neuroglancer Precomputed)
 tensorswitch -i /path/to/folder/ -o output.zarr
@@ -893,6 +952,52 @@ pixi run python -m tensorswitch_v2 \
   --dry_run
 ```
 
+### OME-NGFF Container Conversion (Image + Labels)
+
+Convert zarr containers with nested OME-NGFF structure (e.g., `data.zarr` with `img/s0` + `labels/seg/s0`) in a single command. TensorSwitch auto-discovers image and label datasets and sequences the conversion with proper ordering.
+
+```bash
+# Convert container with auto-discovery + pyramid generation
+pixi run python -m tensorswitch_v2 \
+  -i /data/source.zarr \
+  -o /output/converted.zarr \
+  --auto_multiscale \
+  --submit -P scicompsoft
+
+# With custom chunk/shard shapes
+pixi run python -m tensorswitch_v2 \
+  -i /data/source.zarr \
+  -o /output/converted.zarr \
+  --chunk_shape 256,256,64 \
+  --shard_shape 512,512,512 \
+  --auto_multiscale \
+  --submit -P scicompsoft
+
+# Convert only image or only labels
+pixi run python -m tensorswitch_v2 \
+  -i /data/source.zarr \
+  -o /output/converted.zarr \
+  --image-only --auto_multiscale --submit -P scicompsoft
+
+# Dry run to preview the coordinator plan
+pixi run python -m tensorswitch_v2 \
+  -i /data/source.zarr \
+  -o /output/converted.zarr \
+  --auto_multiscale --submit -P scicompsoft --dry_run
+```
+
+**Coordinator pattern** (with `--auto_multiscale`): Submits a lightweight coordinator LSF job that sequences 4 blocking steps via `bsub -K`:
+1. Image s0 conversion
+2. Image pyramid (`--auto_multiscale`, runs locally)
+3. Label s0 conversion (`--add-to-existing`)
+4. Label pyramid (`--auto_multiscale`, runs locally)
+
+Each step blocks until completion before the next starts, ensuring no race conditions.
+
+**Direct submission** (without `--auto_multiscale`): Submits separate jobs for image and labels, with labels chained after image via `bsub -w done()`.
+
+**Recognized groups**: Image: `raw`, `data`, `image`, `images`, `img`, `em`. Labels: `labels`, `label`, `seg`.
+
 ### Rechunking (Same Format, Different Chunks)
 
 For rechunking existing data (e.g., N5 → N5 with different chunk shape), the **output path determines the behavior**:
@@ -1007,7 +1112,7 @@ info         → Precomputed
 - **Zarr3 sharded** (default): inner chunk = 64, shard = 1024
 - **Zarr3 non-sharded / Zarr2**: adaptive spatial chunk based on dataset size:
   - < 20 GB → 64, 20–100 GB → 128, > 100 GB → 256
-- **Frame-based source auto-cap**: For ND2/TIFF/IMS/HDF5/CZI files where native chunks have small dims (e.g., Z=1 for full-frame ND2), default chunk and shard shapes are automatically capped to native dims. This prevents cache-thrashing defaults like shard Z=1024 on a Z=157 dataset. No `--chunk_shape` needed for most cases.
+- **Frame-based source auto-cap**: For ND2/TIFF/IMS/HDF5/CZI files where native chunks have small dims (e.g., Z=1 for full-frame ND2), default chunk shapes are automatically capped to native dims. Shard shapes use standard defaults (non-spatial=1, spatial=1024) and are not capped — shard size has no read-side impact since reads go through frame-level cache. No `--chunk_shape` needed for most cases.
 
 ### LSF Resource Auto-Calculation
 
@@ -1111,11 +1216,12 @@ TensorSwitch v2 includes an MCP (Model Context Protocol) server that allows Clau
 |------|-------------|
 | `inspect_dataset` | Returns shape, dtype, voxel sizes, axes, pyramid levels, OME metadata. Supports remote S3/HTTP URLs with auto-discovery: groups with OME-NGFF multiscales auto-resolve; S3 containers use bounded directory listing (BFS, max 4 levels) to find arrays automatically; non-S3 URLs require full array path. |
 | `discover_datasets` | Scans a directory for image/segmentation layers. Supports `pattern` (e.g., `"*.tif"`) and `recursive` for finding proprietary files (TIFF, ND2, CZI, IMS, HDF5) in subdirectories. |
-| `convert` | Converts between formats with full CLI parity. Supports `auto_multiscale` (one-step convert + pyramid), `omero` channel metadata (default ON, opt out with `omero=False`), `no_translation`, `force_order` (C/F memory layout), remote S3/HTTP with `--bbox`. 2 GB size guard — larger datasets redirect to `submit_job`. |
+| `convert` | Converts between formats with full CLI parity. Supports `auto_multiscale` (one-step convert + pyramid), `omero` channel metadata (default ON, opt out with `omero=False`), `no_translation`, `force_order` (C/F memory layout), remote S3/HTTP with `--bbox`, `add_to_existing` (safe label addition to existing containers). 2 GB size guard — larger datasets redirect to `submit_job`. |
+| `upsample_to_isotropic` | Resamples anisotropic data to isotropic resolution using `scipy.ndimage.zoom`. Supports zarr2, zarr3, zarr3+sharding output via TensorStore backend. Safe write, auto-pyramid, size guard. |
 | `generate_pyramid` | Creates multiscale pyramid locally with chained downsampling, anisotropic handling, optional `no_translation`, and custom `per_level_factors` |
 | `list_formats` | Lists all supported input/output formats by tier |
 | `estimate_resources` | Estimates memory, wall time, and cores needed for a conversion |
-| `submit_job` | Submits conversion to LSF cluster. With `auto_multiscale`: auto-detects whether to run pyramid-only or conversion + dependent pyramid coordinator. Supports `force_order`. |
+| `submit_job` | Submits conversion to LSF cluster. With `auto_multiscale`: auto-detects whether to run pyramid-only or conversion + dependent pyramid coordinator. Supports `force_order`, `add_to_existing`. |
 | `check_job_status` | Checks LSF job status (supports multiple job IDs) |
 
 ### Setup (Claude Code)
