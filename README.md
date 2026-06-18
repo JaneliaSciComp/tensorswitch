@@ -1,6 +1,6 @@
 # TensorSwitch v2
 
-**Version**: 2.0.2
+**Version**: 2.0.3
 **Status**: Production Ready
 **Branch**: `main`
 
@@ -160,14 +160,14 @@ tensorswitch-v2 --version
 
 # Using pixi
 pixi run tensorswitch-v2 --version
-# Output: tensorswitch_v2 2.0.2
+# Output: tensorswitch_v2 2.0.3
 ```
 
 ### Python API
 
 ```python
 from tensorswitch_v2 import __version__, TensorSwitchDataset, Readers, Writers
-print(__version__)  # 2.0.2
+print(__version__)  # 2.0.3
 ```
 
 ### What's Included
