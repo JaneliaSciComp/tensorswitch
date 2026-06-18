@@ -26,6 +26,9 @@ A high-performance microscopy data conversion tool with TensorStore as the unifi
 10. [LSF Cluster Submission](#lsf-cluster-submission)
 11. [Auto-Calculation](#auto-calculation)
 12. [Examples](#examples)
+13. [MCP Server](#mcp-server-aiagent-integration)
+14. [Module Structure](#module-structure)
+15. [Citation](#citation)
 
 ---
 
@@ -1330,7 +1333,7 @@ If you use TensorSwitch in your research, please cite it:
 @software{chen2026tensorswitch,
   author = {Chen, Diyi},
   title = {TensorSwitch},
-  version = {2.0.2},
+  version = {2.0.3},
   year = {2026},
   url = {https://github.com/JaneliaSciComp/tensorswitch}
 }
