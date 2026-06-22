@@ -12,9 +12,9 @@ runnables:
     description: >
       Convert a microscopy file (TIFF, ND2, CZI, IMS, HDF5, Zarr, N5, and 200+ formats)
       to Zarr3, Zarr2, or N5. Optionally generates a multi-scale pyramid and/or upsamples
-      to isotropic resolution. Chunk/shard sizes and job resources are auto-calculated
-      from the source file if not specified.
-    command: pixi run tensorswitch-v2
+      to isotropic resolution. CPU cores, memory, and wall time are auto-calculated from
+      the source file unless overridden in the Cluster Resources section.
+    command: pixi run tensorswitch-v2 --submit
     parameters:
       - flag: -i
         name: Input Path
@@ -26,6 +26,12 @@ runnables:
         name: Output Path
         type: directory
         description: "Output path for the converted dataset (e.g., /path/to/output.zarr)."
+        required: true
+
+      - flag: --project
+        name: LSF Billing Project
+        type: string
+        description: "LSF project name for job billing. Required for cluster submission."
         required: true
 
       - flag: --output_format
@@ -49,6 +55,22 @@ runnables:
         type: boolean
         description: "Input is a segmentation or label volume. Uses mode downsampling for the pyramid (preserves label IDs)."
         default: false
+
+      - section: Cluster Resources
+        description: "TensorSwitch auto-calculates CPU cores, memory, and wall time from the source file. Leave blank to use auto-calculated values."
+        collapsed: false
+        parameters:
+          - flag: --cores
+            name: CPU Cores
+            type: integer
+            description: "Number of CPU cores to request. Auto-calculated from source size if not specified."
+            min: 1
+            max: 256
+
+          - flag: --wall_time
+            name: Wall Time
+            type: string
+            description: "Maximum job wall time in H:MM format (e.g. 4:00). Auto-calculated from source size if not specified."
 
       - section: Chunk & Shard
         description: "Control how data is chunked and sharded. Leave blank for auto-calculated values."
@@ -107,7 +129,7 @@ runnables:
           - flag: --compression
             name: Compression Codec
             type: string
-            description: "Compression codec. Options: zstd (default), gzip, none."
+            description: "Compression codec. Options: zstd (default), gzip, blosc, none."
             default: zstd
 
           - flag: --compression_level
