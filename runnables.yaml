@@ -79,12 +79,12 @@ runnables:
           - flag: --chunk_shape
             name: Chunk Shape
             type: string
-            description: "Inner chunk shape, comma-separated (e.g. 128,128,128 or 1,128,128,128 for 4D). Auto-calculated if not specified."
+            description: "Inner chunk shape, comma-separated (e.g. 128,128,128 or 1,128,128,128 for 4D). Leave blank to auto-calculate."
 
           - flag: --shard_shape
             name: Shard Shape
             type: string
-            description: "Shard shape for Zarr3, comma-separated (e.g. 1024,1024,1024). Auto-calculated if not specified."
+            description: "Shard shape for Zarr3, comma-separated (e.g. 1024,1024,1024). Leave blank to auto-calculate."
 
           - flag: --no_sharding
             name: Disable Sharding
@@ -124,7 +124,7 @@ runnables:
           - flag: --dtype
             name: Output Data Type
             type: string
-            description: "Override output data type (e.g. uint8, uint16, int16, float32). Default: preserve source dtype."
+            description: "Override output data type (e.g. uint8, uint16, int16, float32). Leave blank to preserve source dtype."
 
           - flag: --compression
             name: Compression Codec
@@ -159,7 +159,7 @@ runnables:
           - flag: --per_level_factors
             name: Per-Level Factors
             type: string
-            description: "Custom per-level downsampling factors, semicolon-separated (e.g. 1,2,2;1,2,2;2,2,2). Bypasses auto-calculation from voxel sizes."
+            description: "Custom per-level downsampling factors, semicolon-separated (e.g. 1,2,2;1,2,2;2,2,2). Leave blank to auto-calculate from voxel sizes."
 
       - section: Upsample to Isotropic
         description: "Resample anisotropic data to isotropic resolution before or instead of pyramid generation."
@@ -174,8 +174,7 @@ runnables:
           - flag: --target_voxel_size
             name: Target Voxel Size (nm)
             type: number
-            description: "Target isotropic voxel size in nanometers. Default (0): auto-detect from smallest source voxel size."
-            default: 0
+            description: "Target isotropic voxel size in nanometers. Leave blank to auto-detect from smallest source voxel size."
 
           - flag: --upsample_method
             name: Upsample Method
