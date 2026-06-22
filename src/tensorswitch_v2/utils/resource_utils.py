@@ -161,9 +161,14 @@ def calculate_wall_time(volume_shape, dtype_str, shard_shape, total_shards, use_
         base_minutes = max(throughput_minutes, chunk_minutes)
 
         # Scale down by cores — parallel chunk processing
-        # Use 0.7 efficiency factor (I/O contention on network FS limits perfect scaling)
+        # Use 0.7 efficiency factor (I/O contention on network FS limits perfect scaling).
+        # For file-decoded sources (TIFF, IMS, ND2, CZI) the bottleneck is the source
+        # decoder (tifffile strips, h5py reads, nd2 frame decompression), which is mostly
+        # single-threaded. Cap effective cores at 4 so extra cores don't falsely shrink
+        # the wall-time estimate.
         if cores > 1:
-            parallel_factor = cores * 0.7
+            effective_cores = cores if is_native_source else min(cores, 4)
+            parallel_factor = effective_cores * 0.7
             base_minutes = base_minutes / parallel_factor
 
         # Overhead for file loading (ND2/TIFF opening)
@@ -201,9 +206,12 @@ def calculate_wall_time(volume_shape, dtype_str, shard_shape, total_shards, use_
         base_minutes = minutes_per_shard * total_shards
 
         # Scale down by cores — TensorStore processes shards in parallel
-        # Use 0.7 efficiency (same as non-sharded) — NFS contention limits scaling
+        # Use 0.7 efficiency (same as non-sharded) — NFS contention limits scaling.
+        # For file-decoded sources (TIFF, IMS, ND2, CZI) cap effective cores at 4:
+        # the source decoder is the bottleneck, not TensorStore shard processing.
         if cores > 1:
-            parallel_factor = cores * 0.7
+            effective_cores = cores if is_native_source else min(cores, 4)
+            parallel_factor = effective_cores * 0.7
             base_minutes = base_minutes / parallel_factor
 
         # Overhead for file loading
