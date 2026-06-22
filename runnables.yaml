@@ -1,6 +1,6 @@
 name: TensorSwitch
-description: High-performance microscopy data conversion tool. Converts 200+ formats (TIFF, ND2, CZI, IMS, N5, etc.) to Zarr3/Zarr2/N5 with automatic multi-scale pyramid generation.
-version: "2.0.0"
+description: High-performance microscopy data conversion tool. Converts 200+ formats (TIFF, ND2, CZI, IMS, HDF5, N5, Zarr, etc.) to Zarr3/Zarr2/N5 with automatic multi-scale pyramid generation.
+version: "2.0.3"
 
 requirements:
   - "pixi>=0.40"
@@ -9,28 +9,192 @@ runnables:
   - id: convert
     type: job
     name: Convert to Zarr
-    description: Convert a microscopy file to Zarr3, Zarr2, or N5 format with automatic chunk/shard optimization.
+    description: >
+      Convert a microscopy file (TIFF, ND2, CZI, IMS, HDF5, Zarr, N5, and 200+ formats) to
+      Zarr3, Zarr2, or N5. Optionally generates a multi-scale pyramid after conversion.
+      Chunk/shard sizes and resources are auto-calculated from the source file if not specified.
     command: pixi run tensorswitch-v2
     parameters:
       - flag: -i
         name: Input Path
         type: file
-        description: Path to input file (TIFF, ND2, CZI, IMS, HDF5, N5, Zarr, or 200+ formats).
+        description: "Path to input file (TIFF, ND2, CZI, IMS, HDF5, N5, Zarr, or 200+ formats). Auto-detected from file extension."
         required: true
+
       - flag: -o
         name: Output Path
         type: directory
-        description: Output path for the converted dataset (e.g., /path/to/output.zarr).
+        description: "Output path for the converted dataset (e.g., /path/to/output.zarr)."
         required: true
+
       - flag: --output_format
         name: Output Format
         type: enum
-        description: Output format.
+        description: "Output format. Zarr3 (recommended) supports sharding for large datasets."
         default: zarr3
         options:
           - zarr3
           - zarr2
           - n5
+
+      - flag: --auto_multiscale
+        name: Generate Multi-Scale Pyramid
+        type: boolean
+        description: "Automatically generate a full multi-scale pyramid after converting s0. Recommended for visualization in Neuroglancer or WebKnossos."
+        default: false
+
+      - flag: --is-label
+        name: Label / Segmentation Data
+        type: boolean
+        description: "Input is a segmentation or label volume. Uses mode downsampling for the pyramid (preserves label IDs instead of averaging)."
+        default: false
+
+      - flag: --preset
+        name: Preset
+        type: enum
+        description: "Use a preset configuration. 'webknossos' uses 32³ chunks and 1024³ shards. 'paintera' uses N5 with 64³ chunks."
+        default: ""
+        options:
+          - ""
+          - webknossos
+          - paintera
+
+      - section: Chunk & Shard
+        description: "Control how data is chunked and sharded. Leave blank for auto-calculated values."
+        collapsed: true
+        parameters:
+          - flag: --chunk_shape
+            name: Chunk Shape
+            type: string
+            description: "Inner chunk shape, comma-separated (e.g. 128,128,128 or 1,128,128,128 for 4D). Auto-calculated from data shape and dtype if not specified."
+
+          - flag: --shard_shape
+            name: Shard Shape
+            type: string
+            description: "Shard shape for Zarr3, comma-separated (e.g. 1024,1024,1024). Each shard is a single file containing many inner chunks. Auto-calculated if not specified."
+
+          - flag: --no_sharding
+            name: Disable Sharding
+            type: boolean
+            description: "Disable sharding for Zarr3 output. Produces one file per chunk (like Zarr2). Useful for compatibility with tools that don't support Zarr3 sharding."
+            default: false
+
+      - section: Voxel & Data Type
+        description: "Override voxel sizes or output data type."
+        collapsed: true
+        parameters:
+          - flag: --voxel_size
+            name: Voxel Size
+            type: string
+            description: "Physical voxel size as comma-separated X,Y,Z (e.g. 108,108,268). Required if source file has no embedded voxel metadata. Values are in the unit set by Voxel Unit."
+
+          - flag: --voxel_unit
+            name: Voxel Unit
+            type: enum
+            description: "Unit for voxel size values in OME metadata."
+            default: nanometer
+            options:
+              - nanometer
+              - micrometer
+              - millimeter
+
+          - flag: --dtype
+            name: Output Data Type
+            type: string
+            description: "Override output data type (e.g. uint8, uint16, int16, float32). Default: preserve source dtype. Useful for dtype casting (e.g. float32 → int16)."
+
+          - flag: --compression
+            name: Compression Codec
+            type: string
+            description: "Compression codec (default: zstd). Options: zstd, gzip, none."
+            default: zstd
+
+          - flag: --compression_level
+            name: Compression Level
+            type: integer
+            description: "Compression level. For zstd: 1–22 (default 5). For gzip: 1–9."
+            default: 5
+
+      - section: Pyramid Options
+        description: "Fine-tune multi-scale pyramid generation. Only applies when Generate Multi-Scale Pyramid is enabled."
+        collapsed: true
+        parameters:
+          - flag: --downsample_method
+            name: Downsample Method
+            type: enum
+            description: "Downsampling method for pyramid levels. 'auto' detects from data type (mean for images, mode for labels)."
+            default: auto
+            options:
+              - auto
+              - mean
+              - mode
+              - median
+              - stride
+              - min
+              - max
+
+          - flag: --per_level_factors
+            name: Per-Level Factors
+            type: string
+            description: "Custom per-level downsampling factors, semicolon-separated (e.g. 1,2,2;1,2,2;2,2,2). Bypasses auto-calculation from voxel sizes. Useful for anisotropic data."
+
+      - section: Output Structure
+        description: "Control output directory layout and metadata."
+        collapsed: true
+        parameters:
+          - flag: --no-nested-structure
+            name: Disable Nested Structure
+            type: boolean
+            description: "Write directly to the output path instead of the default OME-NGFF nested structure (raw/ subdirectory). Use for compatibility with tools that expect flat layout."
+            default: false
+
+          - flag: --no_ome_xml_attr
+            name: No OME-XML in zarr.json
+            type: boolean
+            description: "Do not embed the OME/CZI XML string in zarr.json attributes. The XML is still saved as a standalone METADATA.ome.xml file."
+            default: false
+
+          - flag: --axes_order
+            name: Axes Order
+            type: string
+            description: "Override output spatial axis order. Any permutation of x,y,z (e.g. xyz, zyx, xzy). Default: preserve source order."
+
+          - flag: --data-type
+            name: Data Structure Type
+            type: enum
+            description: "'auto' detects from dtype/encoding. 'image' writes to raw/ subdirectory. 'labels' writes to labels/segmentation/."
+            default: auto
+            options:
+              - auto
+              - image
+              - labels
+
+          - flag: --bbox
+            name: Bounding Box
+            type: string
+            description: "Extract a subvolume: origin_z,origin_y,origin_x,size_z,size_y,size_x (in source voxel coordinates). Example: 0,0,0,512,512,512."
+
+      - section: Format-Specific
+        description: "Options for specific input formats."
+        collapsed: true
+        parameters:
+          - flag: --dataset_path
+            name: Dataset Path (within container)
+            type: string
+            description: "Path within the input container, e.g. 's0' for N5 or 'DataSet' for HDF5."
+
+          - flag: --view_index
+            name: CZI View Index
+            type: integer
+            description: "For CZI files with multiple views: index of the view to extract (-1 = all views as 5D VCZYX)."
+            default: -1
+
+          - flag: --use_bioformats
+            name: Force Bio-Formats Reader
+            type: boolean
+            description: "Force the Bio-Formats Java-backed reader (Tier 4) for exotic formats not handled by native readers."
+            default: false
+
     resources:
       cpus: 4
       memory: "60 GB"
@@ -39,15 +203,103 @@ runnables:
   - id: pyramid
     type: job
     name: Generate Pyramid
-    description: Generate multi-scale pyramid from an existing Zarr dataset. Auto-detects the base level (s0) and creates all downsampled levels.
+    description: >
+      Generate a multi-scale pyramid from an existing Zarr dataset that already has a base
+      level (s0). Auto-detects voxel sizes for anisotropy-aware downsampling (e.g. XY-first
+      for ssTEM). Use this if you previously converted without --auto_multiscale.
     command: pixi run tensorswitch-v2 --auto_multiscale
     parameters:
       - flag: -i
         name: Dataset Path
         type: directory
-        description: Path to the Zarr dataset root (e.g., /path/to/dataset.zarr). The s0 level is auto-detected.
+        description: "Path to the Zarr dataset root (e.g., /path/to/dataset.zarr). The s0 level is auto-detected inside raw/ or at the root."
         required: true
+
+      - flag: --is-label
+        name: Label / Segmentation Data
+        type: boolean
+        description: "Dataset is a segmentation or label volume. Uses mode downsampling to preserve label IDs."
+        default: false
+
+      - flag: --downsample_method
+        name: Downsample Method
+        type: enum
+        description: "Downsampling method. 'auto' detects from data type."
+        default: auto
+        options:
+          - auto
+          - mean
+          - mode
+          - median
+          - stride
+          - min
+          - max
+
+      - section: Advanced
+        collapsed: true
+        parameters:
+          - flag: --per_level_factors
+            name: Per-Level Factors
+            type: string
+            description: "Custom per-level downsampling factors, semicolon-separated (e.g. 1,2,2;1,2,2;2,2,2). Bypasses auto-calculation from voxel sizes."
+
+          - flag: --no-translation
+            name: No Translation
+            type: boolean
+            description: "Disable translation transforms in OME-NGFF multiscale metadata."
+            default: false
+
     resources:
       cpus: 4
       memory: "32 GB"
       walltime: "08:00"
+
+  - id: upsample
+    type: job
+    name: Upsample to Isotropic
+    description: >
+      Resample an anisotropic Zarr dataset to isotropic resolution using interpolation
+      (trilinear for images, nearest-neighbor for labels). Useful for data with coarse Z
+      resolution (e.g. ssTEM at 40nm Z vs 8nm XY). Automatically generates an isotropic
+      pyramid after upsampling.
+    command: pixi run tensorswitch-v2 --upsample
+    parameters:
+      - flag: -i
+        name: Input s0 Path
+        type: directory
+        description: "Path to the base-level array (e.g., /path/to/dataset.zarr/raw/s0)."
+        required: true
+
+      - flag: -o
+        name: Output s0 Path
+        type: directory
+        description: "Output path for the isotropic s0 (e.g., /path/to/output.zarr/raw/s0)."
+        required: true
+
+      - flag: --is-label
+        name: Label / Segmentation Data
+        type: boolean
+        description: "Input is a segmentation or label volume. Forces nearest-neighbor interpolation."
+        default: false
+
+      - flag: --target_voxel_size
+        name: Target Voxel Size (nm)
+        type: number
+        description: "Target isotropic voxel size in nanometers. Default (0): use the smallest source voxel size (highest-resolution axis)."
+        default: 0
+
+      - flag: --upsample_method
+        name: Upsample Method
+        type: enum
+        description: "Interpolation method. 'auto' uses trilinear for images, nearest for labels."
+        default: auto
+        options:
+          - auto
+          - trilinear
+          - nearest
+          - cubic
+
+    resources:
+      cpus: 4
+      memory: "60 GB"
+      walltime: "12:00"
