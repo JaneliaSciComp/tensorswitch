@@ -1298,6 +1298,10 @@ def submit_job(args, return_job_id=False):
 
     # Enforce cluster policy: 15 GB per core minimum
     memory_gb = max(memory_gb, cores * 15)
+    # File-decoded sources carry an 8 GB DaskReader frame cache not in the formula.
+    # Add 10% headroom so the job doesn't hit the limit exactly.
+    if not is_native:
+        memory_gb = int(math.ceil(memory_gb * 1.1 / 5) * 5)
 
     # Job name: tsv2_{src_ext}_to_{out_format}_{input_stem}
     input_name = os.path.basename(args.input)
