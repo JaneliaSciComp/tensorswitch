@@ -369,6 +369,11 @@ def calculate_job_resources(
             wall_time = "0:10"
         # Enforce cluster policy: 15 GB per core minimum
         memory_gb = max(memory_gb, cores * 15)
+        # File-decoded sources (TIFF, ND2, CZI, IMS) carry an 8 GB DaskReader frame
+        # cache not captured by the shard-buffer formula. Add 10% headroom so the
+        # job doesn't hit the limit exactly (observed: 61.5 GB used vs 60 GB limit).
+        if not is_native_source:
+            memory_gb = int(math.ceil(memory_gb * 1.1 / 5) * 5)
         return memory_gb, wall_time, cores
 
     # Calculate memory first (needed for Zarr3 sharded core formula)
@@ -389,6 +394,11 @@ def calculate_job_resources(
 
     # Enforce cluster policy: 15 GB per core minimum
     memory_gb = max(memory_gb, cores * 15)
+    # File-decoded sources (TIFF, ND2, CZI, IMS) carry an 8 GB DaskReader frame
+    # cache not captured by the shard-buffer formula. Add 10% headroom so the
+    # job doesn't hit the limit exactly (observed: 61.5 GB used vs 60 GB limit).
+    if not is_native_source:
+        memory_gb = int(math.ceil(memory_gb * 1.1 / 5) * 5)
 
     return memory_gb, wall_time, cores
 
