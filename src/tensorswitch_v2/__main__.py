@@ -481,6 +481,10 @@ Supported output formats:
         help="Auto-multiscale mode: generate full pyramid from s0 (all levels in parallel)",
     )
     parser.add_argument(
+        "--auto_resources", action="store_true",
+        help="UI hint for fileglancer: auto-calculate cluster resources. Has no effect on CLI behavior.",
+    )
+    parser.add_argument(
         "--target_level", type=int, default=None,
         help="Target level to create in downsample mode (1=s1, 2=s2, etc.)",
     )

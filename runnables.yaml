@@ -12,26 +12,28 @@ runnables:
     description: >
       Convert a microscopy file (TIFF, ND2, CZI, IMS, HDF5, Zarr, N5, and 200+ formats)
       to Zarr3, Zarr2, or N5. Optionally generates a multi-scale pyramid and/or upsamples
-      to isotropic resolution. CPU cores, memory, and wall time are auto-calculated from
-      the source file unless overridden in the Cluster Resources section.
+      to isotropic resolution.
+
+      Fields marked * are required. All other fields are optional — leave blank for
+      auto-calculated defaults.
     command: pixi run tensorswitch-v2 --submit
     parameters:
       - flag: -i
-        name: Input Path
+        name: "Input Path *"
         type: file
-        description: "Path to input file (TIFF, ND2, CZI, IMS, HDF5, N5, Zarr, and 200+ formats). Format is auto-detected from extension."
+        description: "Required. Path to input file (TIFF, ND2, CZI, IMS, HDF5, N5, Zarr, and 200+ formats). Format is auto-detected from extension."
         required: true
 
       - flag: -o
-        name: Output Path
+        name: "Output Path *"
         type: directory
-        description: "Output path for the converted dataset (e.g., /path/to/output.zarr)."
+        description: "Required. Output path for the converted dataset (e.g., /path/to/output.zarr). You can type a new path — TensorSwitch creates the directory automatically."
         required: true
 
       - flag: --project
-        name: LSF Billing Project
+        name: "LSF Billing Project *"
         type: string
-        description: "LSF project name for job billing. Required for cluster submission."
+        description: "Required. LSF project name for cluster job billing (e.g. scicompsoft)."
         required: true
 
       - flag: --output_format
@@ -57,23 +59,40 @@ runnables:
         default: false
 
       - section: Cluster Resources
-        description: "TensorSwitch auto-calculates CPU cores, memory, and wall time from the source file. Leave blank to use auto-calculated values."
+        description: >
+          Resources for the conversion worker job. Enable auto-calculate (default) to let
+          TensorSwitch determine the values from your dataset. Disable it to specify values
+          manually. (Once conditional field support is available, the fields below will be
+          automatically disabled when auto-calculate is on.)
         collapsed: false
         parameters:
+          - flag: --auto_resources
+            name: Auto-calculate Resources
+            type: boolean
+            description: "Let TensorSwitch automatically determine CPU cores, memory, and wall time from your dataset. When enabled, leave the fields below blank. Disable to specify values manually."
+            default: true
+
           - flag: --cores
             name: CPU Cores
             type: integer
-            description: "Number of CPU cores to request. Auto-calculated from source size if not specified."
+            description: "Number of CPU cores for the conversion worker. Leave blank when auto-calculate is enabled."
             min: 1
             max: 256
+
+          - flag: --memory
+            name: Memory (GB)
+            type: integer
+            description: "Memory in GB for the conversion worker. Leave blank when auto-calculate is enabled."
+            min: 1
+            max: 2048
 
           - flag: --wall_time
             name: Wall Time
             type: string
-            description: "Maximum job wall time in H:MM format (e.g. 4:00). Auto-calculated from source size if not specified."
+            description: "Maximum wall time for the conversion worker in H:MM format (e.g. 4:00). Leave blank when auto-calculate is enabled."
 
       - section: Chunk & Shard
-        description: "Control how data is chunked and sharded. Leave blank for auto-calculated values."
+        description: "Control how data is chunked and sharded. Leave blank for auto-calculated values. Shard Shape and Disable Sharding only apply to Zarr3."
         collapsed: true
         parameters:
           - flag: --chunk_shape
@@ -245,6 +264,6 @@ runnables:
             default: false
 
     resources:
-      cpus: 4
-      memory: "60 GB"
-      walltime: "24:00"
+      cpus: 2
+      memory: "8 GB"
+      walltime: "1:00"
