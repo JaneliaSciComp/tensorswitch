@@ -342,11 +342,14 @@ Supported output formats:
     # Presets for common use cases
     parser.add_argument(
         "--preset", default=None,
-        choices=["webknossos", "paintera"],
+        choices=["webknossos", "paintera", "mia_lmvd"],
         help="Use preset configuration. "
              "'webknossos': zarr3, chunk 32x32x32, shard 1024x1024x1024, zstd. "
              "'paintera': n5, xyz axis order, gzip, chunk 64x64x64 "
-             "(or zarr2 with zyx if --output_format zarr2).",
+             "(or zarr2 with zyx if --output_format zarr2). "
+             "'mia_lmvd': zarr3, chunk 128x128x128, shard 512x512x512, zstd-5, "
+             "C-order; axis order and dtype preserved from source; "
+             "voxel size preserved from source.",
     )
 
     # Dataset paths
@@ -1953,6 +1956,19 @@ def main(argv=None):
         if not args.quiet:
             print(f"Using Paintera preset: output={args.output_format}, "
                   f"axes={args.axes_order}, chunk=64x64x64, compression=gzip")
+    elif args.preset == "mia_lmvd":
+        # MIA LMVD preset: zarr3, 128^3 inner chunks / 512^3 shards, zstd-5, C-order.
+        # Axis order: preserve source (RFC-3 canonical: t,c,z,y,x or z,y,x if 3D).
+        # Dtype and voxel size: preserve from source (no overrides).
+        if not args.chunk_shape:
+            args.chunk_shape = "128,128,128"
+        if not args.shard_shape:
+            args.shard_shape = "512,512,512"
+        if not args.force_c_order and not args.force_f_order:
+            args.force_c_order = True
+        if not args.quiet:
+            print("Using mia_lmvd preset: zarr3, chunk=128³, shard=512³, "
+                  "zstd-5, C-order. Axis order, dtype, and voxel size preserved from source.")
 
     # Parse optional shapes
     chunk_shape = parse_shape(args.chunk_shape, "chunk_shape") if args.chunk_shape else None
