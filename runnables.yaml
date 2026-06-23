@@ -14,26 +14,26 @@ runnables:
       to Zarr3, Zarr2, or N5. Optionally generates a multi-scale pyramid and/or upsamples
       to isotropic resolution.
 
-      Fields marked * are required. All other fields are optional — leave blank for
-      auto-calculated defaults.
+      Required fields are marked with a red asterisk. All other fields are optional —
+      leave blank for auto-calculated defaults.
     command: pixi run tensorswitch-v2 --submit
     parameters:
       - flag: -i
-        name: "Input Path *"
+        name: Input Path
         type: file
-        description: "Required. Path to input file (TIFF, ND2, CZI, IMS, HDF5, N5, Zarr, and 200+ formats). Format is auto-detected from extension."
+        description: "Path to input file (TIFF, ND2, CZI, IMS, HDF5, N5, Zarr, and 200+ formats). Format is auto-detected from extension."
         required: true
 
       - flag: -o
-        name: "Output Path *"
+        name: Output Path
         type: directory
-        description: "Required. Output path for the converted dataset (e.g., /path/to/output.zarr). You can type a new path — TensorSwitch creates the directory automatically."
+        description: "Output path for the converted dataset (e.g., /path/to/output.zarr). You can type a new path — TensorSwitch creates the directory automatically."
         required: true
 
       - flag: --project
-        name: "LSF Billing Project *"
+        name: LSF Billing Project
         type: string
-        description: "Required. LSF project name for cluster job billing (e.g. scicompsoft)."
+        description: "LSF project name for cluster job billing (e.g. scicompsoft)."
         required: true
 
       - flag: --output_format
