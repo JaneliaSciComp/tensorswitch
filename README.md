@@ -241,6 +241,7 @@ pixi run python -m tensorswitch_v2 -i input.tif -o output.zarr \
 |----------|-------------|
 | `--preset webknossos` | WebKnossos-optimized settings: zarr3, chunk 32x32x32, shard 1024x1024x1024, zstd |
 | `--preset paintera` | Paintera-ready settings: n5, xyz axis order, gzip, chunk 64x64x64. Use with `--output_format zarr2` for zyx Zarr2 output. Output is consumed by [paintera-conversion-helper](https://github.com/saalfeldlab/paintera-conversion-helper) to produce Paintera-native format. |
+| `--preset mia_lmvd` | MIA Large Microscopy Volume Dataset settings: zarr3, chunk 128x128x128, shard 512x512x512, zstd-5, C-order. Axis order preserved from source (RFC-3: t,c,z,y,x or z,y,x for 3D). Dtype and voxel size preserved from source unless explicitly overridden with `--dtype` or `--voxel_size`. |
 
 ```bash
 # Example: Convert for WebKnossos viewing
@@ -251,6 +252,9 @@ pixi run python -m tensorswitch_v2 -i input.tif -o output.n5 --preset paintera
 
 # Example: Convert Zarr3 for Paintera (Zarr2 output, zyx axis order)
 pixi run python -m tensorswitch_v2 -i input.zarr -o output.zarr --preset paintera --output_format zarr2
+
+# Example: Convert for MIA LMVD (Janelia internal)
+pixi run python -m tensorswitch_v2 -i input.zarr -o output.zarr --preset mia_lmvd
 ```
 
 ### Chunk/Shard Configuration

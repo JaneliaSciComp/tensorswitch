@@ -114,12 +114,13 @@ runnables:
           - flag: --preset
             name: Preset
             type: enum
-            description: "Use a preset configuration. 'webknossos': 32³ chunks, 1024³ shards. 'paintera': N5 with 64³ chunks."
+            description: "Use a preset configuration. 'webknossos': 32³ chunks, 1024³ shards. 'paintera': N5 with 64³ chunks. 'mia_lmvd': 128³ chunks, 512³ shards, C-order (Janelia MIA LMVD ingestion)."
             default: ""
             options:
               - ""
               - webknossos
               - paintera
+              - mia_lmvd
 
       - section: Voxel & Data Type
         description: "Override voxel sizes or output data type."
