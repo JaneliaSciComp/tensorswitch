@@ -813,22 +813,26 @@ def _finalize_tmp_path(tmp_path: str, final_path: str, verbose: bool = True) -> 
 def _finalize_add_to_existing(
     final_output: str,
     subgroup_parent: str,
+    label_name: str,
     output_format: str,
     verbose: bool = True,
 ) -> None:
-    """Rename subgroup .tmp → final and fix root metadata after --add-to-existing.
+    """Move new label from .tmp subgroup into existing container and update metadata.
 
     During --add-to-existing conversion, data is written to e.g.
-    ``labels.tmp/`` inside the existing container.  This function:
+    ``labels.tmp/<label_name>/`` inside the existing container.  This function:
 
-    1. Removes the old subgroup if it exists (e.g. old ``labels/``).
-    2. Renames the ``.tmp`` variant to the final name.
-    3. Patches the root metadata so references to ``labels.tmp`` become
-       ``labels`` (labels list + multiscale dataset paths).
+    1. Creates ``labels/`` if it does not exist.
+    2. Moves ``labels.tmp/<label_name>/`` → ``labels/<label_name>/`` (replaces
+       only that label if it already exists; all other existing labels are untouched).
+    3. Removes the now-empty ``labels.tmp/`` directory.
+    4. Appends ``<label_name>`` to the root metadata labels list — existing labels
+       in the list are preserved (not replaced).
 
     Args:
         final_output: Container root path (e.g. ``/data/out.zarr``).
         subgroup_parent: Top-level subgroup name (``"labels"`` or ``"raw"``).
+        label_name: The specific label being added (e.g. ``"segmentation"``).
         output_format: ``"zarr3"`` or ``"zarr2"``.
         verbose: Print progress messages.
     """
@@ -841,26 +845,35 @@ def _finalize_add_to_existing(
     if not os.path.exists(tmp_path):
         return
 
-    # 1. Remove old subgroup (e.g. old labels/)
-    if os.path.exists(final_path):
-        shutil.rmtree(final_path)
-    os.rename(tmp_path, final_path)
-    if verbose:
-        print(f"Renamed {tmp_path} → {final_path}")
+    # 1. Move only the new label subdir: labels.tmp/<label_name>/ → labels/<label_name>/
+    #    All other existing labels in labels/ are left untouched.
+    tmp_label_path = os.path.join(tmp_path, label_name)
+    final_label_path = os.path.join(final_path, label_name)
 
-    # 2. Patch root metadata: labels.tmp → labels
+    os.makedirs(final_path, exist_ok=True)
+    if os.path.exists(final_label_path):
+        shutil.rmtree(final_label_path)
+    os.rename(tmp_label_path, final_label_path)
+    if verbose:
+        print(f"Moved {tmp_label_path} → {final_label_path}")
+
+    # 2. Clean up the now-empty labels.tmp/ directory
+    shutil.rmtree(tmp_path)
+
+    # 3. Update root metadata: append label_name to existing labels list (do not replace)
     if output_format == 'zarr3':
         meta_path = os.path.join(final_output, 'zarr.json')
         if os.path.exists(meta_path):
             with open(meta_path) as f:
                 meta = _json.load(f)
             ome = meta.get('attributes', {}).get('ome', {})
-            # Fix labels list
             labels_list = ome.get('labels', [])
-            labels_list = [subgroup_parent if l == tmp_name else l for l in labels_list]
-            if labels_list:
-                ome['labels'] = labels_list
-            # Fix multiscale dataset paths
+            # Remove any stale labels.tmp entry, append the new label (no duplicates)
+            labels_list = [l for l in labels_list if l != tmp_name]
+            if label_name not in labels_list:
+                labels_list.append(label_name)
+            ome['labels'] = sorted(labels_list)
+            # Fix any multiscale dataset paths still referencing labels.tmp
             for ms in ome.get('multiscales', []):
                 for ds in ms.get('datasets', []):
                     path = ds.get('path', '')
@@ -875,9 +888,10 @@ def _finalize_add_to_existing(
             with open(meta_path) as f:
                 meta = _json.load(f)
             labels_list = meta.get('labels', [])
-            labels_list = [subgroup_parent if l == tmp_name else l for l in labels_list]
-            if labels_list:
-                meta['labels'] = labels_list
+            labels_list = [l for l in labels_list if l != tmp_name]
+            if label_name not in labels_list:
+                labels_list.append(label_name)
+            meta['labels'] = sorted(labels_list)
             for ms in meta.get('multiscales', []):
                 for ds in ms.get('datasets', []):
                     path = ds.get('path', '')
@@ -887,7 +901,7 @@ def _finalize_add_to_existing(
                 _json.dump(meta, f, indent=2)
 
     if verbose:
-        print(f"Updated root metadata: {tmp_name} → {subgroup_parent}")
+        print(f"Updated root metadata: appended '{label_name}' to {subgroup_parent} labels list")
 
 
 def parse_shape(s: str, param_name: str = "shape") -> Tuple[int, ...]:
@@ -2788,6 +2802,7 @@ def main(argv=None):
         _finalize_add_to_existing(
             final_output=final_output,
             subgroup_parent=subgroup_parent,
+            label_name=subgroup.split('/')[-1],
             output_format=args.output_format,
             verbose=verbose,
         )
