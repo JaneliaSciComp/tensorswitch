@@ -342,7 +342,7 @@ Supported output formats:
     # Presets for common use cases
     parser.add_argument(
         "--preset", default=None,
-        choices=["webknossos", "paintera"],
+        choices=["webknossos", "paintera", ""],
         help="Use preset configuration. "
              "'webknossos': zarr3, chunk 32x32x32, shard 1024x1024x1024, zstd. "
              "'paintera': n5, xyz axis order, gzip, chunk 64x64x64 "
