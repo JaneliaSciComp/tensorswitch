@@ -5,7 +5,7 @@ Usage:
     # Single file conversion (s0)
     python -m tensorswitch_v2 -i input.tif -o output.zarr
     python -m tensorswitch_v2 -i input.n5 -o output.zarr --chunk_shape 32,256,256
-    python -m tensorswitch_v2 -i input.tif -o output.zarr --submit -P scicompsoft
+    python -m tensorswitch_v2 -i input.tif -o output.zarr --submit -P <your-project>
 
     # Batch conversion (directory of files)
     python -m tensorswitch_v2 -i /path/to/tiff_dir/ -o /path/to/output_dir/ --pattern "*.tif"
@@ -20,7 +20,7 @@ Usage:
 
     # Auto-multiscale (full pyramid, all levels in parallel)
     python -m tensorswitch_v2 --auto_multiscale -i /path/to/s0 -o /path/to/dataset.zarr \\
-        --submit -P scicompsoft
+        --submit -P <your-project>
 """
 
 import os
@@ -289,18 +289,18 @@ Examples:
 
   # Submit to LSF cluster
   pixi run python -m tensorswitch_v2 -i input.tif -o output.zarr \\
-      --submit -P scicompsoft
+      --submit -P <your-project>
 
   # Batch convert directory of TIFFs
   pixi run python -m tensorswitch_v2 -i /path/to/tiffs/ -o /path/to/output/ \\
-      --pattern "*.tif" --submit -P scicompsoft --max_concurrent 100
+      --pattern "*.tif" --submit -P <your-project> --max_concurrent 100
 
   # Check batch conversion status
   pixi run python -m tensorswitch_v2 --status -i /path/to/tiffs/ -o /path/to/output/
 
   # Generate multi-scale pyramid (all levels)
   pixi run python -m tensorswitch_v2 --auto_multiscale \\
-      -i /path/to/dataset.zarr/s0 -o /path/to/dataset.zarr --submit -P scicompsoft
+      -i /path/to/dataset.zarr/s0 -o /path/to/dataset.zarr --submit -P <your-project>
 
 Supported input formats:
   TIFF, ND2, IMS, CZI, N5, Zarr v2/v3, Precomputed, HDF5, and 200+ via BIOIO
@@ -585,8 +585,8 @@ Supported output formats:
         help="Number of cores for LSF job (default: auto-calculated from memory)",
     )
     parser.add_argument(
-        "--job_group", type=str, default="/scicompsoft/chend/tensorstore",
-        help="LSF job group path (default: /scicompsoft/chend/tensorstore)",
+        "--job_group", type=str, default=None,
+        help="LSF job group path for job accounting (optional)",
     )
     parser.add_argument(
         "--log_dir", type=str, default=None,
@@ -793,8 +793,8 @@ def _tmp_path_for(output_path: str) -> str:
 
     Appends '.tmp' to the output path so partial writes are never
     confused with completed conversions.  Example:
-        /nrs/scicompsoft/rokicki/output.zarr  →
-        /nrs/scicompsoft/rokicki/output.zarr.tmp
+        /path/to/output.zarr  →
+        /path/to/output.zarr.tmp
     """
     return output_path.rstrip('/\\') + '.tmp'
 
@@ -1249,8 +1249,8 @@ def submit_job(args, return_job_id=False):
         raise ValueError(
             "Missing required argument: --project/-P\n"
             "When using --submit, you must specify an LSF project for billing.\n"
-            "Example: pixi run python -m tensorswitch_v2 -i input.tif -o output.zarr --submit -P scicompsoft\n"
-            "Common projects: scicompsoft, liconn, ahrens"
+            "Example: pixi run python -m tensorswitch_v2 -i input.tif -o output.zarr --submit -P <your-project>\n"
+            "The -P flag specifies your LSF project for job accounting."
         )
 
     # Auto-calculate resources from source data when not explicitly provided
@@ -1743,8 +1743,8 @@ def submit_downsample_job(args, cumulative_factors):
         raise ValueError(
             "Missing required argument: --project/-P\n"
             "When using --submit, you must specify an LSF project for billing.\n"
-            "Example: pixi run python -m tensorswitch_v2 -i input.tif -o output.zarr --submit -P scicompsoft\n"
-            "Common projects: scicompsoft, liconn, ahrens"
+            "Example: pixi run python -m tensorswitch_v2 -i input.tif -o output.zarr --submit -P <your-project>\n"
+            "The -P flag specifies your LSF project for job accounting."
         )
 
     memory_gb = args.memory or 32

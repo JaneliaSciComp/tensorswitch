@@ -1126,7 +1126,7 @@ def submit_discovered_folder_lsf(
     memory_gb: Optional[int] = None,  # None = auto-calculate per dataset
     wall_time: Optional[str] = None,  # None = auto-calculate per dataset
     cores: Optional[int] = None,  # None = auto-calculate per dataset
-    job_group: str = "/scicompsoft/chend/tensorstore",
+    job_group: Optional[str] = None,
     dry_run: bool = False,
     auto_multiscale: bool = False,
 ) -> Dict:
@@ -1320,7 +1320,10 @@ def submit_discovered_folder_lsf(
             "-M", "4GB",
             "-R", "rusage[mem=4096]",
             "-P", project,
-            "-g", job_group,
+        ]
+        if job_group:
+            bsub_cmd += ["-g", job_group]
+        bsub_cmd += [
             "-o", coord_log,
             "-e", coord_err,
             "/bin/bash", script_path,
@@ -1383,7 +1386,10 @@ def submit_discovered_folder_lsf(
             "-M", f"{job_memory}GB",
             "-R", f"rusage[mem={job_memory * 1024}]",
             "-P", project,
-            "-g", job_group,
+        ]
+        if job_group:
+            bsub_cmd += ["-g", job_group]
+        bsub_cmd += [
             "-o", log_path,
             "-e", error_path,
         ]

@@ -304,7 +304,7 @@ class PyramidPlanner:
         ...     print(f"s{level['level']}: factor={level['per_level_factor']}")
         >>>
         >>> # Submit chained jobs with coordinator
-        >>> job_id = planner.submit_chained_pyramid(plan, project="scicompsoft")
+        >>> job_id = planner.submit_chained_pyramid(plan, project="myproject")
     """
 
     def __init__(self, s0_path: str, include_translation: bool = True, downsample_method: str = "mean"):
@@ -1657,14 +1657,14 @@ def create_pyramid_parallel(
     Example:
         >>> result = create_pyramid_parallel(
         ...     s0_path="/data/dataset.zarr/s0",
-        ...     project="scicompsoft"
+        ...     project="myproject"
         ... )
         >>> print(f"Coordinator job: {result['coordinator_job_id']}")
 
         >>> # With custom factors (skip Z downsampling)
         >>> result = create_pyramid_parallel(
         ...     s0_path="/data/dataset.zarr/s0",
-        ...     project="scicompsoft",
+        ...     project="myproject",
         ...     custom_per_level_factors=[[1,2,2], [1,2,2], [1,2,2], [1,2,2]]
         ... )
     """
