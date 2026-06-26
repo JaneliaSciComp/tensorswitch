@@ -33,7 +33,7 @@ runnables:
       - flag: --project
         name: LSF Billing Project
         type: string
-        description: "LSF project name for cluster job billing (e.g. scicompsoft)."
+        description: "LSF project name for cluster job billing (e.g. myproject)."
         required: true
 
       - flag: --output_format
@@ -167,7 +167,7 @@ runnables:
           (Generate Multi-Scale Pyramid is on by default).
 
           2. Pyramid-only (existing zarr): set both Input Path and Output Path to your
-          existing zarr root (e.g. /groups/liconn/output.zarr). TensorSwitch will
+          existing zarr root (e.g. /path/to/output.zarr). TensorSwitch will
           auto-detect s0 and skip conversion entirely.
         collapsed: true
         parameters:
