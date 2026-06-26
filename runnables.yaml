@@ -16,7 +16,7 @@ runnables:
 
       Required fields are marked with a red asterisk. All other fields are optional —
       leave blank for auto-calculated defaults.
-    command: pixi run tensorswitch-v2 --submit
+    command: pixi run tensorswitch-v2 --submit --sync
     parameters:
       - flag: -i
         name: Input Path
@@ -267,4 +267,4 @@ runnables:
     resources:
       cpus: 2
       memory: "8 GB"
-      walltime: "1:00"
+      walltime: "24:00"
