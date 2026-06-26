@@ -49,8 +49,8 @@ runnables:
       - flag: --auto_multiscale
         name: Generate Multi-Scale Pyramid
         type: boolean
-        description: "Automatically generate a full multi-scale pyramid after converting s0. Recommended for visualization in Neuroglancer or WebKnossos."
-        default: false
+        description: "Automatically generate a full multi-scale pyramid after converting s0. Required for visualization in Neuroglancer or WebKnossos."
+        default: true
 
       - flag: --is-label
         name: Label / Segmentation Data
