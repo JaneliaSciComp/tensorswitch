@@ -206,13 +206,15 @@ class OMEStructure:
 
     def create_base_group_metadata(self) -> Dict:
         """Create base zarr3 group metadata structure."""
+        from .metadata_utils import get_software_metadata
         return {
             'zarr_format': self.config.zarr_format,
             'node_type': 'group',
             'attributes': {
                 'ome': {
                     'version': self.config.ome_version
-                }
+                },
+                '_software': get_software_metadata(),
             }
         }
 
@@ -835,13 +837,15 @@ class OMEStructureZarr2:
         name: str = 'image'
     ) -> Dict:
         """Create multiscales metadata for image data (Zarr2 format)."""
+        from .metadata_utils import get_software_metadata
         return {
             "multiscales": [{
                 "version": self.config.ome_version,
                 "name": name,
                 "axes": axes,
                 "datasets": datasets
-            }]
+            }],
+            "_software": get_software_metadata(),
         }
 
     def create_labels_container_metadata(
@@ -849,8 +853,9 @@ class OMEStructureZarr2:
         label_names: Optional[List[str]] = None
     ) -> Dict:
         """Create metadata for labels container directory."""
+        from .metadata_utils import get_software_metadata
         names = label_names or [self.config.label_name]
-        return {"labels": names}
+        return {"labels": names, "_software": get_software_metadata()}
 
     def create_label_image_metadata(
         self,
@@ -862,13 +867,15 @@ class OMEStructureZarr2:
         num_default_colors: int = 256
     ) -> Dict:
         """Create metadata for label image with image-label section."""
+        from .metadata_utils import get_software_metadata
         metadata = {
             "multiscales": [{
                 "version": self.config.ome_version,
                 "name": name,
                 "axes": axes,
                 "datasets": datasets
-            }]
+            }],
+            "_software": get_software_metadata(),
         }
 
         # Generate colors if not provided
