@@ -158,8 +158,15 @@ runnables:
             description: "Compression level. For zstd: 1–22 (default 5). For gzip: 1–9."
             default: 5
 
-      - section: Pyramid Options
-        description: "Fine-tune multi-scale pyramid generation. Only applies when Generate Multi-Scale Pyramid is enabled."
+      - section: Pyramid Only (skip conversion)
+        description: >
+          For generating a pyramid on an already-converted zarr — no conversion needed.
+          Set Input Path and Output Path both to your existing zarr root
+          (e.g. /groups/liconn/output.zarr). TensorSwitch will auto-detect s0 and skip conversion.
+
+          Note: when converting a new file, pyramid is already generated automatically
+          (Generate Multi-Scale Pyramid is on by default). Use this section only to
+          fine-tune the downsampling, or to run pyramid-only on an existing dataset.
         collapsed: true
         parameters:
           - flag: --downsample_method
