@@ -216,7 +216,7 @@ pixi run python -m tensorswitch_v2 -i output.zarr --auto_multiscale
 ```bash
 # Submit conversion job to cluster
 pixi run python -m tensorswitch_v2 -i input.tif -o output.zarr \
-  --submit -P scicompsoft
+  --submit -P <your-project>
 ```
 
 ---
@@ -241,6 +241,7 @@ pixi run python -m tensorswitch_v2 -i input.tif -o output.zarr \
 |----------|-------------|
 | `--preset webknossos` | WebKnossos-optimized settings: zarr3, chunk 32x32x32, shard 1024x1024x1024, zstd |
 | `--preset paintera` | Paintera-ready settings: n5, xyz axis order, gzip, chunk 64x64x64. Use with `--output_format zarr2` for zyx Zarr2 output. Output is consumed by [paintera-conversion-helper](https://github.com/saalfeldlab/paintera-conversion-helper) to produce Paintera-native format. |
+| `--preset mia_lmvd` | MIA Large Microscopy Volume Dataset settings: zarr3, chunk 128x128x128, shard 512x512x512, zstd-5, C-order. Axis order preserved from source (RFC-3: t,c,z,y,x or z,y,x for 3D). Dtype and voxel size preserved from source unless explicitly overridden with `--dtype` or `--voxel_size`. |
 
 ```bash
 # Example: Convert for WebKnossos viewing
@@ -251,6 +252,9 @@ pixi run python -m tensorswitch_v2 -i input.tif -o output.n5 --preset paintera
 
 # Example: Convert Zarr3 for Paintera (Zarr2 output, zyx axis order)
 pixi run python -m tensorswitch_v2 -i input.zarr -o output.zarr --preset paintera --output_format zarr2
+
+# Example: Convert for MIA LMVD (Janelia internal)
+pixi run python -m tensorswitch_v2 -i input.zarr -o output.zarr --preset mia_lmvd
 ```
 
 ### Chunk/Shard Configuration
@@ -274,7 +278,7 @@ pixi run python -m tensorswitch_v2 -i input.zarr -o output.zarr --dtype int16
 
 # Submit to cluster with dtype cast + pyramid
 pixi run python -m tensorswitch_v2 -i input.zarr -o output.zarr \
-  --dtype int16 --auto_multiscale --submit -P scicompsoft
+  --dtype int16 --auto_multiscale --submit -P <your-project>
 ```
 
 **Safety**: Before conversion starts, the converter samples the source data and raises an error if values would be clipped by the target dtype range. For float → integer casts, values are clipped to the target range per chunk as a secondary safety net.
@@ -294,14 +298,14 @@ Combine with `--auto_multiscale` to generate an isotropic pyramid after upsampli
 pixi run python -m tensorswitch_v2 --upsample --auto_multiscale \
   -i /data/anisotropic.zarr/img/s0 \
   -o /data/isotropic.zarr \
-  --submit -P scicompsoft
+  --submit -P <your-project>
 
 # Upsample labels with nearest-neighbor interpolation
 pixi run python -m tensorswitch_v2 --upsample --auto_multiscale \
   -i /data/anisotropic.zarr/labels/seg/s0 \
   -o /data/isotropic_labels.zarr \
   --upsample_method nearest \
-  --submit -P scicompsoft
+  --submit -P <your-project>
 ```
 
 **How it works**: Processes in XY-column chunks (full Z per column), applies `scipy.ndimage.zoom(grid_mode=True)` for interpolation, writes via TensorStore. Supports zarr2 and zarr3 (with/without sharding) output formats.
@@ -326,7 +330,7 @@ pixi run python -m tensorswitch_v2 --upsample --auto_multiscale \
 | `--memory` | Memory in GB | Auto-calculated |
 | `--wall_time` | Wall time (H:MM) | Auto-calculated |
 | `--cores` | Number of cores | Auto-calculated |
-| `--job_group` | LSF job group | `/scicompsoft/chend/tensorstore` |
+| `--job_group` | LSF job group | None |
 | `--log_dir` | Directory for LSF log files | `{output_parent}/output/` |
 
 ### Batch Processing
@@ -432,7 +436,7 @@ pixi run python -m tensorswitch_v2 -i input.tif -o output.zarr \
 
 # Disable translation transforms (e.g., for tools that don't use them)
 pixi run python -m tensorswitch_v2 --auto_multiscale \
-  -i output.zarr/s0 -o output.zarr --no-translation --submit -P scicompsoft
+  -i output.zarr/s0 -o output.zarr --no-translation --submit -P <your-project>
 ```
 
 ### Unit Handling
@@ -562,7 +566,7 @@ planner.print_pyramid_plan(plan)
 # Submit chained pyramid jobs to LSF
 planner.submit_chained_pyramid(
     pyramid_plan=plan,
-    project="scicompsoft",
+    project="myproject",
     output_format="zarr3"
 )
 
@@ -570,7 +574,7 @@ planner.submit_chained_pyramid(
 create_pyramid_parallel(
     s0_path="/path/to/dataset.zarr/s0",
     root_path="/path/to/dataset.zarr",
-    project="scicompsoft"
+    project="myproject"
 )
 ```
 
@@ -594,7 +598,7 @@ print(f"Found {len(files)} files")
 
 # Submit to LSF
 batch.submit_lsf(
-    project="scicompsoft",
+    project="myproject",
     memory_gb=30,
     wall_time="1:00",
     max_concurrent=100
@@ -764,12 +768,12 @@ Chained Downsampling:
 # Option 1: Root zarr path (auto-detects s0 from metadata or common patterns)
 pixi run python -m tensorswitch_v2 --auto_multiscale \
   -i /path/to/dataset.zarr \
-  --submit -P scicompsoft
+  --submit -P <your-project>
 
 # Option 2: Explicit s0 path (also works)
 pixi run python -m tensorswitch_v2 --auto_multiscale \
   -i /path/to/dataset.zarr/s0 \
-  --submit -P scicompsoft
+  --submit -P <your-project>
 ```
 
 **Auto-detection logic**:
@@ -828,14 +832,14 @@ The `--downsample_method` option controls how TensorStore computes downsampled v
 pixi run python -m tensorswitch_v2 --auto_multiscale \
   -i /path/to/dataset.zarr/s0 \
   -o /path/to/dataset.zarr \
-  --submit -P scicompsoft
+  --submit -P <your-project>
 
 # Explicitly use mode for segmentation data
 pixi run python -m tensorswitch_v2 --auto_multiscale \
   -i /path/to/labels.zarr/s0 \
   -o /path/to/labels.zarr \
   --downsample_method mode \
-  --submit -P scicompsoft
+  --submit -P <your-project>
 ```
 
 ### Custom Factors for Anisotropic Data
@@ -848,7 +852,7 @@ pixi run python -m tensorswitch_v2 --auto_multiscale \
   -i /path/to/dataset.zarr/s0 \
   -o /path/to/dataset.zarr \
   --per_level_factors "1,2,2;1,2,2;1,2,2;1,2,2" \
-  --submit -P scicompsoft
+  --submit -P <your-project>
 ```
 
 **How `--per_level_factors` works:**
@@ -889,7 +893,7 @@ Generate pyramids for multiple datasets at once. Supports both regular directori
 
 pixi run python -m tensorswitch_v2 --auto_multiscale \
   -i /path/to/zarr_output/ \
-  --submit -P scicompsoft
+  --submit -P <your-project>
 ```
 
 **Case 2: Multi-tile .zarr directory (BigStitcher format)**
@@ -914,7 +918,7 @@ pixi run python -m tensorswitch_v2 --auto_multiscale \
   -i /path/to/zarr_output/ \
   --per_level_factors "1,2,2;1,2,2;1,2,2;1,2,2" \
   --max_concurrent 50 \
-  --submit -P scicompsoft
+  --submit -P <your-project>
 ```
 
 **Paths with spaces are supported:**
@@ -922,7 +926,7 @@ pixi run python -m tensorswitch_v2 --auto_multiscale \
 # Paths containing spaces work correctly (use quotes)
 pixi run python -m tensorswitch_v2 --auto_multiscale \
   -i "/path/to/my data/dataset.ome.zarr" \
-  --submit -P scicompsoft
+  --submit -P <your-project>
 ```
 
 Each dataset gets its own coordinator job that spawns chained downsampling jobs. When using `--per_level_factors`, the same factors are applied to all datasets in the batch.
@@ -939,7 +943,7 @@ pixi run python -m tensorswitch_v2 \
   -i /path/to/tiff_directory/ \
   -o /path/to/output_directory/ \
   --pattern "*.tif" \
-  --submit -P scicompsoft \
+  --submit -P <your-project> \
   --max_concurrent 100
 
 # Check status
@@ -965,7 +969,7 @@ pixi run python -m tensorswitch_v2 \
   -i /data/source.zarr \
   -o /output/converted.zarr \
   --auto_multiscale \
-  --submit -P scicompsoft
+  --submit -P <your-project>
 
 # With custom chunk/shard shapes
 pixi run python -m tensorswitch_v2 \
@@ -974,19 +978,19 @@ pixi run python -m tensorswitch_v2 \
   --chunk_shape 256,256,64 \
   --shard_shape 512,512,512 \
   --auto_multiscale \
-  --submit -P scicompsoft
+  --submit -P <your-project>
 
 # Convert only image or only labels
 pixi run python -m tensorswitch_v2 \
   -i /data/source.zarr \
   -o /output/converted.zarr \
-  --image-only --auto_multiscale --submit -P scicompsoft
+  --image-only --auto_multiscale --submit -P <your-project>
 
 # Dry run to preview the coordinator plan
 pixi run python -m tensorswitch_v2 \
   -i /data/source.zarr \
   -o /output/converted.zarr \
-  --auto_multiscale --submit -P scicompsoft --dry_run
+  --auto_multiscale --submit -P <your-project> --dry_run
 ```
 
 **Coordinator pattern** (with `--auto_multiscale`): Submits a lightweight coordinator LSF job that sequences 4 blocking steps via `bsub -K`:
@@ -1012,7 +1016,7 @@ pixi run python -m tensorswitch_v2 \
   -i /source/dataset.n5/setup0/timepoint0/s0 \
   -o /output/dataset.zarr/s0 \
   --output_format zarr3 \
-  --submit -P scicompsoft
+  --submit -P <your-project>
 
 # RECHUNK: N5 → N5 (same format, new chunks)
 # Output to same level path (s0, s1, etc.) → rechunks with new chunk shape
@@ -1043,7 +1047,7 @@ for level in {0..4}; do
     --output_format n5 \
     --chunk_shape 128,128,128 \
     --cores ${cores} \
-    --submit -P liconn
+    --submit -P <your-project>
 done
 ```
 
@@ -1051,7 +1055,7 @@ done
 
 ## LSF Cluster Submission
 
-> **Note**: The `-P` flag specifies your LSF project for job accounting. Replace `scicompsoft` with your own lab's project code (e.g., `-P ahrens`, `-P liconn`, `-P tavakoli`). Contact Scientific Computing if you don't know your project code.
+> **Note**: The `-P` flag specifies your LSF project for job accounting. Replace `<your-project>` with your own project code. Contact your cluster admins if you don't know your project code.
 
 ### Auto-Calculated Resources
 
@@ -1068,7 +1072,7 @@ TensorSwitch v2 automatically calculates optimal resources based on input data:
 ```bash
 # Override auto-calculated values
 pixi run python -m tensorswitch_v2 -i input.tif -o output.zarr \
-  --submit -P scicompsoft \
+  --submit -P <your-project> \
   --memory 60 \
   --wall_time 4:00 \
   --cores 4
@@ -1140,13 +1144,13 @@ Override with `--memory`, `--wall_time`, `--cores`. See [docs/RESOURCE_AUTO_CALC
 pixi run python -m tensorswitch_v2 \
   -i /data/large_dataset.tif \
   -o /output/large_dataset.zarr \
-  --submit -P scicompsoft
+  --submit -P <your-project>
 
 # Step 2: Generate pyramid (after s0 completes)
 pixi run python -m tensorswitch_v2 --auto_multiscale \
   -i /output/large_dataset.zarr/s0 \
   -o /output/large_dataset.zarr \
-  --submit -P scicompsoft
+  --submit -P <your-project>
 ```
 
 ### Example 2: Batch Convert ND2 Files
@@ -1156,7 +1160,7 @@ pixi run python -m tensorswitch_v2 \
   -i /data/nd2_files/ \
   -o /output/zarr_files/ \
   --pattern "*.nd2" \
-  --submit -P scicompsoft \
+  --submit -P <your-project> \
   --max_concurrent 50
 ```
 
@@ -1168,7 +1172,7 @@ pixi run python -m tensorswitch_v2 --auto_multiscale \
   -i /output/zarr_files/ \
   --pattern '*.zarr' \
   --max_concurrent 50 \
-  --submit -P scicompsoft
+  --submit -P <your-project>
 ```
 
 ### Example 5: CZI Multi-View Conversion
@@ -1178,14 +1182,14 @@ pixi run python -m tensorswitch_v2 --auto_multiscale \
 pixi run python -m tensorswitch_v2 \
   -i /data/multiview.czi \
   -o /output/multiview.zarr \
-  --submit -P scicompsoft
+  --submit -P <your-project>
 
 # Extract single view
 pixi run python -m tensorswitch_v2 \
   -i /data/multiview.czi \
   -o /output/view0.zarr \
   --view_index 0 \
-  --submit -P scicompsoft
+  --submit -P <your-project>
 ```
 
 ### Example 6: Python API Conversion

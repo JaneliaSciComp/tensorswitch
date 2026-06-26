@@ -400,6 +400,7 @@ class DistributedConverter:
                 if frame_dims:
                     from ..utils.tensorstore_utils import (
                         adaptive_spatial_chunk, build_default_shape)
+                    chunk_was_auto_capped = False
                     if chunk_shape is None:
                         sc = adaptive_spatial_chunk(input_shape, input_dtype)
                         default_chunk = build_default_shape(
@@ -408,6 +409,7 @@ class DistributedConverter:
                             min(d, n) if n < a else d
                             for d, n, a in zip(
                                 default_chunk, native, input_shape))
+                        chunk_was_auto_capped = True
                         if verbose:
                             print(f"  Auto-capped chunk shape for frame-based "
                                   f"source: {chunk_shape}")
@@ -423,6 +425,26 @@ class DistributedConverter:
                         shard_shape = tuple(
                             max(c, (s // c) * c)
                             for s, c in zip(shard_shape, chunk_shape))
+
+                    # For sharded Zarr3: if chunk was auto-capped, enforce that
+                    # shard_dim / chunk_dim <= 8. A very small auto-capped chunk
+                    # (e.g. Z=1 from TIFF strips) with a large shard (Z=1024)
+                    # requires buffering 1024 inner chunks before TensorStore can
+                    # flush the shard — causing multi-minute stalls with no output.
+                    # Lift auto-capped dims so the ratio stays manageable
+                    # (e.g. Z=1 -> Z=128 for a 1024-shard, matching 8 chunks/shard).
+                    if chunk_was_auto_capped and shard_shape is not None:
+                        MAX_RATIO = 8
+                        chunk_shape = tuple(
+                            max(c, (s + MAX_RATIO - 1) // MAX_RATIO)
+                            for c, s in zip(chunk_shape, shard_shape))
+                        # Re-align shard after chunk dims may have been lifted
+                        shard_shape = tuple(
+                            max(c, (s // c) * c)
+                            for s, c in zip(shard_shape, chunk_shape))
+                        if verbose:
+                            print(f"  Lifted auto-capped chunk (shard/chunk "
+                                  f"ratio <= {MAX_RATIO}): {chunk_shape}")
 
                     if verbose:
                         print(f"  Shard shape for frame-based "

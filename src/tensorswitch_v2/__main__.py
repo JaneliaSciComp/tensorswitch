@@ -5,7 +5,7 @@ Usage:
     # Single file conversion (s0)
     python -m tensorswitch_v2 -i input.tif -o output.zarr
     python -m tensorswitch_v2 -i input.n5 -o output.zarr --chunk_shape 32,256,256
-    python -m tensorswitch_v2 -i input.tif -o output.zarr --submit -P scicompsoft
+    python -m tensorswitch_v2 -i input.tif -o output.zarr --submit -P <your-project>
 
     # Batch conversion (directory of files)
     python -m tensorswitch_v2 -i /path/to/tiff_dir/ -o /path/to/output_dir/ --pattern "*.tif"
@@ -20,7 +20,7 @@ Usage:
 
     # Auto-multiscale (full pyramid, all levels in parallel)
     python -m tensorswitch_v2 --auto_multiscale -i /path/to/s0 -o /path/to/dataset.zarr \\
-        --submit -P scicompsoft
+        --submit -P <your-project>
 """
 
 import os
@@ -289,18 +289,18 @@ Examples:
 
   # Submit to LSF cluster
   pixi run python -m tensorswitch_v2 -i input.tif -o output.zarr \\
-      --submit -P scicompsoft
+      --submit -P <your-project>
 
   # Batch convert directory of TIFFs
   pixi run python -m tensorswitch_v2 -i /path/to/tiffs/ -o /path/to/output/ \\
-      --pattern "*.tif" --submit -P scicompsoft --max_concurrent 100
+      --pattern "*.tif" --submit -P <your-project> --max_concurrent 100
 
   # Check batch conversion status
   pixi run python -m tensorswitch_v2 --status -i /path/to/tiffs/ -o /path/to/output/
 
   # Generate multi-scale pyramid (all levels)
   pixi run python -m tensorswitch_v2 --auto_multiscale \\
-      -i /path/to/dataset.zarr/s0 -o /path/to/dataset.zarr --submit -P scicompsoft
+      -i /path/to/dataset.zarr/s0 -o /path/to/dataset.zarr --submit -P <your-project>
 
 Supported input formats:
   TIFF, ND2, IMS, CZI, N5, Zarr v2/v3, Precomputed, HDF5, and 200+ via BIOIO
@@ -342,11 +342,14 @@ Supported output formats:
     # Presets for common use cases
     parser.add_argument(
         "--preset", default=None,
-        choices=["webknossos", "paintera"],
+        choices=["webknossos", "paintera", "mia_lmvd"],
         help="Use preset configuration. "
              "'webknossos': zarr3, chunk 32x32x32, shard 1024x1024x1024, zstd. "
              "'paintera': n5, xyz axis order, gzip, chunk 64x64x64 "
-             "(or zarr2 with zyx if --output_format zarr2).",
+             "(or zarr2 with zyx if --output_format zarr2). "
+             "'mia_lmvd': zarr3, chunk 128x128x128, shard 512x512x512, zstd-5, "
+             "C-order; axis order and dtype preserved from source; "
+             "voxel size preserved from source.",
     )
 
     # Dataset paths
@@ -562,6 +565,10 @@ Supported output formats:
         help="Submit as a single LSF bsub job instead of running locally",
     )
     parser.add_argument(
+        "--sync", action="store_true",
+        help="Block until submitted job(s) complete (requires --submit; uses LSF bwait)",
+    )
+    parser.add_argument(
         "--project", "-P", type=str, default=None,
         help="LSF project name (required when --submit is used)",
     )
@@ -578,8 +585,8 @@ Supported output formats:
         help="Number of cores for LSF job (default: auto-calculated from memory)",
     )
     parser.add_argument(
-        "--job_group", type=str, default="/scicompsoft/chend/tensorstore",
-        help="LSF job group path (default: /scicompsoft/chend/tensorstore)",
+        "--job_group", type=str, default=None,
+        help="LSF job group path for job accounting (optional)",
     )
     parser.add_argument(
         "--log_dir", type=str, default=None,
@@ -786,8 +793,8 @@ def _tmp_path_for(output_path: str) -> str:
 
     Appends '.tmp' to the output path so partial writes are never
     confused with completed conversions.  Example:
-        /nrs/scicompsoft/rokicki/output.zarr  →
-        /nrs/scicompsoft/rokicki/output.zarr.tmp
+        /path/to/output.zarr  →
+        /path/to/output.zarr.tmp
     """
     return output_path.rstrip('/\\') + '.tmp'
 
@@ -810,22 +817,26 @@ def _finalize_tmp_path(tmp_path: str, final_path: str, verbose: bool = True) -> 
 def _finalize_add_to_existing(
     final_output: str,
     subgroup_parent: str,
+    label_name: str,
     output_format: str,
     verbose: bool = True,
 ) -> None:
-    """Rename subgroup .tmp → final and fix root metadata after --add-to-existing.
+    """Move new label from .tmp subgroup into existing container and update metadata.
 
     During --add-to-existing conversion, data is written to e.g.
-    ``labels.tmp/`` inside the existing container.  This function:
+    ``labels.tmp/<label_name>/`` inside the existing container.  This function:
 
-    1. Removes the old subgroup if it exists (e.g. old ``labels/``).
-    2. Renames the ``.tmp`` variant to the final name.
-    3. Patches the root metadata so references to ``labels.tmp`` become
-       ``labels`` (labels list + multiscale dataset paths).
+    1. Creates ``labels/`` if it does not exist.
+    2. Moves ``labels.tmp/<label_name>/`` → ``labels/<label_name>/`` (replaces
+       only that label if it already exists; all other existing labels are untouched).
+    3. Removes the now-empty ``labels.tmp/`` directory.
+    4. Appends ``<label_name>`` to the root metadata labels list — existing labels
+       in the list are preserved (not replaced).
 
     Args:
         final_output: Container root path (e.g. ``/data/out.zarr``).
         subgroup_parent: Top-level subgroup name (``"labels"`` or ``"raw"``).
+        label_name: The specific label being added (e.g. ``"segmentation"``).
         output_format: ``"zarr3"`` or ``"zarr2"``.
         verbose: Print progress messages.
     """
@@ -838,26 +849,35 @@ def _finalize_add_to_existing(
     if not os.path.exists(tmp_path):
         return
 
-    # 1. Remove old subgroup (e.g. old labels/)
-    if os.path.exists(final_path):
-        shutil.rmtree(final_path)
-    os.rename(tmp_path, final_path)
-    if verbose:
-        print(f"Renamed {tmp_path} → {final_path}")
+    # 1. Move only the new label subdir: labels.tmp/<label_name>/ → labels/<label_name>/
+    #    All other existing labels in labels/ are left untouched.
+    tmp_label_path = os.path.join(tmp_path, label_name)
+    final_label_path = os.path.join(final_path, label_name)
 
-    # 2. Patch root metadata: labels.tmp → labels
+    os.makedirs(final_path, exist_ok=True)
+    if os.path.exists(final_label_path):
+        shutil.rmtree(final_label_path)
+    os.rename(tmp_label_path, final_label_path)
+    if verbose:
+        print(f"Moved {tmp_label_path} → {final_label_path}")
+
+    # 2. Clean up the now-empty labels.tmp/ directory
+    shutil.rmtree(tmp_path)
+
+    # 3. Update root metadata: append label_name to existing labels list (do not replace)
     if output_format == 'zarr3':
         meta_path = os.path.join(final_output, 'zarr.json')
         if os.path.exists(meta_path):
             with open(meta_path) as f:
                 meta = _json.load(f)
             ome = meta.get('attributes', {}).get('ome', {})
-            # Fix labels list
             labels_list = ome.get('labels', [])
-            labels_list = [subgroup_parent if l == tmp_name else l for l in labels_list]
-            if labels_list:
-                ome['labels'] = labels_list
-            # Fix multiscale dataset paths
+            # Remove any stale labels.tmp entry, append the new label (no duplicates)
+            labels_list = [l for l in labels_list if l != tmp_name]
+            if label_name not in labels_list:
+                labels_list.append(label_name)
+            ome['labels'] = sorted(labels_list)
+            # Fix any multiscale dataset paths still referencing labels.tmp
             for ms in ome.get('multiscales', []):
                 for ds in ms.get('datasets', []):
                     path = ds.get('path', '')
@@ -872,9 +892,10 @@ def _finalize_add_to_existing(
             with open(meta_path) as f:
                 meta = _json.load(f)
             labels_list = meta.get('labels', [])
-            labels_list = [subgroup_parent if l == tmp_name else l for l in labels_list]
-            if labels_list:
-                meta['labels'] = labels_list
+            labels_list = [l for l in labels_list if l != tmp_name]
+            if label_name not in labels_list:
+                labels_list.append(label_name)
+            meta['labels'] = sorted(labels_list)
             for ms in meta.get('multiscales', []):
                 for ds in ms.get('datasets', []):
                     path = ds.get('path', '')
@@ -884,7 +905,7 @@ def _finalize_add_to_existing(
                 _json.dump(meta, f, indent=2)
 
     if verbose:
-        print(f"Updated root metadata: {tmp_name} → {subgroup_parent}")
+        print(f"Updated root metadata: appended '{label_name}' to {subgroup_parent} labels list")
 
 
 def parse_shape(s: str, param_name: str = "shape") -> Tuple[int, ...]:
@@ -1228,8 +1249,8 @@ def submit_job(args, return_job_id=False):
         raise ValueError(
             "Missing required argument: --project/-P\n"
             "When using --submit, you must specify an LSF project for billing.\n"
-            "Example: pixi run python -m tensorswitch_v2 -i input.tif -o output.zarr --submit -P scicompsoft\n"
-            "Common projects: scicompsoft, liconn, ahrens"
+            "Example: pixi run python -m tensorswitch_v2 -i input.tif -o output.zarr --submit -P <your-project>\n"
+            "The -P flag specifies your LSF project for job accounting."
         )
 
     # Auto-calculate resources from source data when not explicitly provided
@@ -1241,6 +1262,21 @@ def submit_job(args, return_job_id=False):
     if needs_auto:
         print("Reading input metadata for resource estimation...")
         volume_shape, dtype_str, axes_order = _get_input_metadata(args)
+
+        # Fast-fail: if no --voxel_size override and source has placeholder [1,1,1] sizes,
+        # reject early before wasting a cluster job.
+        if not getattr(args, 'voxel_size', None):
+            try:
+                _voxels = create_reader(args).get_voxel_sizes()
+            except Exception:
+                _voxels = None
+            if _voxels and all(v == 1.0 for v in _voxels.values()):
+                raise ValueError(
+                    "No voxel size metadata found in source file. "
+                    "Please provide --voxel_size X,Y,Z (and optionally --voxel_unit) "
+                    "so the output metadata is correct. "
+                    "Example: --voxel_size 0.108,0.108,0.268 --voxel_unit micrometer"
+                )
 
         # When --bbox is used, estimate resources from the bbox subvolume, not the full source
         if getattr(args, 'bbox', None):
@@ -1298,6 +1334,10 @@ def submit_job(args, return_job_id=False):
 
     # Enforce cluster policy: 15 GB per core minimum
     memory_gb = max(memory_gb, cores * 15)
+    # File-decoded sources carry an 8 GB DaskReader frame cache not in the formula.
+    # Add 10% headroom so the job doesn't hit the limit exactly.
+    if not is_native:
+        memory_gb = int(math.ceil(memory_gb * 1.1 / 5) * 5)
 
     # Job name: tsv2_{src_ext}_to_{out_format}_{input_stem}
     input_name = os.path.basename(args.input)
@@ -1518,10 +1558,12 @@ def _submit_dependent_pyramid(args, conversion_job_id: str):
         coordinator_id = match.group(1) if match else "unknown"
         print(f"\nPyramid coordinator job {coordinator_id} submitted (depends on conversion job {conversion_job_id}).")
         print(f"  After conversion completes, pyramid levels will be submitted automatically.")
+        return coordinator_id
     else:
         print(f"\nWarning: Pyramid coordinator submission failed: {result.stderr.strip()}")
         print(f"  You can manually run pyramid after conversion finishes:")
         print(f"  python -m tensorswitch_v2 -i {args.output} --auto_multiscale --submit -P {args.project}")
+        return None
 
 
 def _submit_upsample_job(args, verbose=True):
@@ -1701,8 +1743,8 @@ def submit_downsample_job(args, cumulative_factors):
         raise ValueError(
             "Missing required argument: --project/-P\n"
             "When using --submit, you must specify an LSF project for billing.\n"
-            "Example: pixi run python -m tensorswitch_v2 -i input.tif -o output.zarr --submit -P scicompsoft\n"
-            "Common projects: scicompsoft, liconn, ahrens"
+            "Example: pixi run python -m tensorswitch_v2 -i input.tif -o output.zarr --submit -P <your-project>\n"
+            "The -P flag specifies your LSF project for job accounting."
         )
 
     memory_gb = args.memory or 32
@@ -1949,6 +1991,19 @@ def main(argv=None):
         if not args.quiet:
             print(f"Using Paintera preset: output={args.output_format}, "
                   f"axes={args.axes_order}, chunk=64x64x64, compression=gzip")
+    elif args.preset == "mia_lmvd":
+        # MIA LMVD preset: zarr3, 128^3 inner chunks / 512^3 shards, zstd-5, C-order.
+        # Axis order: preserve source (RFC-3 canonical: t,c,z,y,x or z,y,x if 3D).
+        # Dtype and voxel size: preserve from source (no overrides).
+        if not args.chunk_shape:
+            args.chunk_shape = "128,128,128"
+        if not args.shard_shape:
+            args.shard_shape = "512,512,512"
+        if not args.force_c_order and not args.force_f_order:
+            args.force_c_order = True
+        if not args.quiet:
+            print("Using mia_lmvd preset: zarr3, chunk=128³, shard=512³, "
+                  "zstd-5, C-order. Axis order, dtype, and voxel size preserved from source.")
 
     # Parse optional shapes
     chunk_shape = parse_shape(args.chunk_shape, "chunk_shape") if args.chunk_shape else None
@@ -2515,9 +2570,16 @@ def main(argv=None):
     if args.submit:
         job_id = submit_job(args, return_job_id=True)
 
+        wait_job_id = job_id
         # If --auto_multiscale, submit a dependent pyramid coordinator job
         if args.auto_multiscale and job_id:
-            _submit_dependent_pyramid(args, conversion_job_id=job_id)
+            pyramid_coord_id = _submit_dependent_pyramid(args, conversion_job_id=job_id)
+            if pyramid_coord_id:
+                wait_job_id = pyramid_coord_id
+
+        if getattr(args, 'sync', False) and wait_job_id:
+            print(f"\nWaiting for job {wait_job_id} to complete (--sync)...")
+            os.system(f"bwait -w 'ended({wait_job_id})'")
 
         return
 
@@ -2768,6 +2830,7 @@ def main(argv=None):
         _finalize_add_to_existing(
             final_output=final_output,
             subgroup_parent=subgroup_parent,
+            label_name=subgroup.split('/')[-1],
             output_format=args.output_format,
             verbose=verbose,
         )

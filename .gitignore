@@ -13,3 +13,6 @@ output
 .env
 .env.*
 *.env
+
+# Local planning notes
+PLAN_TS2.0.4.md
