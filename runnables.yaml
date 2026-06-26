@@ -267,4 +267,4 @@ runnables:
     resources:
       cpus: 2
       memory: "8 GB"
-      walltime: "24:00"
+      walltime: "96:00"
