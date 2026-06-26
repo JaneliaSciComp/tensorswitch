@@ -565,6 +565,10 @@ Supported output formats:
         help="Submit as a single LSF bsub job instead of running locally",
     )
     parser.add_argument(
+        "--sync", action="store_true",
+        help="Block until submitted job(s) complete (requires --submit; uses LSF bwait)",
+    )
+    parser.add_argument(
         "--project", "-P", type=str, default=None,
         help="LSF project name (required when --submit is used)",
     )
@@ -1259,6 +1263,21 @@ def submit_job(args, return_job_id=False):
         print("Reading input metadata for resource estimation...")
         volume_shape, dtype_str, axes_order = _get_input_metadata(args)
 
+        # Fast-fail: if no --voxel_size override and source has placeholder [1,1,1] sizes,
+        # reject early before wasting a cluster job.
+        if not getattr(args, 'voxel_size', None):
+            try:
+                _voxels = create_reader(args).get_voxel_sizes()
+            except Exception:
+                _voxels = None
+            if _voxels and all(v == 1.0 for v in _voxels.values()):
+                raise ValueError(
+                    "No voxel size metadata found in source file. "
+                    "Please provide --voxel_size X,Y,Z (and optionally --voxel_unit) "
+                    "so the output metadata is correct. "
+                    "Example: --voxel_size 0.108,0.108,0.268 --voxel_unit micrometer"
+                )
+
         # When --bbox is used, estimate resources from the bbox subvolume, not the full source
         if getattr(args, 'bbox', None):
             bbox_origin, bbox_size = parse_bbox(args.bbox)
@@ -1539,10 +1558,12 @@ def _submit_dependent_pyramid(args, conversion_job_id: str):
         coordinator_id = match.group(1) if match else "unknown"
         print(f"\nPyramid coordinator job {coordinator_id} submitted (depends on conversion job {conversion_job_id}).")
         print(f"  After conversion completes, pyramid levels will be submitted automatically.")
+        return coordinator_id
     else:
         print(f"\nWarning: Pyramid coordinator submission failed: {result.stderr.strip()}")
         print(f"  You can manually run pyramid after conversion finishes:")
         print(f"  python -m tensorswitch_v2 -i {args.output} --auto_multiscale --submit -P {args.project}")
+        return None
 
 
 def _submit_upsample_job(args, verbose=True):
@@ -2549,9 +2570,16 @@ def main(argv=None):
     if args.submit:
         job_id = submit_job(args, return_job_id=True)
 
+        wait_job_id = job_id
         # If --auto_multiscale, submit a dependent pyramid coordinator job
         if args.auto_multiscale and job_id:
-            _submit_dependent_pyramid(args, conversion_job_id=job_id)
+            pyramid_coord_id = _submit_dependent_pyramid(args, conversion_job_id=job_id)
+            if pyramid_coord_id:
+                wait_job_id = pyramid_coord_id
+
+        if getattr(args, 'sync', False) and wait_job_id:
+            print(f"\nWaiting for job {wait_job_id} to complete (--sync)...")
+            os.system(f"bwait -w 'ended({wait_job_id})'")
 
         return
 
