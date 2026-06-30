@@ -342,7 +342,7 @@ Supported output formats:
     # Presets for common use cases
     parser.add_argument(
         "--preset", default=None,
-        choices=["webknossos", "paintera", "mia_lmvd"],
+        choices=["webknossos", "paintera", "mia_lmvd", ""],
         help="Use preset configuration. "
              "'webknossos': zarr3, chunk 32x32x32, shard 1024x1024x1024, zstd. "
              "'paintera': n5, xyz axis order, gzip, chunk 64x64x64 "
@@ -482,6 +482,10 @@ Supported output formats:
     parser.add_argument(
         "--auto_multiscale", action="store_true",
         help="Auto-multiscale mode: generate full pyramid from s0 (all levels in parallel)",
+    )
+    parser.add_argument(
+        "--auto_resources", action="store_true",
+        help="UI hint for fileglancer: auto-calculate cluster resources. Has no effect on CLI behavior.",
     )
     parser.add_argument(
         "--target_level", type=int, default=None,
