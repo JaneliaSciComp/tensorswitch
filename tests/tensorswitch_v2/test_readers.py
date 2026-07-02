@@ -113,6 +113,61 @@ class TestZarr2Reader:
         assert isinstance(reader, Zarr2Reader)
 
 
+class TestZarr2ReaderFallback:
+    """Zarr2Reader falls back to zarr-python for incompatible compressor metadata."""
+
+    def test_fallback_emits_warning(self, sample_zarr2_incompatible_path):
+        """gzip level=-1 triggers fallback with a UserWarning."""
+        import warnings
+        reader = Zarr2Reader(sample_zarr2_incompatible_path, dataset_path="s0")
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            reader.get_tensorstore()
+        assert any(
+            issubclass(w.category, UserWarning) and "fallback" in str(w.message).lower()
+            for w in caught
+        )
+
+    def test_fallback_returns_tensorstore(self, sample_zarr2_incompatible_path):
+        """Fallback returns a ts.TensorStore with correct shape."""
+        import tensorstore as ts
+        import warnings
+        reader = Zarr2Reader(sample_zarr2_incompatible_path, dataset_path="s0")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            store = reader.get_tensorstore()
+        assert isinstance(store, ts.TensorStore)
+        assert list(store.shape) == [32, 64, 64]
+
+    def test_fallback_correct_values(self, sample_zarr2_incompatible_path, sample_3d_array):
+        """Fallback returns correct data values."""
+        import warnings
+        reader = Zarr2Reader(sample_zarr2_incompatible_path, dataset_path="s0")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            store = reader.get_tensorstore()
+        result = store[...].read().result()
+        np.testing.assert_array_equal(result, sample_3d_array)
+
+    def test_fallback_bigendian_byteswap(self, sample_zarr2_bigendian_path):
+        """Fallback correctly byte-swaps big-endian >u2 data to native uint16."""
+        import warnings
+        path, expected = sample_zarr2_bigendian_path
+        reader = Zarr2Reader(path, dataset_path="s0")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            store = reader.get_tensorstore()
+        result = store[...].read().result()
+        assert result.dtype == np.dtype('uint16')  # native, not big-endian
+        np.testing.assert_array_equal(result, expected.astype('uint16'))
+
+    def test_native_driver_unaffected(self, sample_zarr2_path):
+        """Normal zarr2 (valid gzip level) still uses TensorStore native driver."""
+        reader = Zarr2Reader(sample_zarr2_path, dataset_path="s0")
+        store = reader.get_tensorstore()
+        assert store.spec().to_json().get('driver') == 'zarr'
+
+
 class TestN5Reader:
     """Tests for N5Reader (Tier 1)."""
 

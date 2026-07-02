@@ -8,9 +8,11 @@ Contains both Zarr3Reader and Zarr2Reader.
 from typing import Dict, Optional, List
 import os
 import json
+import warnings
+import numpy as np
 import tensorstore as ts
 from .base import BaseReader, _default_voxel_sizes, build_kvstore as _build_kvstore_shared
-from ..utils import get_tensorstore_context
+from ..utils import get_tensorstore_context, infer_dimension_names
 from ..utils.format_loaders import convert_to_nanometers
 
 
@@ -316,6 +318,8 @@ class Zarr2Reader(BaseReader):
         self._dataset_path = dataset_path
         self._metadata_cache = None
         self._ts_store_cache = None
+        self._z_array_fallback = None    # zarr-python array reference, set by fallback
+        self._z_native_dtype_name = None  # normalised dtype name ('uint16' not '>u2')
 
     def _build_spec(self) -> Dict:
         """Build TensorStore spec dict for Zarr2 (without opening)."""
@@ -327,14 +331,106 @@ class Zarr2Reader(BaseReader):
         }
 
     def get_tensorstore(self) -> ts.TensorStore:
-        """Return opened TensorStore using native zarr (v2) driver."""
+        """Return opened TensorStore using native zarr (v2) driver.
+
+        Falls back to zarr-python via ts.virtual_chunked when TensorStore cannot
+        open the store (e.g. gzip compressor level=-1 written by zarr-python's
+        default settings, or other compressor/codec metadata TensorStore rejects).
+        The fallback is transparent to DistributedConverter — same ts.TensorStore
+        interface either way.
+        """
         if self._ts_store_cache is not None:
             return self._ts_store_cache
 
         spec = self._build_spec()
         spec['context'] = get_tensorstore_context()
-        self._ts_store_cache = ts.open(spec, read=True).result()
+        try:
+            self._ts_store_cache = ts.open(spec, read=True).result()
+        except Exception as e:
+            err = str(e)
+            if any(kw in err for kw in ('compressor', 'level', 'codec', 'filter')):
+                warnings.warn(
+                    f"TensorStore could not open Zarr2 store '{self.path}' due to "
+                    f"incompatible compressor metadata ({type(e).__name__}: {e}). "
+                    f"Using zarr-python fallback reader. Performance may be reduced.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+                self._ts_store_cache = self._zarr_python_fallback()
+            else:
+                raise
         return self._ts_store_cache
+
+    def _zarr_python_fallback(self) -> ts.TensorStore:
+        """Open zarr v2 via zarr-python and wrap as ts.virtual_chunked.
+
+        Used when TensorStore rejects the .zarray compressor config (e.g.
+        gzip level=-1). zarr-python handles all standard zarr v2 compressors,
+        including gzip level=-1 and big-endian dtypes (>u2).
+
+        Returns a ts.TensorStore compatible with DistributedConverter.
+        """
+        import zarr
+
+        array_path = (
+            os.path.join(self.path, self._dataset_path)
+            if self._dataset_path
+            else self.path
+        )
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            z_array = zarr.open_array(array_path, mode='r')
+
+        # Normalise dtype to native byte order: strips '>u2' → 'uint16', etc.
+        self._z_native_dtype_name = np.dtype(z_array.dtype).newbyteorder('=').name
+        self._z_array_fallback = z_array
+
+        shape = list(z_array.shape)
+        native_chunks = list(z_array.chunks)
+
+        # Cap large single-chunk dims to avoid multi-GB allocations
+        # (same rule as DaskReader._MAX_READ_CHUNK_DIM = 1024)
+        _MAX_DIM = 1024
+        read_chunks = [
+            min(nc, _MAX_DIM) if s == nc else nc
+            for nc, s in zip(native_chunks, shape)
+        ]
+
+        # Dimension names: reuse existing pattern from converter.py:217-222
+        # and pyramid.py:375-376 — axes from OME-NGFF, fall back to shape inference
+        dimension_names = None
+        multiscales = self.get_metadata().get('multiscales', [])
+        if multiscales and multiscales[0].get('axes'):
+            dimension_names = [
+                ax.get('name', f'dim_{i}')
+                for i, ax in enumerate(multiscales[0]['axes'])
+            ]
+        if not dimension_names:
+            dimension_names = infer_dimension_names(shape)
+
+        return ts.virtual_chunked(
+            self._zarr_python_read_fn,
+            dtype=ts.dtype(self._z_native_dtype_name),
+            domain=ts.IndexDomain(shape=shape, labels=dimension_names),
+            chunk_layout=ts.ChunkLayout(read_chunk_shape=read_chunks),
+        )
+
+    def _zarr_python_read_fn(self, domain, array, read_params):
+        """Read callback for ts.virtual_chunked backed by zarr-python.
+
+        Converts to native byte order on read (handles big-endian like >u2).
+        zarr-python chunk reads are thread-safe; numcodecs releases GIL.
+        """
+        slices = tuple(
+            slice(int(domain.origin[i]), int(domain.origin[i]) + int(domain.shape[i]))
+            for i in range(domain.ndim)
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            data = self._z_array_fallback[slices]
+        # astype: no-op for native-endian, byte-swaps for big-endian (>u2)
+        array[...] = data.astype(self._z_native_dtype_name, copy=False)
 
     def _build_kvstore(self) -> Dict:
         """Build kvstore spec using shared build_kvstore (handles S3, GCS, HTTP, local)."""
