@@ -803,6 +803,42 @@ def _tmp_path_for(output_path: str) -> str:
     return output_path.rstrip('/\\') + '.tmp'
 
 
+def _level_has_data(level_path: str) -> bool:
+    """Return True if any actual chunk/shard data files were written at this level.
+
+    zarr3 (sharded or non-sharded): data lives under ``c/``.  Pre-creation only
+    creates empty subdirectories inside ``c/``; actual shard files are written by
+    TensorStore only when a chunk contains non-fill-value data.
+
+    zarr2/N5: chunk files are written as plain files in the level directory.
+
+    Returns False if the level directory is absent or contains only metadata
+    files / empty pre-created directories (i.e. all data was fill-value / all-zero).
+    """
+    if not os.path.isdir(level_path):
+        return False
+
+    # zarr3: check c/ directory for any actual files
+    shard_dir = os.path.join(level_path, 'c')
+    if os.path.isdir(shard_dir):
+        for _root, _dirs, files in os.walk(shard_dir):
+            if files:
+                return True
+        return False
+
+    # zarr2/N5: any non-metadata file or subdirectory with files counts as a chunk
+    metadata_names = {'zarr.json', '.zarray', '.zattrs', 'attributes.json'}
+    for entry in os.listdir(level_path):
+        entry_path = os.path.join(level_path, entry)
+        if os.path.isfile(entry_path) and entry not in metadata_names:
+            return True
+        if os.path.isdir(entry_path) and entry not in metadata_names:
+            for _root, _dirs, files in os.walk(entry_path):
+                if files:
+                    return True
+    return False
+
+
 def _finalize_tmp_path(tmp_path: str, final_path: str, verbose: bool = True) -> None:
     """Rename a completed .tmp output to its final path.
 
@@ -825,17 +861,20 @@ def _finalize_add_to_existing(
     output_format: str,
     verbose: bool = True,
 ) -> None:
-    """Move new label from .tmp subgroup into existing container and update metadata.
+    """Move new label from .tmp into existing container and update metadata.
 
-    During --add-to-existing conversion, data is written to e.g.
-    ``labels.tmp/<label_name>/`` inside the existing container.  This function:
+    For labels subgroups (the common case), the new label is written to
+    ``labels/<label_name>.tmp/`` and renamed to ``labels/<label_name>/`` within
+    the same parent directory.  A same-parent rename is a single atomic metadata
+    operation on Lustre/GPFS, avoiding the cross-directory rename that can
+    silently drop files on multi-MDT Lustre configurations.
 
-    1. Creates ``labels/`` if it does not exist.
-    2. Moves ``labels.tmp/<label_name>/`` → ``labels/<label_name>/`` (replaces
-       only that label if it already exists; all other existing labels are untouched).
-    3. Removes the now-empty ``labels.tmp/`` directory.
-    4. Appends ``<label_name>`` to the root metadata labels list — existing labels
-       in the list are preserved (not replaced).
+    Both ``labels/zarr.json`` (the labels container) and the root ``zarr.json``
+    are updated by replacing the in-flight ``<label_name>.tmp`` entry with the
+    final ``<label_name>``.  Existing labels in those files are never removed.
+
+    For non-labels subgroups (raw/image), the legacy ``subgroup_parent.tmp/``
+    container approach is preserved unchanged.
 
     Args:
         final_output: Container root path (e.g. ``/data/out.zarr``).
@@ -846,70 +885,134 @@ def _finalize_add_to_existing(
     """
     import json as _json
 
-    tmp_name = subgroup_parent + '.tmp'
-    tmp_path = os.path.join(final_output, tmp_name)
     final_path = os.path.join(final_output, subgroup_parent)
 
-    if not os.path.exists(tmp_path):
-        return
+    if subgroup_parent == 'labels':
+        # --- Same-parent rename: labels/<label_name>.tmp/ → labels/<label_name>/ ---
+        tmp_label_name = label_name + '.tmp'
+        tmp_label_path = os.path.join(final_path, tmp_label_name)
+        final_label_path = os.path.join(final_path, label_name)
 
-    # 1. Move only the new label subdir: labels.tmp/<label_name>/ → labels/<label_name>/
-    #    All other existing labels in labels/ are left untouched.
-    tmp_label_path = os.path.join(tmp_path, label_name)
-    final_label_path = os.path.join(final_path, label_name)
+        if not os.path.exists(tmp_label_path):
+            return
 
-    os.makedirs(final_path, exist_ok=True)
-    if os.path.exists(final_label_path):
-        shutil.rmtree(final_label_path)
-    os.rename(tmp_label_path, final_label_path)
+        # 1. Rename within labels/ — same parent dir, single atomic MDT operation
+        os.makedirs(final_path, exist_ok=True)
+        if os.path.exists(final_label_path):
+            shutil.rmtree(final_label_path)
+        os.rename(tmp_label_path, final_label_path)
+        if verbose:
+            print(f"Moved {tmp_label_path} → {final_label_path}")
+
+        # Helper: replace tmp entry with real name in a labels list, preserving others
+        def _fix_labels_list(lst):
+            lst = [l for l in lst if l not in (tmp_label_name, label_name)]
+            lst.append(label_name)
+            return sorted(lst)
+
+        # 2. Update labels/zarr.json — replace <label_name>.tmp with <label_name>
+        #    write_labels_container_metadata() added tmp_label_name during conversion
+        if output_format == 'zarr3':
+            labels_meta = os.path.join(final_path, 'zarr.json')
+            if os.path.exists(labels_meta):
+                with open(labels_meta) as f:
+                    meta = _json.load(f)
+                ome = meta.setdefault('attributes', {}).setdefault('ome', {})
+                ome['labels'] = _fix_labels_list(ome.get('labels', []))
+                with open(labels_meta, 'w') as f:
+                    _json.dump(meta, f, indent=2)
+        elif output_format == 'zarr2':
+            labels_meta = os.path.join(final_path, '.zattrs')
+            if os.path.exists(labels_meta):
+                with open(labels_meta) as f:
+                    meta = _json.load(f)
+                meta['labels'] = _fix_labels_list(meta.get('labels', []))
+                with open(labels_meta, 'w') as f:
+                    _json.dump(meta, f, indent=2)
+
+        # 3. Update root metadata — replace <label_name>.tmp with <label_name>
+        old_prefix = f'{subgroup_parent}/{tmp_label_name}/'
+        new_prefix = f'{subgroup_parent}/{label_name}/'
+        if output_format == 'zarr3':
+            root_meta = os.path.join(final_output, 'zarr.json')
+            if os.path.exists(root_meta):
+                with open(root_meta) as f:
+                    meta = _json.load(f)
+                ome = meta.setdefault('attributes', {}).setdefault('ome', {})
+                ome['labels'] = _fix_labels_list(ome.get('labels', []))
+                for ms in ome.get('multiscales', []):
+                    for ds in ms.get('datasets', []):
+                        if ds.get('path', '').startswith(old_prefix):
+                            ds['path'] = new_prefix + ds['path'][len(old_prefix):]
+                with open(root_meta, 'w') as f:
+                    _json.dump(meta, f, indent=2)
+        elif output_format == 'zarr2':
+            root_meta = os.path.join(final_output, '.zattrs')
+            if os.path.exists(root_meta):
+                with open(root_meta) as f:
+                    meta = _json.load(f)
+                meta['labels'] = _fix_labels_list(meta.get('labels', []))
+                for ms in meta.get('multiscales', []):
+                    for ds in ms.get('datasets', []):
+                        if ds.get('path', '').startswith(old_prefix):
+                            ds['path'] = new_prefix + ds['path'][len(old_prefix):]
+                with open(root_meta, 'w') as f:
+                    _json.dump(meta, f, indent=2)
+
+    else:
+        # --- Legacy path for raw/image subgroups: subgroup_parent.tmp/ container ---
+        tmp_name = subgroup_parent + '.tmp'
+        tmp_path = os.path.join(final_output, tmp_name)
+        final_label_path = os.path.join(final_path, label_name)
+
+        if not os.path.exists(tmp_path):
+            return
+
+        tmp_label_path = os.path.join(tmp_path, label_name)
+        os.makedirs(final_path, exist_ok=True)
+        if os.path.exists(final_label_path):
+            shutil.rmtree(final_label_path)
+        os.rename(tmp_label_path, final_label_path)
+        if verbose:
+            print(f"Moved {tmp_label_path} → {final_label_path}")
+        shutil.rmtree(tmp_path)
+
+        old_prefix = tmp_name + '/'
+        new_prefix = subgroup_parent + '/'
+        if output_format == 'zarr3':
+            root_meta = os.path.join(final_output, 'zarr.json')
+            if os.path.exists(root_meta):
+                with open(root_meta) as f:
+                    meta = _json.load(f)
+                ome = meta.setdefault('attributes', {}).setdefault('ome', {})
+                lst = [l for l in ome.get('labels', []) if l != tmp_name]
+                if label_name not in lst:
+                    lst.append(label_name)
+                ome['labels'] = sorted(lst)
+                for ms in ome.get('multiscales', []):
+                    for ds in ms.get('datasets', []):
+                        if ds.get('path', '').startswith(old_prefix):
+                            ds['path'] = new_prefix + ds['path'][len(old_prefix):]
+                with open(root_meta, 'w') as f:
+                    _json.dump(meta, f, indent=2)
+        elif output_format == 'zarr2':
+            root_meta = os.path.join(final_output, '.zattrs')
+            if os.path.exists(root_meta):
+                with open(root_meta) as f:
+                    meta = _json.load(f)
+                lst = [l for l in meta.get('labels', []) if l != tmp_name]
+                if label_name not in lst:
+                    lst.append(label_name)
+                meta['labels'] = sorted(lst)
+                for ms in meta.get('multiscales', []):
+                    for ds in ms.get('datasets', []):
+                        if ds.get('path', '').startswith(old_prefix):
+                            ds['path'] = new_prefix + ds['path'][len(old_prefix):]
+                with open(root_meta, 'w') as f:
+                    _json.dump(meta, f, indent=2)
+
     if verbose:
-        print(f"Moved {tmp_label_path} → {final_label_path}")
-
-    # 2. Clean up the now-empty labels.tmp/ directory
-    shutil.rmtree(tmp_path)
-
-    # 3. Update root metadata: append label_name to existing labels list (do not replace)
-    if output_format == 'zarr3':
-        meta_path = os.path.join(final_output, 'zarr.json')
-        if os.path.exists(meta_path):
-            with open(meta_path) as f:
-                meta = _json.load(f)
-            ome = meta.get('attributes', {}).get('ome', {})
-            labels_list = ome.get('labels', [])
-            # Remove any stale labels.tmp entry, append the new label (no duplicates)
-            labels_list = [l for l in labels_list if l != tmp_name]
-            if label_name not in labels_list:
-                labels_list.append(label_name)
-            ome['labels'] = sorted(labels_list)
-            # Fix any multiscale dataset paths still referencing labels.tmp
-            for ms in ome.get('multiscales', []):
-                for ds in ms.get('datasets', []):
-                    path = ds.get('path', '')
-                    if path.startswith(tmp_name + '/'):
-                        ds['path'] = subgroup_parent + path[len(tmp_name):]
-            meta['attributes']['ome'] = ome
-            with open(meta_path, 'w') as f:
-                _json.dump(meta, f, indent=2)
-    elif output_format == 'zarr2':
-        meta_path = os.path.join(final_output, '.zattrs')
-        if os.path.exists(meta_path):
-            with open(meta_path) as f:
-                meta = _json.load(f)
-            labels_list = meta.get('labels', [])
-            labels_list = [l for l in labels_list if l != tmp_name]
-            if label_name not in labels_list:
-                labels_list.append(label_name)
-            meta['labels'] = sorted(labels_list)
-            for ms in meta.get('multiscales', []):
-                for ds in ms.get('datasets', []):
-                    path = ds.get('path', '')
-                    if path.startswith(tmp_name + '/'):
-                        ds['path'] = subgroup_parent + path[len(tmp_name):]
-            with open(meta_path, 'w') as f:
-                _json.dump(meta, f, indent=2)
-
-    if verbose:
-        print(f"Updated root metadata: appended '{label_name}' to {subgroup_parent} labels list")
+        print(f"Updated metadata: registered '{label_name}' in {subgroup_parent} labels list")
 
 
 def parse_shape(s: str, param_name: str = "shape") -> Tuple[int, ...]:
@@ -1038,7 +1141,10 @@ def create_writer(args, data_type: str = 'image'):
     # Determine if we should use nested structure (enabled by default for zarr3 and zarr2)
     use_nested = getattr(args, 'use_nested_structure', True) and fmt in ["zarr3", "zarr2"]
     image_key = getattr(args, 'image_key', 'raw')
-    label_key = getattr(args, 'label_key', 'segmentation')
+    # _label_tmp_key is set by the --add-to-existing routing block to write the label
+    # under a .tmp name (e.g. 'neurons.tmp') so the live labels/ directory is not
+    # touched until the rename completes.  Falls back to the user-facing --label-key.
+    label_key = getattr(args, '_label_tmp_key', None) or getattr(args, 'label_key', 'segmentation')
     labels_container = getattr(args, '_labels_container_override', 'labels')
 
     include_omero = not getattr(args, 'no_omero', False)
@@ -1225,6 +1331,24 @@ def run_local_pyramid(s0_path, root_path, downsample_method="auto",
             verbose=verbose,
             cumulative_factor_for_metadata=cumulative_factors,
         )
+
+        # Check whether any data was actually written at this level.
+        # Sparse label data (e.g. synapse annotations) can produce all-zero output
+        # at coarser scales; zarr3 then writes no chunk files.  Remove the empty
+        # pre-created level directories and stop — all subsequent levels would also
+        # be all-zero since downsampling is chained.
+        level_name_str = get_level_name(level, prefix)
+        level_path = os.path.join(root_path, level_name_str)
+        if not _level_has_data(level_path):
+            print(f"\n  {level_name_str}: no shard data written (all-zero at this scale).")
+            print(f"  Removing empty pre-created levels from {level_name_str} onward.")
+            for future_info in plan['levels'][plan['levels'].index(level_info):]:
+                future_level_path = os.path.join(root_path, get_level_name(future_info['level'], prefix))
+                if os.path.exists(future_level_path):
+                    shutil.rmtree(future_level_path)
+                    print(f"  Removed: {future_level_path}")
+            plan['num_levels'] = level - 1
+            break
 
     update_ome_metadata_if_needed(root_path, use_ome_structure=True, include_translation=include_translation, downsample_method=downsample_method)
 
@@ -2610,25 +2734,40 @@ def main(argv=None):
                 "--add-to-existing requires --data-type labels or --data-type image "
                 "(or --is-label for label data)"
             )
-        subgroup_parent = subgroup.split('/')[0]  # "labels" or "raw"
-        tmp_subgroup_path = os.path.join(final_output, subgroup_parent + '.tmp')
-        # Clean leftover .tmp subgroup from prior failed run
-        if os.path.exists(tmp_subgroup_path):
-            shutil.rmtree(tmp_subgroup_path)
-            if verbose:
-                print(f"Removed leftover temporary subgroup: {tmp_subgroup_path}")
-        # Warn if target subgroup already exists
-        existing_subgroup = os.path.join(final_output, subgroup_parent)
-        if os.path.exists(existing_subgroup) and verbose:
-            print(f"Warning: existing {subgroup_parent}/ will be replaced on completion")
-        # Route writer to .tmp subgroup via labels_container override
+        subgroup_parent = subgroup.split('/')[0]   # "labels" or "raw"
+        label_name_orig = subgroup.split('/')[-1]  # "neurons"
         if subgroup_parent == 'labels':
-            args._labels_container_override = 'labels.tmp'
+            # New approach: write to labels/<label_name>.tmp/ then rename within
+            # the same parent directory.  A same-parent rename is a single atomic
+            # metadata operation on Lustre/GPFS, avoiding cross-directory renames
+            # that can silently drop files on multi-MDT Lustre configurations.
+            tmp_label_path = os.path.join(final_output, subgroup_parent, label_name_orig + '.tmp')
+            # Clean leftover <label_name>.tmp from a prior failed run
+            if os.path.exists(tmp_label_path):
+                shutil.rmtree(tmp_label_path)
+                if verbose:
+                    print(f"Removed leftover temporary label: {tmp_label_path}")
+            # Signal the writer to use '<label_name>.tmp' as the in-flight label key.
+            # args.label_key is intentionally NOT changed so --label-key is propagated
+            # correctly to worker jobs via reinvoke without double-applying .tmp.
+            args._label_tmp_key = label_name_orig + '.tmp'
+            tmp_output = None
+            if verbose:
+                print(f"Writing to temporary label: {tmp_label_path}")
         else:
+            # Legacy path for non-labels subgroups (raw/image): subgroup_parent.tmp/
+            tmp_subgroup_path = os.path.join(final_output, subgroup_parent + '.tmp')
+            if os.path.exists(tmp_subgroup_path):
+                shutil.rmtree(tmp_subgroup_path)
+                if verbose:
+                    print(f"Removed leftover temporary subgroup: {tmp_subgroup_path}")
+            existing_subgroup = os.path.join(final_output, subgroup_parent)
+            if os.path.exists(existing_subgroup) and verbose:
+                print(f"Warning: existing {subgroup_parent}/ will be replaced on completion")
             args._image_key_override = subgroup_parent + '.tmp'
-        tmp_output = None  # Signal: no container-level .tmp
-        if verbose:
-            print(f"Writing to subgroup: {tmp_subgroup_path}")
+            tmp_output = None
+            if verbose:
+                print(f"Writing to subgroup: {tmp_subgroup_path}")
     else:
         tmp_output = _tmp_path_for(final_output)
         # Clean up leftover .tmp from a prior failed run
@@ -2801,11 +2940,15 @@ def main(argv=None):
         # wrong levels.
         pyramid_subgroup = _resolve_conversion_subgroup(args)
         if add_to_existing and pyramid_subgroup:
-            # Pyramid runs on .tmp subgroup before rename
-            # e.g. labels/segmentation → labels.tmp/segmentation
-            parts = pyramid_subgroup.split('/', 1)
-            pyramid_subgroup = parts[0] + '.tmp' + ('/' + parts[1] if len(parts) > 1 else '')
-            base_level_input = os.path.join(final_output, pyramid_subgroup)
+            if subgroup_parent == 'labels':
+                # New approach: _label_tmp_key is already set so _resolve_conversion_subgroup
+                # returns 'labels/<label_name>.tmp' — use it directly, no transformation needed.
+                base_level_input = os.path.join(final_output, pyramid_subgroup)
+            else:
+                # Legacy: transform 'raw/...' → 'raw.tmp/...'
+                parts = pyramid_subgroup.split('/', 1)
+                pyramid_subgroup = parts[0] + '.tmp' + ('/' + parts[1] if len(parts) > 1 else '')
+                base_level_input = os.path.join(final_output, pyramid_subgroup)
         else:
             base_level_input = (
                 os.path.join(args.output, pyramid_subgroup) if pyramid_subgroup else args.output
