@@ -2013,14 +2013,7 @@ def show_conversion_spec(reader, writer, args, chunk_shape, shard_shape):
         print(f"  dtype: {dtype_name}")
         labels = list(input_store.domain.labels) if input_store.domain.labels else []
         if labels:
-            _ax = [a.lower() for a in labels]
-            _non_sp = [i for i, a in enumerate(_ax) if a not in {'x', 'y', 'z'}]
-            _sp     = [i for i, a in enumerate(_ax) if a in     {'x', 'y', 'z'}]
-            if _non_sp and _sp and max(_non_sp) > min(_sp):
-                _norm = [labels[i] for i in _non_sp + _sp]
-                print(f"  domain labels: {labels} -> {_norm} (will auto-normalize)")
-            else:
-                print(f"  domain labels: {labels}")
+            print(f"  domain labels: {labels}")
     except Exception as e:
         print(f"(TensorStore info not available: {e})")
 
