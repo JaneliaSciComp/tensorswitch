@@ -308,6 +308,27 @@ class DistributedConverter:
                 if verbose:
                     print(f"  Axes reorder: {axes_order} -> {target_axes} (transpose: {perm})")
 
+        # 2d. Auto-normalize axis order: move all non-spatial dims before spatial dims.
+        # Handles mixed-order sources like ND2 native (ZCYX -> CZYX),
+        # neuroglancer precomputed (XYZC -> CXYZ), or 5D TZCYX -> TCZYX.
+        # Runs only when --axes_order was not given (spatial_transpose not yet set)
+        # and the detected axes have at least one non-spatial dim interleaved after
+        # a spatial dim (e.g. Z before C in ZCYX).
+        # Reuses the existing spatial_transpose machinery in block 4 and the chunk
+        # loop so no additional data-path code is needed.
+        if not spatial_transpose and axes_order:
+            _ax = [a.lower() for a in axes_order]
+            _non_sp = [i for i, a in enumerate(_ax) if a not in {'x', 'y', 'z'}]
+            _sp     = [i for i, a in enumerate(_ax) if a in     {'x', 'y', 'z'}]
+            if _non_sp and _sp and max(_non_sp) > min(_sp):
+                _norm_perm = tuple(_non_sp + _sp)
+                _norm_axes = [axes_order[i] for i in _norm_perm]
+                spatial_transpose = _norm_perm
+                _target_axes_order = _norm_axes
+                if verbose:
+                    print(f"  Auto-normalize axis order: {axes_order} -> {_norm_axes} "
+                          f"(perm: {list(_norm_perm)})")
+
         # 3. Get metadata from reader
         # Readers return voxel sizes in nanometers when real metadata exists.
         # When no metadata, _default_voxel_sizes() returns {x:1.0, y:1.0, z:1.0} placeholder.
@@ -478,6 +499,31 @@ class DistributedConverter:
             axes_order = _target_axes_order
             if verbose:
                 print(f"  Reordered shape: {input_shape}")
+
+        # 4b. Pad chunk/shard to match input dimensionality when a preset
+        # supplied spatial-only shapes (e.g. 3 values) for 4D CZYX/TCZYX data.
+        # The spatial_transpose block above handles this when --axes_order is
+        # given; this block covers the no-reorder case (e.g. BIOIO CZYX output
+        # with mia_lmvd preset that sets chunk=128,128,128 / shard=512,512,512).
+        # Result: (128,128,128) -> (1,128,128,128) for CZYX; shard similarly.
+        if axes_order and not spatial_transpose:
+            for attr_name in ('chunk_shape', 'shard_shape'):
+                shape_val = chunk_shape if attr_name == 'chunk_shape' else shard_shape
+                if shape_val and len(shape_val) < len(input_shape):
+                    padded = []
+                    spatial_iter = iter(shape_val)
+                    for a in axes_order:
+                        if a.lower() in {'x', 'y', 'z'}:
+                            padded.append(next(spatial_iter))
+                        else:
+                            padded.append(1)
+                    if attr_name == 'chunk_shape':
+                        chunk_shape = tuple(padded)
+                    else:
+                        shard_shape = tuple(padded)
+                    if verbose:
+                        print(f"  Auto-padded {attr_name} to match {len(input_shape)}D "
+                              f"input: {shape_val} -> {chunk_shape if attr_name == 'chunk_shape' else shard_shape}")
 
         # 5. Create output spec and open store
         if verbose:
