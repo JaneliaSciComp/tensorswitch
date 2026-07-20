@@ -71,8 +71,8 @@ def detect_input_mode(input_path: str, output_path: str = None) -> str:
     from ..readers.base import is_local_precomputed, is_remote_path
     from ..utils.folder_discovery import discover_datasets, is_neuroglancer_precomputed
 
-    # Remote URLs (gs://, s3://, http://, precomputed://) are always single-file mode
-    if is_remote_path(input_path) or input_path.startswith('precomputed://'):
+    # Remote URLs (gs://, s3://, http://, precomputed://, n5://, zarr://) are always single-file mode
+    if is_remote_path(input_path) or input_path.startswith(('precomputed://', 'n5://', 'zarr://')):
         return 'single_file'
 
     # Check if path ends with known format extension
