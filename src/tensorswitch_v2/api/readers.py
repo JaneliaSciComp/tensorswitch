@@ -741,8 +741,12 @@ def _remote_n5_reader(path: str):
     """Create N5 reader for a remote URL.
 
     Checks whether the root path is an N5 array (has ``dataType`` in
-    ``attributes.json``).  If the root is a group, raises ``ValueError``
-    telling the user to append the dataset sub-path.
+    ``attributes.json``).  If the root is a group, tries to auto-discover
+    the first scale level using:
+    1. S3-specific bounded directory listing (existing behaviour)
+    2. Kvstore-based scale probing — cloud-agnostic, works for GCS/S3/HTTP.
+       Tries s0, 0, s1, 1 via direct kvstore reads.
+    Raises ``ValueError`` only if no scale level is found.
     """
     from ..readers.base import build_kvstore
     import tensorstore as ts
@@ -755,10 +759,20 @@ def _remote_n5_reader(path: str):
             attrs = json.loads(bytes(result.value))
             if "dataType" in attrs:
                 return Readers.n5(path)
-            # Root is a group — try S3 bounded directory listing
+            # Root is a group — try S3 bounded directory listing first
             resolved = _s3_discover_array_path(path)
             if resolved:
                 return Readers.n5(path, dataset_path=resolved)
+            # Kvstore-based scale probing (works for GCS, S3, HTTP)
+            for subpath in ('s0', '0', 's1', '1'):
+                try:
+                    sub = kvs.read(f"{subpath}/attributes.json").result()
+                    if sub.value and len(sub.value) > 0:
+                        sub_attrs = json.loads(bytes(sub.value))
+                        if 'dataType' in sub_attrs:
+                            return Readers.n5(path, dataset_path=subpath)
+                except Exception:
+                    pass
             raise ValueError(
                 f"Remote N5 path is a group, not an array: {path}\n"
                 "Append the dataset sub-path to the URL, e.g.:\n"

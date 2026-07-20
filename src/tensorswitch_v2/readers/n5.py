@@ -7,6 +7,7 @@ Supports local paths and remote URLs (HTTP, S3, GCS).
 
 import json
 import os
+import warnings
 from typing import Dict, Optional, Tuple
 from urllib.parse import urlparse
 import tensorstore as ts
@@ -137,14 +138,70 @@ class N5Reader(BaseReader):
         return spec
 
     def get_tensorstore(self) -> ts.TensorStore:
-        """Return opened TensorStore using native N5 driver."""
+        """Return opened TensorStore using native N5 driver.
+
+        Falls back to _n5_pixelres_fallback when TensorStore cannot open the
+        store due to non-standard N5 v2.0.0 attributes (pixelResolution groups
+        that lack the standard 'dimensions' array at the group level).
+        """
         if self._ts_store_cache is not None:
             return self._ts_store_cache
 
         spec = self._build_spec()
         spec['context'] = get_tensorstore_context()
-        self._ts_store_cache = ts.open(spec, read=True).result()
+        try:
+            self._ts_store_cache = ts.open(spec, read=True).result()
+        except Exception as e:
+            err = str(e)
+            if 'member is missing' in err or 'Expected array' in err:
+                warnings.warn(
+                    f"TensorStore could not open N5 store '{self.path}' — "
+                    f"attributes.json lacks the standard 'dimensions' key "
+                    f"({type(e).__name__}: {e}). "
+                    f"Trying N5 v2.0.0 pixelResolution fallback (auto-discover s0).",
+                    UserWarning,
+                    stacklevel=2,
+                )
+                self._ts_store_cache = self._n5_pixelres_fallback()
+            else:
+                raise
         return self._ts_store_cache
+
+    def _n5_pixelres_fallback(self) -> ts.TensorStore:
+        """Auto-discover first scale level for N5 v2.0.0 pixelResolution groups.
+
+        Used when attributes.json at the group level uses the N5 v2.0.0
+        'pixelResolution.dimensions' format for physical resolution instead of
+        the standard 'dimensions' array (array shape). Tries common scale paths
+        (s0, 0, s1, 1) appended to the current path.
+
+        Example case: Janelia Fish2 GT N5 where gt/attributes.json contains
+        {"pixelResolution": {"dimensions": [16.0, 16.0, 30.0], "unit": "nm"}}
+        but gt/s0/attributes.json has the proper array metadata.
+        """
+        _driver_type, kvstore_spec = _parse_remote_url(self.path)
+        existing_path = self.dataset_path or ''
+
+        for scale in ('s0', '0', 's1', '1'):
+            sub_path = (existing_path.rstrip('/') + '/' + scale) if existing_path else scale
+            spec = {
+                'driver': 'n5',
+                'kvstore': kvstore_spec,
+                'path': sub_path,
+                'open': True,
+                'context': get_tensorstore_context(),
+            }
+            try:
+                store = ts.open(spec, read=True).result()
+                return store
+            except Exception:
+                continue
+
+        raise ValueError(
+            f"N5 group '{self.path}' uses non-standard N5 v2.0.0 'pixelResolution' "
+            f"format and no standard scale level (s0, 0) was found. "
+            f"Pass the full path to the array directly (e.g. append '/s0')."
+        )
 
     def get_metadata(self) -> Dict:
         """
