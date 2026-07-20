@@ -116,6 +116,9 @@ class N5Reader(BaseReader):
             >>> # Multi-scale N5 (specific scale)
             >>> reader = N5Reader("/data.n5", dataset_path="s0")
         """
+        # Strip n5:// format-scheme prefix — internal logic only needs the real cloud URL
+        if path.lower().startswith('n5://'):
+            path = path[5:]
         super().__init__(path)
         self.dataset_path = dataset_path
         self._metadata_cache = None

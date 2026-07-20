@@ -100,6 +100,12 @@ class Readers:
         from ..readers.base import is_remote_path as _is_remote
         path_lower = path.lower()
 
+        # Explicit format-scheme prefixes: n5:// and zarr:// indicate format directly
+        if path_lower.startswith('n5://'):
+            return _remote_n5_reader(path)
+        elif path_lower.startswith('zarr://'):
+            return _remote_zarr_reader(path)
+
         # Remote URLs: infer format from URL pattern (no filesystem access)
         if _is_remote(path):
             if path_lower.endswith('.zarr') or '.zarr/' in path_lower:
@@ -740,6 +746,9 @@ def _find_first_dataset_path(metadata: dict) -> str:
 def _remote_n5_reader(path: str):
     """Create N5 reader for a remote URL.
 
+    Accepts paths with or without the ``n5://`` format-scheme prefix (e.g.
+    ``n5://gs://bucket/data.n5/group`` or plain ``gs://bucket/data.n5``).
+
     Checks whether the root path is an N5 array (has ``dataType`` in
     ``attributes.json``).  If the root is a group, tries to auto-discover
     the first scale level using:
@@ -751,6 +760,10 @@ def _remote_n5_reader(path: str):
     from ..readers.base import build_kvstore
     import tensorstore as ts
     import json
+
+    # Strip the n5:// format-scheme prefix — the remainder is the real cloud URL
+    if path.lower().startswith('n5://'):
+        path = path[5:]
 
     try:
         kvs = ts.KvStore.open(build_kvstore(path)).result()
