@@ -739,7 +739,7 @@ def validate_input_path(path: str, allow_directory: bool = True) -> None:
     from .readers.base import is_remote_path
 
     # Skip local filesystem checks for remote URLs — reader handles connectivity
-    if is_remote_path(path) or path.startswith('precomputed://'):
+    if is_remote_path(path) or path.startswith(('precomputed://', 'n5://', 'zarr://')):
         return
 
     if not os.path.exists(path):
