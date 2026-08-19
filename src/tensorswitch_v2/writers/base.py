@@ -355,9 +355,25 @@ class BaseWriter(ABC):
         def _pad_and_reorder(values, reorder):
             if values is None:
                 return None
-            padded = list(values)
-            while len(padded) < len(axes):
-                padded.append(1)
+            if len(values) >= len(axes):
+                # Full-dim: just reorder if needed
+                padded = list(values)
+                if reorder:
+                    return [padded[i] for i in new_order]
+                return padded
+            # Under-specified (e.g. 3 spatial values for 4D CZYX): assign user
+            # values to spatial dims in order; non-spatial dims always get 1.
+            SPATIAL = {'x', 'y', 'z'}
+            spatial_iter = iter(values)
+            padded = []
+            for ax in axes:
+                if ax.lower() in SPATIAL:
+                    try:
+                        padded.append(next(spatial_iter))
+                    except StopIteration:
+                        padded.append(1)
+                else:
+                    padded.append(1)
             if reorder:
                 return [padded[i] for i in new_order]
             return padded
