@@ -252,6 +252,43 @@ runnables:
             type: string
             description: "Extract a subvolume: origin_z,origin_y,origin_x,size_z,size_y,size_x. Example: 0,0,0,512,512,512."
 
+      - section: Label Ingestion
+        description: >
+          Add an annotation layer into an existing OME-NGFF zarr's labels/ folder.
+          Use with --add-to-existing and --is-label (or --data-type labels).
+          --output-offset embeds a sparse annotation (e.g. single timepoint crop) at the
+          correct TCZYX position; omit for same-shape ingest.
+        collapsed: true
+        parameters:
+          - flag: --add-to-existing
+            name: Add to Existing Container
+            type: boolean
+            description: "Write into an existing zarr without destroying it. Required for label ingestion."
+            default: false
+
+          - flag: --label-key
+            name: Label Name
+            type: string
+            description: "Name for the new label layer under labels/ (e.g. 'proofread_t10')."
+            default: segmentation
+
+          - flag: --output-offset
+            name: Output Offset (TCZYX)
+            type: string
+            description: >
+              Space-separated TCZYX integers giving the position in the target container where the
+              source origin lands. Fewer values are zero-padded on the left.
+              E.g. '10 0 0 151 870' → T=10, Y=151, X=870.
+              E.g. '10' → T=10, C=Z=Y=X=0 (full-volume single timepoint).
+              Omit entirely for same-shape ingest (existing --add-to-existing handles it).
+
+          - flag: --target-shape
+            name: Target Shape (TCZYX)
+            type: string
+            description: >
+              Full output array shape as space-separated TCZYX integers.
+              Auto-inferred from sibling labels in the target container if omitted.
+
       - section: Format-Specific
         description: "Options for specific input formats."
         collapsed: true

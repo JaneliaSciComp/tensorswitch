@@ -438,6 +438,17 @@ Supported output formats:
              "Safe write applies to the subgroup (e.g., labels/) not the container root.",
     )
     parser.add_argument(
+        "--output-offset", nargs="+", type=int, dest="output_offset", default=None,
+        help="TCZYX offset for sparse label ingestion (use with --add-to-existing). "
+             "Fewer dims are zero-padded on the left. "
+             "E.g. '--output-offset 10' sets T=10, C=Z=Y=X=0.",
+    )
+    parser.add_argument(
+        "--target-shape", nargs="+", type=int, dest="target_shape", default=None,
+        help="Full output shape TCZYX for --output-offset. "
+             "Auto-inferred from sibling labels in the target container if omitted.",
+    )
+    parser.add_argument(
         "--image-only", action="store_true",
         help="Only convert image data (skip labels) when both are found in source folder.",
     )
@@ -884,6 +895,39 @@ def _finalize_add_to_existing(
         verbose: Print progress messages.
     """
     import json as _json
+    import fcntl as _fcntl
+
+    def _locked_json_update(meta_path, update_fn):
+        """Read-modify-write meta_path under an exclusive advisory lock.
+
+        Concurrent --add-to-existing invocations targeting the same shared
+        metadata file (e.g. many labels being ingested into one container in
+        parallel) otherwise race on this file: a plain open(path)/json.load()
+        followed later by open(path, 'w')/json.dump() lets one process's write
+        truncate the file while another is mid-read (JSONDecodeError), or lets
+        two processes each read the same old list and silently lose one
+        other's update (last writer wins).
+
+        Opening with 'r+' (not 'w') avoids truncating before the lock is held,
+        and the lock is held across the whole read+modify+write span so no
+        other locked writer can interleave. The lock is NOT held for the rest
+        of label conversion (data download/write), only this brief metadata
+        update, so parallel label ingestion into the same container is
+        otherwise unaffected.
+        """
+        with open(meta_path, 'r+') as f:
+            _fcntl.flock(f.fileno(), _fcntl.LOCK_EX)
+            try:
+                f.seek(0)
+                meta = _json.loads(f.read())
+                meta = update_fn(meta)
+                f.seek(0)
+                f.truncate()
+                _json.dump(meta, f, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            finally:
+                _fcntl.flock(f.fileno(), _fcntl.LOCK_UN)
 
     final_path = os.path.join(final_output, subgroup_parent)
 
@@ -915,20 +959,18 @@ def _finalize_add_to_existing(
         if output_format == 'zarr3':
             labels_meta = os.path.join(final_path, 'zarr.json')
             if os.path.exists(labels_meta):
-                with open(labels_meta) as f:
-                    meta = _json.load(f)
-                ome = meta.setdefault('attributes', {}).setdefault('ome', {})
-                ome['labels'] = _fix_labels_list(ome.get('labels', []))
-                with open(labels_meta, 'w') as f:
-                    _json.dump(meta, f, indent=2)
+                def _update_labels_zarr3(meta):
+                    ome = meta.setdefault('attributes', {}).setdefault('ome', {})
+                    ome['labels'] = _fix_labels_list(ome.get('labels', []))
+                    return meta
+                _locked_json_update(labels_meta, _update_labels_zarr3)
         elif output_format == 'zarr2':
             labels_meta = os.path.join(final_path, '.zattrs')
             if os.path.exists(labels_meta):
-                with open(labels_meta) as f:
-                    meta = _json.load(f)
-                meta['labels'] = _fix_labels_list(meta.get('labels', []))
-                with open(labels_meta, 'w') as f:
-                    _json.dump(meta, f, indent=2)
+                def _update_labels_zarr2(meta):
+                    meta['labels'] = _fix_labels_list(meta.get('labels', []))
+                    return meta
+                _locked_json_update(labels_meta, _update_labels_zarr2)
 
         # 3. Update root metadata — replace <label_name>.tmp with <label_name>
         old_prefix = f'{subgroup_parent}/{tmp_label_name}/'
@@ -936,28 +978,26 @@ def _finalize_add_to_existing(
         if output_format == 'zarr3':
             root_meta = os.path.join(final_output, 'zarr.json')
             if os.path.exists(root_meta):
-                with open(root_meta) as f:
-                    meta = _json.load(f)
-                ome = meta.setdefault('attributes', {}).setdefault('ome', {})
-                ome['labels'] = _fix_labels_list(ome.get('labels', []))
-                for ms in ome.get('multiscales', []):
-                    for ds in ms.get('datasets', []):
-                        if ds.get('path', '').startswith(old_prefix):
-                            ds['path'] = new_prefix + ds['path'][len(old_prefix):]
-                with open(root_meta, 'w') as f:
-                    _json.dump(meta, f, indent=2)
+                def _update_root_zarr3(meta):
+                    ome = meta.setdefault('attributes', {}).setdefault('ome', {})
+                    ome['labels'] = _fix_labels_list(ome.get('labels', []))
+                    for ms in ome.get('multiscales', []):
+                        for ds in ms.get('datasets', []):
+                            if ds.get('path', '').startswith(old_prefix):
+                                ds['path'] = new_prefix + ds['path'][len(old_prefix):]
+                    return meta
+                _locked_json_update(root_meta, _update_root_zarr3)
         elif output_format == 'zarr2':
             root_meta = os.path.join(final_output, '.zattrs')
             if os.path.exists(root_meta):
-                with open(root_meta) as f:
-                    meta = _json.load(f)
-                meta['labels'] = _fix_labels_list(meta.get('labels', []))
-                for ms in meta.get('multiscales', []):
-                    for ds in ms.get('datasets', []):
-                        if ds.get('path', '').startswith(old_prefix):
-                            ds['path'] = new_prefix + ds['path'][len(old_prefix):]
-                with open(root_meta, 'w') as f:
-                    _json.dump(meta, f, indent=2)
+                def _update_root_zarr2(meta):
+                    meta['labels'] = _fix_labels_list(meta.get('labels', []))
+                    for ms in meta.get('multiscales', []):
+                        for ds in ms.get('datasets', []):
+                            if ds.get('path', '').startswith(old_prefix):
+                                ds['path'] = new_prefix + ds['path'][len(old_prefix):]
+                    return meta
+                _locked_json_update(root_meta, _update_root_zarr2)
 
     else:
         # --- Legacy path for raw/image subgroups: subgroup_parent.tmp/ container ---
@@ -1553,6 +1593,10 @@ def submit_job(args, return_job_id=False):
         reinvoke += ["--dtype", args.dtype]
     if getattr(args, 'add_to_existing', False):
         reinvoke.append("--add-to-existing")
+    if getattr(args, 'output_offset', None) is not None:
+        reinvoke += ["--output-offset"] + [str(x) for x in args.output_offset]
+    if getattr(args, 'target_shape', None) is not None:
+        reinvoke += ["--target-shape"] + [str(x) for x in args.target_shape]
     # Convert to properly quoted shell command string
     # This handles paths with spaces correctly when bsub creates its wrapper
     reinvoke_str = shlex.join(reinvoke)
@@ -2778,6 +2822,47 @@ def main(argv=None):
         args.output = tmp_output
         if verbose:
             print(f"Writing to temporary path: {tmp_output}")
+
+    # --- --output-offset branch: sparse label ingest at TCZYX position ---
+    # Bypasses the standard converter pipeline. The pyramid coordinator
+    # (submitted separately when --auto_multiscale --submit are used) runs on
+    # the final label path after _finalize_add_to_existing() renames .tmp.
+    if add_to_existing and subgroup_parent == 'labels' and getattr(args, 'output_offset', None) is not None:
+        from .utils.label_ingest import ingest_label_at_offset, _read_target_shape_from_container
+
+        offset = list(args.output_offset)
+        if getattr(args, 'target_shape', None) is not None:
+            target_shape = list(args.target_shape)
+        else:
+            target_shape = _read_target_shape_from_container(final_output)
+
+        ndim = len(target_shape)
+        offset = [0] * (ndim - len(offset)) + offset
+
+        chunk_shape = parse_shape(args.chunk_shape, 'chunk_shape') if args.chunk_shape else (64, 64, 64)
+
+        _reader = create_reader(args)
+        source_ts = _reader.get_tensorstore()
+
+        ingest_label_at_offset(
+            source_ts=source_ts,
+            target_container=final_output,
+            label_tmp_key=args._label_tmp_key,
+            offset=offset,
+            target_shape=target_shape,
+            chunk_shape=chunk_shape,
+            dtype=getattr(args, 'dtype', None) or 'uint32',
+            compression=getattr(args, 'compression', 'zstd'),
+            compression_level=getattr(args, 'compression_level', 5),
+        )
+        _finalize_add_to_existing(
+            final_output=final_output,
+            subgroup_parent=subgroup_parent,
+            label_name=label_name_orig,
+            output_format=args.output_format,
+            verbose=verbose,
+        )
+        return
 
     reader = create_reader(args)
 
