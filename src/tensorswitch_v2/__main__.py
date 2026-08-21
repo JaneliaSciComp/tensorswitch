@@ -895,29 +895,48 @@ def _finalize_add_to_existing(
         verbose: Print progress messages.
     """
     import json as _json
-    import fcntl as _fcntl
+    import time as _time
 
-    def _locked_json_update(meta_path, update_fn):
-        """Read-modify-write meta_path under an exclusive advisory lock.
+    def _locked_json_update(meta_path, update_fn, timeout=120.0, poll_interval=0.05):
+        """Read-modify-write meta_path under an exclusive, NFS-safe lock.
 
         Concurrent --add-to-existing invocations targeting the same shared
         metadata file (e.g. many labels being ingested into one container in
-        parallel) otherwise race on this file: a plain open(path)/json.load()
+        parallel, each running as a separate LSF job on a DIFFERENT compute
+        node) otherwise race on this file: a plain open(path)/json.load()
         followed later by open(path, 'w')/json.dump() lets one process's write
         truncate the file while another is mid-read (JSONDecodeError), or lets
         two processes each read the same old list and silently lose one
         other's update (last writer wins).
 
-        Opening with 'r+' (not 'w') avoids truncating before the lock is held,
-        and the lock is held across the whole read+modify+write span so no
-        other locked writer can interleave. The lock is NOT held for the rest
-        of label conversion (data download/write), only this brief metadata
-        update, so parallel label ingestion into the same container is
-        otherwise unaffected.
+        NOTE: an earlier version of this fix used fcntl.flock(), which is only
+        an ADVISORY lock and is frequently NOT coordinated across different
+        client nodes on network filesystems (NFS/Lustre/GPFS) unless the mount
+        explicitly enables distributed lock support (NLM/lockd) -- confirmed
+        broken in production on /groups (cluster.prfs.janelia.org NFS mount):
+        the race still corrupted metadata even with flock held. os.mkdir() is
+        used instead -- directory creation is a POSIX-guaranteed atomic
+        metadata operation that all major network filesystems correctly
+        implement for actual cross-client mutual exclusion, unlike flock.
+
+        The lock is held only across this brief read+modify+write span, not
+        the rest of label conversion (data download/write), so parallel label
+        ingestion into the same container is otherwise unaffected.
         """
-        with open(meta_path, 'r+') as f:
-            _fcntl.flock(f.fileno(), _fcntl.LOCK_EX)
+        lock_dir = meta_path + '.lock'
+        deadline = _time.monotonic() + timeout
+        while True:
             try:
+                os.mkdir(lock_dir)
+                break
+            except FileExistsError:
+                if _time.monotonic() > deadline:
+                    raise TimeoutError(
+                        f"Could not acquire lock {lock_dir} after {timeout}s "
+                        f"(stale lock from a crashed process?)")
+                _time.sleep(poll_interval)
+        try:
+            with open(meta_path, 'r+') as f:
                 f.seek(0)
                 meta = _json.loads(f.read())
                 meta = update_fn(meta)
@@ -926,8 +945,8 @@ def _finalize_add_to_existing(
                 _json.dump(meta, f, indent=2)
                 f.flush()
                 os.fsync(f.fileno())
-            finally:
-                _fcntl.flock(f.fileno(), _fcntl.LOCK_UN)
+        finally:
+            os.rmdir(lock_dir)
 
     final_path = os.path.join(final_output, subgroup_parent)
 
