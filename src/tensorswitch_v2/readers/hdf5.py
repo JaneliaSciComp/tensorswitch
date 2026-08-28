@@ -184,6 +184,24 @@ class HDF5Reader(DaskReader):
                 if name in attrs:
                     metadata[f'voxel_size_{dim}'] = float(attrs[name])
                     break
+
+        # Fall back to a single array-valued attribute (one entry per dataset
+        # dimension, in the dataset's own dim order) when no per-axis scalar
+        # names were found. Without this, per-axis lookups above all miss and
+        # every axis silently defaults to 1.0 below, producing a bogus
+        # isotropic voxel size instead of the real one.
+        missing_dims = [d for d in ('z', 'y', 'x') if f'voxel_size_{d}' not in metadata]
+        if missing_dims:
+            for array_name in ('resolution', 'element_size_um', 'pixelResolution'):
+                if array_name in attrs:
+                    values = attrs[array_name]
+                    if hasattr(values, '__len__') and len(values) == len(dataset.shape):
+                        for i, dim in enumerate(('z', 'y', 'x')[-len(values):]):
+                            if dim in missing_dims:
+                                metadata[f'voxel_size_{dim}'] = float(values[i])
+                    break
+
+        for dim in ('x', 'y', 'z'):
             if f'voxel_size_{dim}' not in metadata:
                 metadata[f'voxel_size_{dim}'] = 1.0
 

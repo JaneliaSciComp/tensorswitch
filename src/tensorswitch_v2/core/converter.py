@@ -72,6 +72,7 @@ class DistributedConverter:
         expand_to_5d: bool = False,
         bbox: Optional[Tuple[Tuple[int, ...], Tuple[int, ...]]] = None,
         axes_order_override: Optional[List[str]] = None,
+        axis_relabel: Optional[Dict[str, str]] = None,
         no_ome_meta_export: bool = False,
         no_ome_xml_attr: bool = False,
         output_dtype: Optional[str] = None,
@@ -84,6 +85,13 @@ class DistributedConverter:
                   Spatial dimensions are auto-detected from domain labels.
             no_ome_meta_export: If True, skip writing OME/METADATA.ome.xml file.
             no_ome_xml_attr: If True, skip embedding OME/CZI XML in zarr.json/.zattrs.
+            axis_relabel: Optional {old_name: new_name} map (lowercase) applied to
+                  the detected axes_order immediately after detection, before any
+                  other axis logic runs. Explicit only -- never inferred. Use this
+                  to correct a reader's mis-detected axis identity (e.g. a plain
+                  TIFF Z-stack that tifffile reports as a generic index axis 'i',
+                  or an OME axis wrongly tagged 't'). Does not touch voxel data,
+                  only the axis name used for all downstream spatial/voxel logic.
         """
         start_time = time.time()
 
@@ -225,6 +233,52 @@ class DistributedConverter:
             except Exception:
                 pass
 
+        # 2a-relabel. Apply explicit, user-named axis relabeling (--relabel_axis).
+        # This is the ONLY place axis identity is ever changed from what the
+        # reader detected -- always explicit, never inferred. Runs before any
+        # other axis logic (spatial detection, --axes_order reordering, voxel
+        # size assignment) so everything downstream sees the corrected name.
+        if axis_relabel and axes_order:
+            relabel_lower = {k.lower(): v.lower() for k, v in axis_relabel.items()}
+            new_axes_order = [relabel_lower.get(a.lower(), a) for a in axes_order]
+            if new_axes_order != axes_order:
+                # Guard against creating a duplicate axis name (e.g. relabeling
+                # 'x' to 'z' when the source already has a genuine 'z' axis
+                # elsewhere) -- fail loudly rather than silently producing two
+                # axes with the same name.
+                seen = {}
+                for i, a in enumerate(new_axes_order):
+                    if a in seen:
+                        raise ValueError(
+                            f"--relabel_axis would create duplicate axis '{a}' "
+                            f"(positions {seen[a]} and {i} in {new_axes_order}, "
+                            f"from original axes {axes_order}). Check that the "
+                            f"target axis name isn't already used elsewhere.")
+                    seen[a] = i
+                if verbose:
+                    print(f"  Relabeled axes (--relabel_axis): {axes_order} -> {new_axes_order}")
+
+                # Also rename the labels on the REAL TensorStore domain, not just
+                # the tracking variable above. Several downstream steps (e.g. the
+                # per-chunk read at self._input_store[read_domain]) index the
+                # input store using a domain object built from labels that now
+                # reflect the corrected axes_order (e.g. via the output store's
+                # domain). If self._input_store's own domain still carries the
+                # OLD label, TensorStore's label-based domain matching raises
+                # "Label 'z' does not match one of {...}" -- so both must agree.
+                # Positional (by-index) relabeling avoids any case-sensitivity
+                # or "was it labeled at all" pitfalls.
+                try:
+                    self._input_store = self._input_store[
+                        ts.d[tuple(range(len(new_axes_order)))].label[tuple(new_axes_order)]
+                    ]
+                except Exception as e:
+                    raise ValueError(
+                        f"--relabel_axis could not be applied to the input "
+                        f"TensorStore domain ({axes_order} -> {new_axes_order}): {e}")
+
+                axes_order = new_axes_order
+
         # Handle order: force_order overrides auto-detection
         if force_order is not None:
             use_fortran_order = (force_order.lower() == 'f')
@@ -280,19 +334,19 @@ class DistributedConverter:
         spatial_transpose = None
         _target_axes_order = None
         if axes_order_override and axes_order:
-            # Re-interpret 't' as 'z' if override contains 'z' but source has
-            # 't' instead (common with TIFF Z-stacks mis-labeled as time)
+            # NOTE: axes_order reflects any --relabel_axis correction applied
+            # above already. --axes_order itself never reinterprets axis
+            # identity (e.g. never assumes 't' or 'i' means 'z') -- use
+            # --relabel_axis for that, explicitly. This flag only reorders
+            # axes already correctly identified as spatial.
             source_spatial = [a for a in axes_order if a.lower() in {'x', 'y', 'z'}]
-            if ('z' in axes_order_override and 'z' not in source_spatial
-                    and 't' in [a.lower() for a in axes_order]):
-                axes_order = ['z' if a.lower() == 't' else a for a in axes_order]
-                source_spatial = [a for a in axes_order if a.lower() in {'x', 'y', 'z'}]
-                if verbose:
-                    print(f"  Re-interpreted 't' as 'z': axes now {axes_order}")
             if sorted(axes_order_override) != sorted(source_spatial):
                 raise ValueError(
                     f"--axes_order {axes_order_override} doesn't match "
-                    f"source spatial axes {source_spatial}")
+                    f"source spatial axes {source_spatial}. If a non-spatial "
+                    f"axis (e.g. 't', 'i', 'c') is actually spatial, use "
+                    f"--relabel_axis to correct it explicitly first (e.g. "
+                    f"--relabel_axis i=z).")
             if axes_order_override != source_spatial:
                 # Build full target axes (non-spatial stay in place, spatial reordered)
                 target_axes = []

@@ -78,7 +78,11 @@ def _resolve_conversion_subgroup(args) -> Optional[str]:
         return None
 
     data_type = getattr(args, 'data_type', 'auto')
-    label_key = getattr(args, 'label_key', 'segmentation')
+    # _label_tmp_key (set by the --add-to-existing routing block, e.g.
+    # "<label_name>.tmp") reflects where the s0 write actually lands when a
+    # custom --label-key is used; label_key alone is the *final* post-rename
+    # name and does not exist yet while auto_multiscale's pyramid step runs.
+    label_key = getattr(args, '_label_tmp_key', None) or getattr(args, 'label_key', 'segmentation')
     image_key = getattr(args, 'image_key', 'raw')
 
     if getattr(args, 'is_label', False) or data_type == 'labels':
@@ -641,7 +645,21 @@ Supported output formats:
         "--axes_order", type=str, default=None,
         help="Override output spatial axis order. Accepts any permutation of x,y,z "
              "(e.g., 'xyz', 'zyx', 'xzy'). Default: preserve source order. "
-             "Example: ND2 source is ZYX, --axes_order xyz transposes to XYZ.",
+             "Example: ND2 source is ZYX, --axes_order xyz transposes to XYZ. "
+             "Does NOT relabel axis identity (e.g. does not turn 't' or 'i' into "
+             "'z') -- use --relabel_axis for that.",
+    )
+
+    # Explicit axis identity correction (does not infer/guess)
+    parser.add_argument(
+        "--relabel_axis", type=str, default=None, action="append",
+        help="Explicitly relabel a source axis whose detected name is wrong "
+             "(e.g. a reader mis-detected a Z-stack as a generic index or time "
+             "axis). Format: OLD=NEW, e.g. '--relabel_axis i=z' or "
+             "'--relabel_axis t=z'. Repeatable for multiple axes. Unlike "
+             "--axes_order, this never fires automatically or infers intent -- "
+             "it only does exactly what you name. Required to reinterpret a "
+             "non-spatial axis (i, t, c, s, ...) as a spatial one.",
     )
 
     # Layout control
@@ -973,23 +991,39 @@ def _finalize_add_to_existing(
             lst.append(label_name)
             return sorted(lst)
 
-        # 2. Update labels/zarr.json — replace <label_name>.tmp with <label_name>
-        #    write_labels_container_metadata() added tmp_label_name during conversion
+        # 2. Update labels/zarr.json — replace <label_name>.tmp with <label_name>.
+        #    Create it if this is the first label and it doesn't exist yet.
         if output_format == 'zarr3':
             labels_meta = os.path.join(final_path, 'zarr.json')
-            if os.path.exists(labels_meta):
-                def _update_labels_zarr3(meta):
-                    ome = meta.setdefault('attributes', {}).setdefault('ome', {})
-                    ome['labels'] = _fix_labels_list(ome.get('labels', []))
-                    return meta
-                _locked_json_update(labels_meta, _update_labels_zarr3)
+            if not os.path.exists(labels_meta):
+                os.makedirs(final_path, exist_ok=True)
+                with open(labels_meta, 'w') as f:
+                    _json.dump({
+                        'zarr_format': 3,
+                        'node_type': 'group',
+                        'attributes': {
+                            'ome': {'version': '0.5', 'labels': []},
+                            '_software': {
+                                'name': 'TensorSwitch',
+                                'url': 'https://github.com/JaneliaSciComp/tensorswitch',
+                            },
+                        },
+                    }, f, indent=2)
+            def _update_labels_zarr3(meta):
+                ome = meta.setdefault('attributes', {}).setdefault('ome', {})
+                ome['labels'] = _fix_labels_list(ome.get('labels', []))
+                return meta
+            _locked_json_update(labels_meta, _update_labels_zarr3)
         elif output_format == 'zarr2':
             labels_meta = os.path.join(final_path, '.zattrs')
-            if os.path.exists(labels_meta):
-                def _update_labels_zarr2(meta):
-                    meta['labels'] = _fix_labels_list(meta.get('labels', []))
-                    return meta
-                _locked_json_update(labels_meta, _update_labels_zarr2)
+            if not os.path.exists(labels_meta):
+                os.makedirs(final_path, exist_ok=True)
+                with open(labels_meta, 'w') as f:
+                    _json.dump({'labels': []}, f, indent=2)
+            def _update_labels_zarr2(meta):
+                meta['labels'] = _fix_labels_list(meta.get('labels', []))
+                return meta
+            _locked_json_update(labels_meta, _update_labels_zarr2)
 
         # 3. Update root metadata — replace <label_name>.tmp with <label_name>
         old_prefix = f'{subgroup_parent}/{tmp_label_name}/'
@@ -1176,7 +1210,7 @@ def create_reader(args):
             return Readers.n5(path, dataset_path=args.dataset_path)
         elif path_lower.endswith(".zarr"):
             return Readers.auto_detect(path)
-        elif path_lower.endswith((".h5", ".hdf5")):
+        elif path_lower.endswith((".h5", ".hdf5", ".hdf", ".he5")):
             return Readers.hdf5(path, dataset_path=args.dataset_path)
 
     return Readers.auto_detect(path)
@@ -1252,8 +1286,8 @@ def _warn_if_axis_voxel_mismatch(args, axes_order) -> None:
     Example: TIFF reports ``CYX`` (1 non-spatial + 2 spatial), but user passes
     ``--voxel_size 5.99,5.99,5.96`` (3 spatial values). Without this warning
     TS silently drops the Z value and the output scale[0] stays at ``1.0``.
-    Users can fix their TIFF save pipeline or pass ``--axes_order zyx`` to
-    override.
+    Users can fix their TIFF save pipeline or pass ``--relabel_axis`` (e.g.
+    ``--relabel_axis c=z``) to explicitly correct the mis-detected axis.
     """
     if not getattr(args, 'voxel_size', None):
         return
@@ -1274,9 +1308,11 @@ def _warn_if_axis_voxel_mismatch(args, axes_order) -> None:
         f"(non-spatial: {non_spatial}). "
         f"The Z value ({parts[2]}) will NOT be applied to dim-0 — output scale[0] "
         f"will default to 1.0. "
-        f"If this is actually a Z-stack mis-labeled as channels/samples, "
-        f"pass --axes_order zyx to re-interpret dim-0 as Z, "
-        f"or fix the source file's axes tag.",
+        f"If this is actually a Z-stack mis-labeled as channels/samples/index, "
+        f"pass --relabel_axis {non_spatial[0] if non_spatial else 'X'}=z to "
+        f"explicitly re-interpret dim-0 as Z, or fix the source file's axes tag. "
+        f"(--axes_order only reorders already-spatial axes; it does not "
+        f"reinterpret axis identity.)",
         file=_sys.stderr,
     )
 
@@ -1297,6 +1333,22 @@ def _get_input_metadata(args):
         if labels and all(labels):
             # Normalize 'channel' to 'c'
             axes_order = ['c' if l.lower() == 'channel' else l.lower() for l in labels]
+
+    # Apply explicit --relabel_axis here too, so resource estimation (chunk/shard
+    # sizing) and the mismatch warning below both see the corrected axis identity
+    # instead of re-warning about something the user already fixed explicitly.
+    if axes_order and getattr(args, 'relabel_axis', None):
+        relabel = {}
+        for spec in args.relabel_axis:
+            if '=' in spec:
+                old, new = spec.lower().split('=', 1)
+                relabel[old.strip()] = new.strip()
+        relabeled = [relabel.get(a, a) for a in axes_order]
+        if len(relabeled) != len(set(relabeled)):
+            raise ValueError(
+                f"--relabel_axis would create a duplicate axis name: "
+                f"{axes_order} -> {relabeled}")
+        axes_order = relabeled
 
     # Catch CYX/IYX/SYX mis-labeling early, before resource estimation silently
     # drops the Z value from --voxel_size.
@@ -1600,6 +1652,9 @@ def submit_job(args, return_job_id=False):
         reinvoke += ["--bbox", args.bbox]
     if getattr(args, 'axes_order', None):
         reinvoke += ["--axes_order", args.axes_order]
+    if getattr(args, 'relabel_axis', None):
+        for spec in args.relabel_axis:
+            reinvoke += ["--relabel_axis", spec]
     if args.log_dir:
         reinvoke += ["--log_dir", args.log_dir]
     if getattr(args, 'no_ome_meta_export', False):
@@ -2870,7 +2925,7 @@ def main(argv=None):
             offset=offset,
             target_shape=target_shape,
             chunk_shape=chunk_shape,
-            dtype=getattr(args, 'dtype', None) or 'uint32',
+            dtype=getattr(args, 'dtype', None) or get_dtype_name(source_ts.dtype),
             compression=getattr(args, 'compression', 'zstd'),
             compression_level=getattr(args, 'compression_level', 5),
         )
@@ -2881,6 +2936,32 @@ def main(argv=None):
             output_format=args.output_format,
             verbose=verbose,
         )
+        # --auto_multiscale was previously silently ignored on this branch --
+        # execution returned right here, before the pyramid block below ever
+        # ran, so every --output-offset label stayed at s0 even when
+        # --auto_multiscale was requested. finalize already renamed .tmp ->
+        # final above, so pyramid generation here reads the final (non-.tmp)
+        # label path directly, unlike the standard branch below. Levels with
+        # no real data are still pruned by run_local_pyramid's own
+        # data-presence check, same as any other pyramid generation path.
+        if args.auto_multiscale:
+            s0_path, _ = find_base_level(
+                os.path.join(final_output, 'labels', label_name_orig), verbose=verbose
+            )
+            root_path = os.path.dirname(s0_path)
+            resolved_method = resolve_downsample_method(args.downsample_method, s0_path)
+            custom_per_level_factors = None
+            if args.per_level_factors:
+                custom_per_level_factors = parse_per_level_factors(args.per_level_factors)
+            run_local_pyramid(
+                s0_path=s0_path,
+                root_path=root_path,
+                downsample_method=resolved_method,
+                custom_per_level_factors=custom_per_level_factors,
+                use_shard=use_shard,
+                include_translation=not args.no_translation,
+                verbose=verbose,
+            )
         return
 
     reader = create_reader(args)
@@ -2979,6 +3060,21 @@ def main(argv=None):
         if len(axes_order_override) != len(set(axes_order_override)):
             raise ValueError(f"--axes_order must not have duplicates, got: {args.axes_order}")
 
+    # Parse --relabel_axis (explicit axis identity correction; repeatable OLD=NEW)
+    axis_relabel = None
+    if getattr(args, 'relabel_axis', None):
+        axis_relabel = {}
+        for spec in args.relabel_axis:
+            if '=' not in spec:
+                raise ValueError(
+                    f"--relabel_axis must be in OLD=NEW form (e.g. 'i=z'), got: {spec}")
+            old, new = spec.lower().split('=', 1)
+            old, new = old.strip(), new.strip()
+            if len(old) != 1 or len(new) != 1:
+                raise ValueError(
+                    f"--relabel_axis expects single-character axis names, got: {spec}")
+            axis_relabel[old] = new
+
     # Parse bbox for subvolume extraction
     bbox = parse_bbox(args.bbox) if getattr(args, 'bbox', None) else None
 
@@ -3002,6 +3098,7 @@ def main(argv=None):
             expand_to_5d=expand_to_5d,
             bbox=bbox,
             axes_order_override=axes_order_override,
+            axis_relabel=axis_relabel,
             no_ome_meta_export=no_ome_meta_export,
             no_ome_xml_attr=no_ome_xml_attr,
             output_dtype=getattr(args, 'dtype', None),
@@ -3020,6 +3117,7 @@ def main(argv=None):
             expand_to_5d=expand_to_5d,
             bbox=bbox,
             axes_order_override=axes_order_override,
+            axis_relabel=axis_relabel,
             no_ome_meta_export=no_ome_meta_export,
             no_ome_xml_attr=no_ome_xml_attr,
             output_dtype=getattr(args, 'dtype', None),

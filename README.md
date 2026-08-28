@@ -357,7 +357,8 @@ pixi run python -m tensorswitch_v2 --upsample --auto_multiscale \
 
 | Argument | Description |
 |----------|-------------|
-| `--axes_order` | Override output spatial axis order (e.g., `xyz`, `zyx`, `xzy`). Default: preserve source order. |
+| `--axes_order` | Override output spatial axis order (e.g., `xyz`, `zyx`, `xzy`). Default: preserve source order. Reorders only -- never reinterprets axis identity (does not turn `t`/`i`/`c` into `z`); use `--relabel_axis` for that. |
+| `--relabel_axis` | Explicitly relabel a source axis whose detected name is wrong (format `OLD=NEW`, e.g. `i=z`). Repeatable. Never fires automatically or infers intent -- only does exactly what you name. |
 | `--expand-to-5d` | Force 5D TCZYX expansion (legacy behavior) |
 
 **Default behavior (RFC-3 compliant)**: Source dimensionality and axis order are preserved:
@@ -372,6 +373,16 @@ pixi run python -m tensorswitch_v2 --upsample --auto_multiscale \
 pixi run python -m tensorswitch_v2 -i input.nd2 -o output.zarr \
   --preset webknossos --axes_order xyz --voxel_size 160,160,400
 ```
+
+**Axis identity correction**: Some readers can't tell a Z-stack from a generic sequence -- e.g. a multi-page TIFF written without ImageJ hyperstack tags (`slices=N`, `spacing=`, `unit=`) gets its leading dimension reported by `tifffile` as index axis `i` instead of `z`. Use `--relabel_axis OLD=NEW` to correct this explicitly (repeatable for multiple axes):
+
+```bash
+# Plain ITK-written TIFF Z-stack mis-detected as axis 'i' instead of 'z'
+pixi run python -m tensorswitch_v2 -i stack.tif -o output.zarr \
+  --preset mia_lmvd --voxel_size 5,5,5 --relabel_axis i=z --auto_multiscale
+```
+
+`--relabel_axis` is intentionally separate from `--axes_order` and never infers anything on its own -- it only relabels the exact axis you name, and raises an error if that would create a duplicate axis name (e.g. relabeling `x` to `z` when a genuine `z` already exists elsewhere).
 
 **Singleton channel squeeze**: When reading neuroglancer precomputed format with `num_channels=1`, the implicit 4th channel dimension is automatically squeezed out to preserve true 3D output.
 
