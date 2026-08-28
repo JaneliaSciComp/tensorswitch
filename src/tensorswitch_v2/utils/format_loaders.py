@@ -929,3 +929,159 @@ def extract_precomputed_metadata(path, scale_index=0):
             }
 
     return info, voxel_sizes
+
+
+# ---------------------------------------------------------------------------
+# NIfTI (.nii / .nii.gz)
+# ---------------------------------------------------------------------------
+
+def extract_nifti_metadata(nifti_file):
+    """
+    Extract shape, dtype, and voxel sizes from a NIfTI-1/NIfTI-2 file.
+
+    NIfTI stores voxel size in the header's ``pixdim`` field, with the spatial
+    unit encoded separately in ``xyzt_units`` (NIfTI defines meter/mm/micron
+    only -- there is no nanometer code, so EM-scale data is frequently written
+    with a meaningless or unit-less pixdim). Values are converted to nanometers
+    where a real unit is declared; when the unit is unknown or the resulting
+    value is implausible for microscopy, the voxel size is reported as None so
+    the caller can fall back to an explicit ``--voxel_size`` override rather
+    than silently trusting a bogus number.
+
+    Args:
+        nifti_file: Path to a .nii or .nii.gz file
+
+    Returns:
+        tuple: (info_dict, voxel_sizes_or_None)
+            info_dict: shape, dtype, ndim, units, raw pixdim, affine
+            voxel_sizes: {'x','y','z'} in nanometers, or None if not trustworthy
+    """
+    import nibabel as nib
+
+    if not os.path.isfile(nifti_file):
+        raise ValueError(f"NIfTI file does not exist: {nifti_file}")
+
+    img = nib.load(nifti_file)
+    header = img.header
+    shape = tuple(int(s) for s in img.shape)
+
+    try:
+        units = header.get_xyzt_units()
+        space_unit = units[0] if units else 'unknown'
+    except Exception:
+        space_unit = 'unknown'
+
+    try:
+        zooms = tuple(float(z) for z in header.get_zooms()[:3])
+    except Exception:
+        zooms = ()
+
+    info = {
+        'shape': shape,
+        'ndim': len(shape),
+        'dtype': str(img.get_data_dtype()),
+        'space_unit': space_unit,
+        'pixdim': zooms,
+        'nifti_version': 2 if 'Nifti2' in type(header).__name__ else 1,
+    }
+
+    # NIfTI spatial units -> nanometers. NIfTI has no nanometer code, so an EM
+    # dataset can only ever be declared in micron/mm/meter (or left unknown).
+    TO_NM = {'meter': 1e9, 'mm': 1e6, 'micron': 1e3}
+
+    voxel_sizes = None
+    if len(zooms) >= 3 and space_unit in TO_NM and all(z > 0 for z in zooms):
+        factor = TO_NM[space_unit]
+        candidate = {
+            'x': zooms[0] * factor,
+            'y': zooms[1] * factor,
+            'z': zooms[2] * factor,
+        }
+        # Sanity-guard: reject values outside a plausible microscopy range
+        # (0.1 nm - 1 mm). Real-world NIfTI EM exports often carry a garbage
+        # pixdim (e.g. 224980.1875 with no unit set), and silently writing that
+        # into OME-NGFF metadata is worse than reporting nothing.
+        if all(0.1 <= v <= 1e6 for v in candidate.values()):
+            voxel_sizes = candidate
+        else:
+            print(
+                f"Warning: NIfTI pixdim {zooms} (unit={space_unit}) is outside a "
+                f"plausible microscopy range once converted to nm -- ignoring it. "
+                f"Pass --voxel_size explicitly."
+            )
+    elif zooms:
+        print(
+            f"Warning: NIfTI header declares no usable spatial unit "
+            f"(xyzt_units={space_unit!r}, pixdim={zooms}) -- voxel size cannot be "
+            f"derived. Pass --voxel_size explicitly."
+        )
+
+    return info, voxel_sizes
+
+
+def load_nifti_stack(nifti_file):
+    """
+    Load a NIfTI volume as a dask array in ZYX (or TCZYX-ordered) axis order.
+
+    NIfTI stores voxels in Fortran/column-major order with the fastest-varying
+    axis first, i.e. the array nibabel hands back is indexed (x, y, z[, t]).
+    TensorSwitch's convention everywhere else is C-order with the slowest axis
+    first (z, y, x), so the spatial axes are reversed here -- this makes NIfTI
+    sources behave identically to TIFF/HDF5/IMS ones downstream.
+
+    Uses nibabel's ``dataobj`` proxy rather than ``get_fdata()``: the proxy
+    reads lazily from disk and preserves the on-disk dtype, whereas
+    ``get_fdata()`` eagerly loads the entire volume and always upcasts to
+    float64 (an 8x memory blow-up for uint8 EM data).
+
+    Args:
+        nifti_file: Path to a .nii or .nii.gz file
+
+    Returns:
+        tuple: (dask_array, dimension_names)
+            dimension_names: e.g. ['z', 'y', 'x'] or ['t', 'z', 'y', 'x']
+    """
+    import nibabel as nib
+
+    if not os.path.isfile(nifti_file):
+        raise ValueError(f"NIfTI file does not exist: {nifti_file}")
+
+    img = nib.load(nifti_file)
+    ndim = len(img.shape)
+
+    if ndim < 2:
+        raise ValueError(
+            f"NIfTI file has {ndim} dimension(s); at least 2 are required: {nifti_file}"
+        )
+    if ndim > 4:
+        raise ValueError(
+            f"NIfTI file has {ndim} dimensions; only up to 4D (x,y,z,t) is "
+            f"supported: {nifti_file}"
+        )
+
+    dtype = img.get_data_dtype()
+
+    def _read():
+        # np.asarray on the proxy reads at the on-disk dtype (no float64 upcast).
+        arr = np.asarray(img.dataobj)
+        if ndim == 4:
+            # (x, y, z, t) -> (t, z, y, x)
+            return np.ascontiguousarray(np.transpose(arr, (3, 2, 1, 0)))
+        # (x, y, z) -> (z, y, x)  /  (x, y) -> (y, x)
+        return np.ascontiguousarray(np.transpose(arr, tuple(range(ndim))[::-1]))
+
+    if ndim == 4:
+        out_shape = (img.shape[3], img.shape[2], img.shape[1], img.shape[0])
+        dimension_names = ['t', 'z', 'y', 'x']
+    elif ndim == 3:
+        out_shape = (img.shape[2], img.shape[1], img.shape[0])
+        dimension_names = ['z', 'y', 'x']
+    else:
+        out_shape = (img.shape[1], img.shape[0])
+        dimension_names = ['y', 'x']
+
+    dask_array = da.from_delayed(
+        __import__('dask').delayed(_read)(), shape=out_shape, dtype=dtype
+    )
+
+    return dask_array, dimension_names

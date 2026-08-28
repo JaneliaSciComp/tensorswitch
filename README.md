@@ -93,7 +93,7 @@ A high-performance microscopy data conversion tool with TensorStore as the unifi
 | Tier | Performance | Formats | Description |
 |------|-------------|---------|-------------|
 | **Tier 1** | Maximum | N5, Zarr2, Zarr3, Precomputed | Native TensorStore drivers |
-| **Tier 2** | Optimized | TIFF, ND2, IMS, HDF5, CZI | Custom optimized readers |
+| **Tier 2** | Optimized | TIFF, ND2, IMS, HDF5, CZI, NIfTI | Custom optimized readers |
 | **Tier 3** | Compatible | LIF + 20 more | BIOIO Python plugins |
 | **Tier 4** | Universal | 150+ formats | Bio-Formats Java (via bioio-bioformats) |
 
@@ -177,7 +177,7 @@ print(__version__)  # 2.0.3
 
 | Install Command | Formats Supported | Dependencies |
 |---|---|---|
-| `pip install tensorswitch` | N5, Zarr, TIFF, ND2, IMS, HDF5, CZI, LIF, Precomputed + 20 more | tensorstore, numpy, tifffile, h5py, nd2, dask, bioio |
+| `pip install tensorswitch` | N5, Zarr, TIFF, ND2, IMS, HDF5, CZI, NIfTI, LIF, Precomputed + 20 more | tensorstore, numpy, tifffile, h5py, nd2, nibabel, dask, bioio |
 | `pip install "tensorswitch[bioformats]"` | + 150 more via Bio-Formats | + bioio-bioformats, scyjava (requires Java 8+) |
 | `pip install "tensorswitch[mcp]"` | + MCP server for AI agents | + mcp |
 | `pip install "tensorswitch[all]"` | Everything above | All of the above |
@@ -503,6 +503,7 @@ reader = Readers.tiff("/path/to/data.tif")      # Tier 2
 reader = Readers.nd2("/path/to/data.nd2")       # Tier 2
 reader = Readers.czi("/path/to/data.czi")       # Tier 2
 reader = Readers.ims("/path/to/data.ims")       # Tier 2
+reader = Readers.nifti("/path/to/vol.nii.gz")   # Tier 2
 reader = Readers.n5("/path/to/data.n5")         # Tier 1
 reader = Readers.zarr3("/path/to/data.zarr")    # Tier 1
 reader = Readers.bioio("/path/to/data.lif")     # Tier 3
@@ -631,6 +632,7 @@ print(f"Completed: {result.completed}/{result.total}")
 | TIFF | `.tif`, `.tiff` | 2 | TiffReader |
 | ND2 (Nikon) | `.nd2` | 2 | ND2Reader |
 | IMS (Imaris) | `.ims` | 2 | IMSReader |
+| NIfTI | `.nii`, `.nii.gz` | 2 | NIfTIReader |
 | CZI (Zeiss) | `.czi` | 2 | CZIReader |
 | HDF5 | `.h5`, `.hdf5` | 2 | HDF5Reader |
 | N5 | `.n5` | 1 | N5Reader |
@@ -642,6 +644,24 @@ print(f"Completed: {result.completed}/{result.total}")
 | 20+ more | various | 3 | BIOIOReader |
 | Olympus VSI, Leica SCN, etc. | various | 3+ | BioFormatsReader (Java) |
 | 150+ formats | various | 3+ | BioFormatsReader (Java) |
+
+### NIfTI notes (`.nii`, `.nii.gz`)
+
+NIfTI-1 and NIfTI-2 are read via `nibabel`, plain or gzipped. Two behaviours are worth knowing:
+
+**Axis order is normalised.** NIfTI stores voxels column-major with the fastest-varying axis first, so the on-disk layout is `(x, y, z)`. The reader transposes to TensorSwitch's `(z, y, x)` convention, so NIfTI sources behave identically to TIFF/HDF5/IMS downstream.
+
+**Voxel size is often not trustworthy — pass `--voxel_size`.** The NIfTI header can only express meter/mm/micron; there is **no nanometer unit**, so EM-scale datasets are routinely published with a unit-less or meaningless `pixdim`. The reader accepts the header value only when it declares a real unit *and* converts to a plausible microscopy scale (0.1 nm – 1 mm); otherwise it warns and leaves the voxel size unset rather than writing a bogus scale into the OME-NGFF metadata.
+
+```bash
+# Real-world example: the UroCell FIB-SEM release declares pixdim 224980.1875 "mm".
+# That is rejected, so the true voxel size must be supplied explicitly.
+pixi run python -m tensorswitch_v2 -i vol.nii.gz -o out.zarr \
+  --preset mia_lmvd --voxel_size 16,16,15 --voxel_unit nanometer \
+  --dtype uint8 --auto_multiscale
+```
+
+Reading goes through nibabel's lazy `dataobj` proxy, which preserves the on-disk dtype — unlike `get_fdata()`, which would upcast everything to float64.
 
 ### Source Layout Preservation
 
@@ -1113,6 +1133,7 @@ bmod -W 96:00 <job_id>
 .tif, .tiff  → TiffReader (Tier 2)
 .nd2         → ND2Reader (Tier 2)
 .ims         → IMSReader (Tier 2)
+.nii/.nii.gz → NIfTIReader (Tier 2)
 .czi         → CZIReader (Tier 2)
 .n5          → N5Reader (Tier 1)
 .zarr        → Zarr3Reader or Zarr2Reader (Tier 1)

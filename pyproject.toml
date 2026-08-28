@@ -14,6 +14,7 @@ dependencies = [
     "dask-image",
     "nd2>=0.10.3",
     "h5py>=3.14.0",
+    "nibabel>=5.0.0",
     "ome-types>=0.6.0,<0.7",
     "bioio>=3.2.0,<4",
     "bioio-czi>=2.1.0,<3",
@@ -87,6 +88,7 @@ zarr = ">=3.1.1,<4"
 ome-types = ">=0.6.0,<0.7"
 nd2 = ">=0.10.3,<0.11"
 h5py = ">=3.14.0,<4"
+nibabel = ">=5.0.0,<6"
 pydantic = ">=2.0.0,<3"
 pandas = "*"
 openpyxl = "*"

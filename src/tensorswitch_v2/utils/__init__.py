@@ -73,6 +73,8 @@ from .format_loaders import (
     extract_ims_metadata,
     load_czi_stack,
     extract_czi_metadata,
+    load_nifti_stack,
+    extract_nifti_metadata,
 )
 
 from .ome_structure import (
@@ -153,6 +155,8 @@ __all__ = [
     'extract_ims_metadata',
     'load_czi_stack',
     'extract_czi_metadata',
+    'load_nifti_stack',
+    'extract_nifti_metadata',
     # OME-NGFF structure
     'OMEStructure',
     'OMEStructureConfig',

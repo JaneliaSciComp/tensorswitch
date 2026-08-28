@@ -85,6 +85,7 @@ class Readers:
             - .tif, .tiff → TiffReader
             - .nd2 → ND2Reader
             - .ims → IMSReader
+            - .nii, .nii.gz → NIfTIReader
             - .h5, .hdf5 → HDF5Reader
 
             Tier 3 (Broad Compatibility):
@@ -140,6 +141,8 @@ class Readers:
             return Readers.nd2(path)
         elif path_lower.endswith('.ims'):
             return Readers.ims(path)
+        elif path_lower.endswith(('.nii', '.nii.gz')):
+            return Readers.nifti(path)
         elif path_lower.endswith(('.h5', '.hdf5')):
             return Readers.hdf5(path)
         elif path_lower.endswith('.czi'):
@@ -342,6 +345,27 @@ class Readers:
         """
         from ..readers.ims import IMSReader
         return IMSReader(path, resolution_level=resolution_level)
+
+    @staticmethod
+    def nifti(path: str) -> BaseReader:
+        """
+        Create NIfTI reader (Tier 2 - Custom Optimized).
+
+        Supports NIfTI-1 and NIfTI-2, plain (.nii) or gzipped (.nii.gz).
+        Axis order is normalised from NIfTI's native (x, y, z) to (z, y, x).
+
+        Note: NIfTI headers cannot express nanometer units, so EM-scale data
+        often carries a meaningless pixdim -- pass --voxel_size explicitly
+        unless the header declares a real micron/mm/meter scale.
+
+        Example:
+            >>> reader = Readers.nifti("/data.nii.gz")
+
+        Implementation Status:
+            ✅ Complete (Tier 2 - reuses load_nifti_stack())
+        """
+        from ..readers.nifti import NIfTIReader
+        return NIfTIReader(path)
 
     @staticmethod
     def hdf5(path: str, dataset_path: Optional[str] = None) -> BaseReader:
