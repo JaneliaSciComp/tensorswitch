@@ -6186,7 +6186,7 @@ packages:
 - pypi: ./
   name: tensorswitch
   version: 2.0.3
-  sha256: 7c07d56926372b021228b0c8373e23d0f40d0bd60ad957bdda9967e50f2ea2e5
+  sha256: 0c69da530781a18fb0796cddcc947f37353a881915d2b640ac560f3efcf630fc
   requires_dist:
   - tensorstore>=0.1.79,<0.2
   - psutil
@@ -6200,6 +6200,7 @@ packages:
   - nd2>=0.10.3
   - h5py>=3.14.0
   - nibabel>=5.0.0
+  - pillow>=10.0.0
   - ome-types>=0.6.0,<0.7
   - bioio>=3.2.0,<4
   - bioio-czi>=2.1.0,<3
