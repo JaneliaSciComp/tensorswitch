@@ -23,6 +23,14 @@ import dask.array as da
 # files with 100K+ planes), which takes seconds on NFS. Re-opening per plane
 # read multiplies that cost by the number of planes and causes jobs to hang.
 _czi_reader_cache: dict = {}
+
+# Process-level cache of open PNG-stack zip handles, same rationale as the CZI
+# cache above: opening a ZipFile parses the archive's central directory, and doing
+# that once per slice read multiplies the cost by the slice count. ZipFile objects
+# are NOT safe for concurrent reads, so each cached handle carries its own lock.
+_png_zip_cache: dict = {}
+_png_zip_locks: dict = {}
+_png_zip_init_lock = threading.Lock()
 _czi_reader_locks: dict = {}
 _czi_cache_init_lock = threading.Lock()
 
@@ -1085,3 +1093,180 @@ def load_nifti_stack(nifti_file):
     )
 
     return dask_array, dimension_names
+
+
+def _find_png_files(directory):
+    """Find PNG files in a directory with natural numeric sorting.
+
+    Mirrors _find_tiff_files. Natural sort matters more for PNG than for TIFF:
+    published EM slice stacks are routinely named im0, im1, ... im1039 without
+    zero padding, and a lexicographic sort would order those im0, im1, im10,
+    im100 -- silently building a volume with shuffled sections.
+
+    Args:
+        directory: Path to directory containing PNG files
+
+    Returns:
+        List of absolute file paths, naturally sorted
+
+    Raises:
+        ValueError: If no PNG files found
+    """
+    import re
+    files = []
+    for entry in os.scandir(directory):
+        if entry.is_file() and entry.name.lower().endswith('.png'):
+            files.append(entry.path)
+    if not files:
+        raise ValueError(f"No PNG files found in: {directory}")
+
+    def natural_sort_key(path):
+        return [int(s) if s.isdigit() else s.lower()
+                for s in re.split(r'(\d+)', os.path.basename(path))]
+    files.sort(key=natural_sort_key)
+    return files
+
+
+def _find_png_members(zip_path):
+    """Naturally-sorted PNG member names inside a zip archive."""
+    import re
+    zf, lock = _get_png_zip(zip_path)
+    with lock:
+        names = [n for n in zf.namelist() if n.lower().endswith('.png')]
+    if not names:
+        raise ValueError(f"No PNG members found in zip: {zip_path}")
+
+    def natural_sort_key(name):
+        return [int(s) if s.isdigit() else s.lower()
+                for s in re.split(r'(\d+)', os.path.basename(name))]
+    names.sort(key=natural_sort_key)
+    return names
+
+
+def load_png_stack(folder_or_file):
+    """Load a PNG Z-stack lazily as a dask array.
+
+    Accepts three inputs:
+      - a directory of 2D PNG slices  -> dask_image.imread over the glob
+      - a .zip of 2D PNG slices       -> lazy per-slice reads from the archive
+      - a single .png                 -> a one-slice (2D) array
+
+    PNG is 2D-only by definition, so a stack is always many files; there is no
+    single-file 3D case as there is for TIFF/HDF5. PNG also carries NO voxel
+    size metadata of any kind, so callers must pass --voxel_size; PngReader
+    surfaces that through the standard _default_voxel_sizes warning.
+
+    The zip path exists because published EM volumes ship this way (PyTC's
+    EM30-H is a 24 GB zip of 1040 PNGs) and extracting one only to convert it
+    doubles the transient disk for no benefit. Slices are decoded on demand,
+    one at a time, so memory stays at one slice regardless of volume size.
+
+    Args:
+        folder_or_file: directory of PNGs, .zip of PNGs, or a single .png
+
+    Returns:
+        dask.array.Array: lazy (Z, Y, X) for a stack, (Y, X) for a single file
+    """
+    from dask_image import imread as dask_imread
+
+    if os.path.isdir(folder_or_file):
+        files = _find_png_files(folder_or_file)          # validates + orders
+        print(f"Loading PNG Z-stack from {folder_or_file} ({len(files)} slices)")
+        # dask_image globs and sorts lexicographically, which is wrong for
+        # unpadded names, so hand it the naturally-sorted list explicitly.
+        return da.stack([
+            dask_imread.imread(f)[0] for f in files
+        ])
+
+    if os.path.isfile(folder_or_file):
+        if folder_or_file.lower().endswith('.zip'):
+            return _load_png_zip(folder_or_file)
+        if folder_or_file.lower().endswith('.png'):
+            return dask_imread.imread(folder_or_file)[0]
+        raise ValueError(
+            f"Not a PNG, a zip of PNGs, or a directory: {folder_or_file}")
+
+    raise ValueError(f"Path does not exist: {folder_or_file}")
+
+
+def _load_png_zip(zip_path):
+    """Lazily stack PNG slices straight out of a zip, without extracting it."""
+    import io
+    import zipfile
+    import dask
+    from PIL import Image
+
+    names = _find_png_members(zip_path)
+
+    # Probe the first slice for shape/dtype; every slice in an EM stack shares
+    # them, and a mismatch would be a corrupt archive worth failing loudly on.
+    zf, lock = _get_png_zip(zip_path)
+    with lock:
+        probe = np.array(Image.open(io.BytesIO(zf.read(names[0]))))
+    shape, dtype = probe.shape, probe.dtype
+
+    def _read(member):
+        # One cached handle per archive, guarded by its own lock: ZipFile is not
+        # safe for concurrent reads, but re-opening it per slice re-parses the
+        # central directory every time (the CZI cache fix, PR #15, same problem).
+        zf, lock = _get_png_zip(zip_path)
+        with lock:
+            raw = zf.read(member)
+        a = np.array(Image.open(io.BytesIO(raw)))
+        if a.shape != shape or a.dtype != dtype:
+            raise ValueError(
+                f"{member}: shape/dtype {a.shape}/{a.dtype} does not match "
+                f"first slice {shape}/{dtype}")
+        return a
+
+    print(f"Loading PNG Z-stack from {os.path.basename(zip_path)} "
+          f"({len(names)} slices, streamed from the archive)")
+    return da.stack([
+        da.from_delayed(dask.delayed(_read)(n), shape=shape, dtype=dtype)
+        for n in names
+    ])
+
+
+def _get_png_zip(zip_path):
+    """Return a cached (ZipFile, read_lock) pair for a PNG-stack archive."""
+    import zipfile
+    with _png_zip_init_lock:
+        if zip_path not in _png_zip_cache:
+            zf = zipfile.ZipFile(zip_path)
+            _png_zip_cache[zip_path] = zf
+            _png_zip_locks[zip_path] = threading.Lock()
+
+            @atexit.register
+            def _close(zf=zf):
+                try:
+                    zf.close()
+                except Exception:
+                    pass
+    return _png_zip_cache[zip_path], _png_zip_locks[zip_path]
+
+
+def is_png_zstack_directory(path):
+    """Check if a directory contains a PNG Z-stack (2D PNG slices, one volume).
+
+    Simpler than the TIFF equivalent: a PNG is always a single plane, so there is
+    no 2D-vs-3D ambiguity to resolve by opening files -- any directory holding more
+    than one PNG is a Z-stack. A lone PNG is an image, not a volume.
+
+    Args:
+        path: Path to check
+
+    Returns:
+        bool: True if the directory holds 2+ PNG files
+    """
+    if not os.path.isdir(path):
+        return False
+    try:
+        n = 0
+        for entry in os.scandir(path):
+            if entry.is_file() and entry.name.lower().endswith('.png'):
+                n += 1
+                if n > 1:
+                    return True
+        return False
+    except OSError:
+        return False

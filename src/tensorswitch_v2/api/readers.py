@@ -143,6 +143,11 @@ class Readers:
             return Readers.ims(path)
         elif path_lower.endswith(('.nii', '.nii.gz')):
             return Readers.nifti(path)
+        elif path_lower.endswith('.png'):
+            return Readers.png(path)
+        elif path_lower.endswith('.zip') and _is_png_zip(path):
+            # Published EM slice stacks ship as one zip of PNGs (PyTC EM30).
+            return Readers.png(path)
         elif path_lower.endswith(('.h5', '.hdf5')):
             return Readers.hdf5(path)
         elif path_lower.endswith('.czi'):
@@ -174,6 +179,9 @@ class Readers:
             from ..utils.format_loaders import is_tiff_zstack_directory
             if is_tiff_zstack_directory(path):
                 return Readers.tiff(path)
+            # PNG Z-stack directory
+            if _is_png_stack_directory(path):
+                return Readers.png(path)
             return Readers.bioio(path)
 
         # Tier 3: BIOIO Adapter (broad compatibility)
@@ -345,6 +353,25 @@ class Readers:
         """
         from ..readers.ims import IMSReader
         return IMSReader(path, resolution_level=resolution_level)
+
+    @staticmethod
+    def png(path: str) -> BaseReader:
+        """
+        Create PNG Z-stack reader (Tier 2 - Custom Optimized).
+
+        Accepts a directory of 2D PNG slices, a .zip of them (read lazily,
+        never extracted), or a single .png. Slices are ordered by natural
+        numeric sort, so unpadded names (im0, im1, ... im1039) stack correctly.
+
+        Note: PNG carries NO voxel size, axis order or unit information of any
+        kind -- --voxel_size is mandatory, not merely advisable.
+
+        Example:
+            >>> reader = Readers.png("/data/slices/")
+            >>> reader = Readers.png("/data/EM30-H-im-pad.zip")
+        """
+        from ..readers.png import PngReader
+        return PngReader(path)
 
     @staticmethod
     def nifti(path: str) -> BaseReader:
@@ -542,6 +569,30 @@ class Readers:
 # ============================================================================
 # Helper Functions
 # ============================================================================
+
+def _is_png_zip(path: str) -> bool:
+    """True if a .zip contains PNG members.
+
+    Checked by reading the archive's central directory only -- no member is
+    decompressed, so this stays cheap on a 24 GB archive.
+    """
+    import zipfile
+    try:
+        with zipfile.ZipFile(path) as zf:
+            return any(n.lower().endswith('.png') for n in zf.namelist())
+    except (zipfile.BadZipFile, OSError):
+        return False
+
+
+def _is_png_stack_directory(path: str) -> bool:
+    """True if a directory holds 2D PNG slices forming one volume.
+
+    Thin alias so dispatch and batch-mode detection cannot drift apart; the
+    implementation lives beside the other format predicates in format_loaders.
+    """
+    from ..utils.format_loaders import is_png_zstack_directory
+    return is_png_zstack_directory(path)
+
 
 def _is_zarr3(path: str) -> bool:
     """

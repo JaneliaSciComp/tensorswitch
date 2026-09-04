@@ -110,6 +110,16 @@ def detect_input_mode(input_path: str, output_path: str = None) -> str:
                 if out_ext not in ('.zarr', '.n5'):
                     return 'batch_directory'
             return 'single_file'
+        # Check if directory is a PNG Z-stack (2D PNG slices forming one volume).
+        # Without this a slice directory falls through to batch_directory and each
+        # slice is converted as its own dataset -- 1040 "datasets" for one volume.
+        from ..utils.format_loaders import is_png_zstack_directory
+        if is_png_zstack_directory(input_path):
+            if output_path:
+                out_ext = os.path.splitext(output_path)[1].lower()
+                if out_ext not in ('.zarr', '.n5'):
+                    return 'batch_directory'
+            return 'single_file'
         # Check if directory contains discoverable datasets (e.g., image + segmentation)
         # This takes priority over batch_directory mode
         result = discover_datasets(input_path, verbose=False)

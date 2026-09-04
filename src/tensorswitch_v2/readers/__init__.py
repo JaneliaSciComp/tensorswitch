@@ -11,7 +11,7 @@ Architecture Layer: 1 (Foundation)
 
 Tier Strategy:
 - Tier 1 (Native TensorStore): N5, Zarr2/3, Precomputed - Maximum performance
-- Tier 2 (Custom Optimized): TIFF, ND2, IMS, HDF5, CZI, NIfTI - Reuse existing code
+- Tier 2 (Custom Optimized): TIFF, ND2, IMS, HDF5, CZI, NIfTI, PNG - Reuse existing code
 - Tier 3 (BIOIO Adapter): LIF, + 20 more formats - Broad compatibility (Python plugins)
 - Tier 4 (Bio-Formats): 150+ formats - Maximum compatibility (Java-backed)
 
@@ -29,6 +29,7 @@ Public API:
     - HDF5Reader: Generic HDF5 reader
     - CZIReader: Zeiss CZI reader using load_czi_stack() (multi-view support)
     - NIfTIReader: NIfTI-1/2 reader using load_nifti_stack() (.nii, .nii.gz)
+    - PngReader: PNG Z-stack reader using load_png_stack() (directory, .zip, or single .png)
 
     Tier 3 (BIOIO Adapter):
     - BIOIOReader: BIOIO adapter for 20+ formats (LIF, etc.) - Python plugins
@@ -54,6 +55,7 @@ from .ims import IMSReader
 from .hdf5 import HDF5Reader
 from .czi import CZIReader
 from .nifti import NIfTIReader
+from .png import PngReader
 
 # Tier 3: BIOIO Adapter (Python plugins)
 from .bioio_adapter import BIOIOReader
@@ -68,6 +70,7 @@ __all__ = [
     'N5Reader', 'Zarr3Reader', 'Zarr2Reader', 'PrecomputedReader',
     # Tier 2
     'TiffReader', 'ND2Reader', 'IMSReader', 'HDF5Reader', 'CZIReader', 'NIfTIReader',
+    'PngReader',
     # Tier 3
     'BIOIOReader',
     # Tier 4

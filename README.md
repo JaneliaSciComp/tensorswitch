@@ -93,7 +93,7 @@ A high-performance microscopy data conversion tool with TensorStore as the unifi
 | Tier | Performance | Formats | Description |
 |------|-------------|---------|-------------|
 | **Tier 1** | Maximum | N5, Zarr2, Zarr3, Precomputed | Native TensorStore drivers |
-| **Tier 2** | Optimized | TIFF, ND2, IMS, HDF5, CZI, NIfTI | Custom optimized readers |
+| **Tier 2** | Optimized | TIFF, ND2, IMS, HDF5, CZI, NIfTI, PNG | Custom optimized readers |
 | **Tier 3** | Compatible | LIF + 20 more | BIOIO Python plugins |
 | **Tier 4** | Universal | 150+ formats | Bio-Formats Java (via bioio-bioformats) |
 
@@ -177,7 +177,7 @@ print(__version__)  # 2.0.3
 
 | Install Command | Formats Supported | Dependencies |
 |---|---|---|
-| `pip install tensorswitch` | N5, Zarr, TIFF, ND2, IMS, HDF5, CZI, NIfTI, LIF, Precomputed + 20 more | tensorstore, numpy, tifffile, h5py, nd2, nibabel, dask, bioio |
+| `pip install tensorswitch` | N5, Zarr, TIFF, ND2, IMS, HDF5, CZI, NIfTI, PNG, LIF, Precomputed + 20 more | tensorstore, numpy, tifffile, h5py, nd2, nibabel, dask, bioio |
 | `pip install "tensorswitch[bioformats]"` | + 150 more via Bio-Formats | + bioio-bioformats, scyjava (requires Java 8+) |
 | `pip install "tensorswitch[mcp]"` | + MCP server for AI agents | + mcp |
 | `pip install "tensorswitch[all]"` | Everything above | All of the above |
@@ -504,6 +504,7 @@ reader = Readers.nd2("/path/to/data.nd2")       # Tier 2
 reader = Readers.czi("/path/to/data.czi")       # Tier 2
 reader = Readers.ims("/path/to/data.ims")       # Tier 2
 reader = Readers.nifti("/path/to/vol.nii.gz")   # Tier 2
+reader = Readers.png("/path/to/slices/")        # Tier 2 (dir, .zip or .png)
 reader = Readers.n5("/path/to/data.n5")         # Tier 1
 reader = Readers.zarr3("/path/to/data.zarr")    # Tier 1
 reader = Readers.bioio("/path/to/data.lif")     # Tier 3
@@ -633,6 +634,7 @@ print(f"Completed: {result.completed}/{result.total}")
 | ND2 (Nikon) | `.nd2` | 2 | ND2Reader |
 | IMS (Imaris) | `.ims` | 2 | IMSReader |
 | NIfTI | `.nii`, `.nii.gz` | 2 | NIfTIReader |
+| PNG Z-stack | directory, `.zip`, `.png` | 2 | PngReader |
 | CZI (Zeiss) | `.czi` | 2 | CZIReader |
 | HDF5 | `.h5`, `.hdf5` | 2 | HDF5Reader |
 | N5 | `.n5` | 1 | N5Reader |
@@ -662,6 +664,23 @@ pixi run python -m tensorswitch_v2 -i vol.nii.gz -o out.zarr \
 ```
 
 Reading goes through nibabel's lazy `dataobj` proxy, which preserves the on-disk dtype — unlike `get_fdata()`, which would upcast everything to float64.
+
+### PNG notes (directory, `.zip`, or single `.png`)
+
+PNG slice stacks are a common EM release format — Harvard's mEMbrain GT and PyTC's EM30 both ship this way. Three behaviours are worth knowing:
+
+**Slices are sorted naturally, not lexicographically.** Published stacks are routinely named without zero padding (`im0 … im1039`). A plain sort orders those `im0, im1, im10, im100`, which builds a volume with shuffled sections and reports no error at all. `PngReader` sorts numerically, so unpadded names stack correctly.
+
+**A `.zip` of slices is read lazily, never extracted.** EM30-H is 1040 slices in a 24 GB archive; extracting it just to convert would double the transient disk for nothing. Slices are decoded on demand, one at a time, so memory stays at one slice regardless of volume size. A slice whose shape or dtype differs from the first is treated as a corrupt archive and raises rather than being silently padded or skipped.
+
+**There is no voxel size in a PNG — `--voxel_size` is mandatory.** Unlike TIFF or NIfTI, PNG has no scientific metadata whatsoever. (Its optional `pHYs` chunk records pixels-per-metre for *printing* and is absent from every scientific export seen in practice, so it is deliberately not consulted.) The reader always warns and defaults to `[1,1,1]` if no voxel size is supplied.
+
+```bash
+# PyTC EM30-H: 1040 PNG slices in one zip, read without extracting
+pixi run python -m tensorswitch_v2 -i EM30-H-im-pad.zip -o out.zarr \
+  --preset mia_lmvd --voxel_size 8,8,30 --voxel_unit nanometer \
+  --auto_multiscale
+```
 
 ### Source Layout Preservation
 
