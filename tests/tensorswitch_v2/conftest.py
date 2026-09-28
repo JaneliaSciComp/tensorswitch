@@ -153,6 +153,57 @@ def sample_zarr2_path(temp_dir, sample_3d_array):
 
 
 @pytest.fixture
+def sample_zarr2_incompatible_path(temp_dir, sample_3d_array):
+    """Zarr2 with gzip level=-1 (zarr-python default) — triggers zarr-python fallback."""
+    import zarr as _zarr
+
+    path = os.path.join(temp_dir, "test_input_v2_incompatible.zarr")
+    array_path = os.path.join(path, "s0")
+    os.makedirs(path, exist_ok=True)
+
+    z = _zarr.open_array(
+        array_path, mode='w', zarr_format=2,
+        shape=list(sample_3d_array.shape), chunks=[16, 32, 32],
+        dtype='uint8', compressor={"id": "gzip", "level": -1},
+    )
+    z[...] = sample_3d_array
+
+    with open(os.path.join(path, ".zgroup"), 'w') as f:
+        json.dump({"zarr_format": 2}, f)
+    with open(os.path.join(path, ".zattrs"), 'w') as f:
+        json.dump({"multiscales": [{"version": "0.4", "name": "test_image",
+            "axes": [{"name": "z"}, {"name": "y"}, {"name": "x"}],
+            "datasets": [{"path": "s0"}]}]}, f)
+    return path
+
+
+@pytest.fixture
+def sample_zarr2_bigendian_path(temp_dir):
+    """Zarr2 with big-endian >u2 and gzip level=-1 — the iSIM dataset pattern."""
+    import zarr as _zarr
+
+    data = np.arange(32 * 64 * 64, dtype='>u2').reshape(32, 64, 64)
+    path = os.path.join(temp_dir, "test_input_v2_bigendian.zarr")
+    array_path = os.path.join(path, "s0")
+    os.makedirs(path, exist_ok=True)
+
+    z = _zarr.open_array(
+        array_path, mode='w', zarr_format=2,
+        shape=list(data.shape), chunks=[16, 32, 32],
+        dtype='>u2', compressor={"id": "gzip", "level": -1},
+    )
+    z[...] = data
+
+    with open(os.path.join(path, ".zgroup"), 'w') as f:
+        json.dump({"zarr_format": 2}, f)
+    with open(os.path.join(path, ".zattrs"), 'w') as f:
+        json.dump({"multiscales": [{"version": "0.4", "name": "test_bigendian",
+            "axes": [{"name": "z"}, {"name": "y"}, {"name": "x"}],
+            "datasets": [{"path": "s0"}]}]}, f)
+    return path, data  # return data for value comparison
+
+
+@pytest.fixture
 def sample_n5_path(temp_dir, sample_3d_array):
     """Create a test N5 dataset."""
     path = os.path.join(temp_dir, "test_input.n5")
@@ -181,6 +232,42 @@ def sample_n5_path(temp_dir, sample_3d_array):
         }, f)
 
     return path
+
+
+@pytest.fixture
+def n5_pixelres_group(temp_dir, sample_3d_array):
+    """N5 container with N5 v2.0.0 pixelResolution group format.
+
+    Mimics the Janelia Fish2 GT structure: the container root attributes.json
+    has only {"pixelResolution": {...}} (no 'dimensions' / 'dataType'),
+    while s0/ is a proper N5 array.  This is the format that triggers the
+    N5Reader._n5_pixelres_fallback path.
+    """
+    group_path = os.path.join(temp_dir, "test_pixelres.n5")
+    os.makedirs(group_path, exist_ok=True)
+
+    # Root attributes.json: N5 v2.0.0 pixelResolution only (no dimensions)
+    with open(os.path.join(group_path, "attributes.json"), "w") as f:
+        json.dump({"pixelResolution": {"dimensions": [16.0, 16.0, 30.0], "unit": "nm"}}, f)
+
+    # s0: standard N5 array
+    s0_spec = {
+        "driver": "n5",
+        "kvstore": {"driver": "file", "path": group_path},
+        "path": "s0",
+        "metadata": {
+            "dimensions": list(sample_3d_array.shape),
+            "blockSize": [16, 32, 32],
+            "dataType": "uint8",
+            "compression": {"type": "gzip", "level": 1},
+        },
+        "create": True,
+        "delete_existing": False,
+    }
+    store = ts.open(s0_spec).result()
+    store[...] = sample_3d_array
+
+    return group_path
 
 
 def validate_zarr3_output(output_path: str) -> dict:

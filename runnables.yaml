@@ -250,7 +250,55 @@ runnables:
           - flag: --bbox
             name: Bounding Box
             type: string
-            description: "Extract a subvolume: origin_z,origin_y,origin_x,size_z,size_y,size_x. Example: 0,0,0,512,512,512."
+            description: "Extract a subvolume: origin_0,...,origin_N,size_0,...,size_N (source dimension order). Usually 3 dims (z,y,x), e.g. 0,0,0,512,512,512 -- but can cover more dims for a source with extra non-spatial axes (e.g. a 5D source with t,c included), paired with Bbox Axes below."
+
+          - flag: --bbox_axes
+            name: Bbox Axes
+            type: string
+            description: "Which source axis indices (0-based) the Bounding Box values target, e.g. 2,3,4 for a 5D [t,c,z,y,x] source cropping only z,y,x. Optional -- omit to auto-detect from axis labels; set explicitly if the source reports generic axis names (common when pointing at one array inside a multiscale group, e.g. a path ending in /0)."
+
+          - flag: --squeeze_singleton_axes
+            name: Squeeze Singleton Axes
+            type: boolean
+            description: "Drop any size-1 non-spatial axis (t/c/channel) from the output before writing, e.g. a source with t=1,c=1 becomes a plain 3D output. Requires axis identity to be known."
+            default: false
+
+      - section: Label Ingestion
+        description: >
+          Add an annotation layer into an existing OME-NGFF zarr's labels/ folder.
+          Use with --add-to-existing and --is-label (or --data-type labels).
+          --output-offset embeds a sparse annotation (e.g. single timepoint crop) at the
+          correct TCZYX position; omit for same-shape ingest.
+        collapsed: true
+        parameters:
+          - flag: --add-to-existing
+            name: Add to Existing Container
+            type: boolean
+            description: "Write into an existing zarr without destroying it. Required for label ingestion."
+            default: false
+
+          - flag: --label-key
+            name: Label Name
+            type: string
+            description: "Name for the new label layer under labels/ (e.g. 'proofread_t10')."
+            default: segmentation
+
+          - flag: --output-offset
+            name: Output Offset (TCZYX)
+            type: string
+            description: >
+              Space-separated TCZYX integers giving the position in the target container where the
+              source origin lands. Fewer values are zero-padded on the left.
+              E.g. '10 0 0 151 870' → T=10, Y=151, X=870.
+              E.g. '10' → T=10, C=Z=Y=X=0 (full-volume single timepoint).
+              Omit entirely for same-shape ingest (existing --add-to-existing handles it).
+
+          - flag: --target-shape
+            name: Target Shape (TCZYX)
+            type: string
+            description: >
+              Full output array shape as space-separated TCZYX integers.
+              Auto-inferred from sibling labels in the target container if omitted.
 
       - section: Format-Specific
         description: "Options for specific input formats."

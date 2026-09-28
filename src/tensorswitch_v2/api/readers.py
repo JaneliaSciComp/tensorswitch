@@ -85,6 +85,7 @@ class Readers:
             - .tif, .tiff → TiffReader
             - .nd2 → ND2Reader
             - .ims → IMSReader
+            - .nii, .nii.gz → NIfTIReader
             - .h5, .hdf5 → HDF5Reader
 
             Tier 3 (Broad Compatibility):
@@ -99,6 +100,12 @@ class Readers:
         """
         from ..readers.base import is_remote_path as _is_remote
         path_lower = path.lower()
+
+        # Explicit format-scheme prefixes: n5:// and zarr:// indicate format directly
+        if path_lower.startswith('n5://'):
+            return _remote_n5_reader(path)
+        elif path_lower.startswith('zarr://'):
+            return _remote_zarr_reader(path)
 
         # Remote URLs: infer format from URL pattern (no filesystem access)
         if _is_remote(path):
@@ -134,6 +141,13 @@ class Readers:
             return Readers.nd2(path)
         elif path_lower.endswith('.ims'):
             return Readers.ims(path)
+        elif path_lower.endswith(('.nii', '.nii.gz')):
+            return Readers.nifti(path)
+        elif path_lower.endswith('.png'):
+            return Readers.png(path)
+        elif path_lower.endswith('.zip') and _is_png_zip(path):
+            # Published EM slice stacks ship as one zip of PNGs (PyTC EM30).
+            return Readers.png(path)
         elif path_lower.endswith(('.h5', '.hdf5')):
             return Readers.hdf5(path)
         elif path_lower.endswith('.czi'):
@@ -165,6 +179,9 @@ class Readers:
             from ..utils.format_loaders import is_tiff_zstack_directory
             if is_tiff_zstack_directory(path):
                 return Readers.tiff(path)
+            # PNG Z-stack directory
+            if _is_png_stack_directory(path):
+                return Readers.png(path)
             return Readers.bioio(path)
 
         # Tier 3: BIOIO Adapter (broad compatibility)
@@ -336,6 +353,46 @@ class Readers:
         """
         from ..readers.ims import IMSReader
         return IMSReader(path, resolution_level=resolution_level)
+
+    @staticmethod
+    def png(path: str) -> BaseReader:
+        """
+        Create PNG Z-stack reader (Tier 2 - Custom Optimized).
+
+        Accepts a directory of 2D PNG slices, a .zip of them (read lazily,
+        never extracted), or a single .png. Slices are ordered by natural
+        numeric sort, so unpadded names (im0, im1, ... im1039) stack correctly.
+
+        Note: PNG carries NO voxel size, axis order or unit information of any
+        kind -- --voxel_size is mandatory, not merely advisable.
+
+        Example:
+            >>> reader = Readers.png("/data/slices/")
+            >>> reader = Readers.png("/data/EM30-H-im-pad.zip")
+        """
+        from ..readers.png import PngReader
+        return PngReader(path)
+
+    @staticmethod
+    def nifti(path: str) -> BaseReader:
+        """
+        Create NIfTI reader (Tier 2 - Custom Optimized).
+
+        Supports NIfTI-1 and NIfTI-2, plain (.nii) or gzipped (.nii.gz).
+        Axis order is normalised from NIfTI's native (x, y, z) to (z, y, x).
+
+        Note: NIfTI headers cannot express nanometer units, so EM-scale data
+        often carries a meaningless pixdim -- pass --voxel_size explicitly
+        unless the header declares a real micron/mm/meter scale.
+
+        Example:
+            >>> reader = Readers.nifti("/data.nii.gz")
+
+        Implementation Status:
+            ✅ Complete (Tier 2 - reuses load_nifti_stack())
+        """
+        from ..readers.nifti import NIfTIReader
+        return NIfTIReader(path)
 
     @staticmethod
     def hdf5(path: str, dataset_path: Optional[str] = None) -> BaseReader:
@@ -512,6 +569,30 @@ class Readers:
 # ============================================================================
 # Helper Functions
 # ============================================================================
+
+def _is_png_zip(path: str) -> bool:
+    """True if a .zip contains PNG members.
+
+    Checked by reading the archive's central directory only -- no member is
+    decompressed, so this stays cheap on a 24 GB archive.
+    """
+    import zipfile
+    try:
+        with zipfile.ZipFile(path) as zf:
+            return any(n.lower().endswith('.png') for n in zf.namelist())
+    except (zipfile.BadZipFile, OSError):
+        return False
+
+
+def _is_png_stack_directory(path: str) -> bool:
+    """True if a directory holds 2D PNG slices forming one volume.
+
+    Thin alias so dispatch and batch-mode detection cannot drift apart; the
+    implementation lives beside the other format predicates in format_loaders.
+    """
+    from ..utils.format_loaders import is_png_zstack_directory
+    return is_png_zstack_directory(path)
+
 
 def _is_zarr3(path: str) -> bool:
     """
@@ -740,13 +821,24 @@ def _find_first_dataset_path(metadata: dict) -> str:
 def _remote_n5_reader(path: str):
     """Create N5 reader for a remote URL.
 
+    Accepts paths with or without the ``n5://`` format-scheme prefix (e.g.
+    ``n5://gs://bucket/data.n5/group`` or plain ``gs://bucket/data.n5``).
+
     Checks whether the root path is an N5 array (has ``dataType`` in
-    ``attributes.json``).  If the root is a group, raises ``ValueError``
-    telling the user to append the dataset sub-path.
+    ``attributes.json``).  If the root is a group, tries to auto-discover
+    the first scale level using:
+    1. S3-specific bounded directory listing (existing behaviour)
+    2. Kvstore-based scale probing — cloud-agnostic, works for GCS/S3/HTTP.
+       Tries s0, 0, s1, 1 via direct kvstore reads.
+    Raises ``ValueError`` only if no scale level is found.
     """
     from ..readers.base import build_kvstore
     import tensorstore as ts
     import json
+
+    # Strip the n5:// format-scheme prefix — the remainder is the real cloud URL
+    if path.lower().startswith('n5://'):
+        path = path[5:]
 
     try:
         kvs = ts.KvStore.open(build_kvstore(path)).result()
@@ -755,10 +847,20 @@ def _remote_n5_reader(path: str):
             attrs = json.loads(bytes(result.value))
             if "dataType" in attrs:
                 return Readers.n5(path)
-            # Root is a group — try S3 bounded directory listing
+            # Root is a group — try S3 bounded directory listing first
             resolved = _s3_discover_array_path(path)
             if resolved:
                 return Readers.n5(path, dataset_path=resolved)
+            # Kvstore-based scale probing (works for GCS, S3, HTTP)
+            for subpath in ('s0', '0', 's1', '1'):
+                try:
+                    sub = kvs.read(f"{subpath}/attributes.json").result()
+                    if sub.value and len(sub.value) > 0:
+                        sub_attrs = json.loads(bytes(sub.value))
+                        if 'dataType' in sub_attrs:
+                            return Readers.n5(path, dataset_path=subpath)
+                except Exception:
+                    pass
             raise ValueError(
                 f"Remote N5 path is a group, not an array: {path}\n"
                 "Append the dataset sub-path to the URL, e.g.:\n"

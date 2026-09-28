@@ -78,7 +78,11 @@ def _resolve_conversion_subgroup(args) -> Optional[str]:
         return None
 
     data_type = getattr(args, 'data_type', 'auto')
-    label_key = getattr(args, 'label_key', 'segmentation')
+    # _label_tmp_key (set by the --add-to-existing routing block, e.g.
+    # "<label_name>.tmp") reflects where the s0 write actually lands when a
+    # custom --label-key is used; label_key alone is the *final* post-rename
+    # name and does not exist yet while auto_multiscale's pyramid step runs.
+    label_key = getattr(args, '_label_tmp_key', None) or getattr(args, 'label_key', 'segmentation')
     image_key = getattr(args, 'image_key', 'raw')
 
     if getattr(args, 'is_label', False) or data_type == 'labels':
@@ -438,6 +442,17 @@ Supported output formats:
              "Safe write applies to the subgroup (e.g., labels/) not the container root.",
     )
     parser.add_argument(
+        "--output-offset", nargs="+", type=int, dest="output_offset", default=None,
+        help="TCZYX offset for sparse label ingestion (use with --add-to-existing). "
+             "Fewer dims are zero-padded on the left. "
+             "E.g. '--output-offset 10' sets T=10, C=Z=Y=X=0.",
+    )
+    parser.add_argument(
+        "--target-shape", nargs="+", type=int, dest="target_shape", default=None,
+        help="Full output shape TCZYX for --output-offset. "
+             "Auto-inferred from sibling labels in the target container if omitted.",
+    )
+    parser.add_argument(
         "--image-only", action="store_true",
         help="Only convert image data (skip labels) when both are found in source folder.",
     )
@@ -549,10 +564,33 @@ Supported output formats:
     # Subvolume extraction
     parser.add_argument(
         "--bbox", type=str, default=None,
-        help="Bounding box for subvolume extraction: origin_0,origin_1,origin_2,size_0,size_1,size_2 "
-             "(in source voxel coordinates, source dimension order). "
+        help="Bounding box for subvolume extraction: origin_0,...,origin_N,size_0,...,size_N "
+             "(in source voxel coordinates, source dimension order). N need not be 3 — "
+             "a source with more dims than just x/y/z (e.g. a 5D [t,c,z,y,x] "
+             "BigStitcher-Spark export with t=c=1) can pass a bbox covering however "
+             "many dims it needs. "
              "For Neuroglancer precomputed: x,y,z order. For Zarr/N5: z,y,x order. "
-             "Example: --bbox 116316,87591,20800,10240,10240,1024",
+             "Example (3D): --bbox 116316,87591,20800,10240,10240,1024",
+    )
+    parser.add_argument(
+        "--squeeze_singleton_axes", action="store_true", default=False,
+        help="Drop any size-1 axis identified as non-spatial (t/c/v/channel) from the "
+             "OUTPUT before writing, e.g. a 5D [t,c,z,y,x] source with t=c=1 becomes a "
+             "plain 3D [z,y,x] output. Chunk keys are written directly as c/<z>/<y>/<x> "
+             "from the start (never c/0/0/<z>/<y>/<x>), so no post-hoc rename is needed. "
+             "Requires axis identity to be known (real labels, or --relabel_axis) -- "
+             "raises an error otherwise rather than guessing.",
+    )
+    parser.add_argument(
+        "--bbox_axes", type=str, default=None,
+        help="Comma-separated 0-based source axis indices that --bbox's values target, "
+             "e.g. '2,3,4' for a 5D [t,c,z,y,x] source cropping only z,y,x (axes t,c "
+             "stay at full extent). Use this when the source's axis labels can't be "
+             "auto-detected (e.g. pointing directly at an array subpath bypasses the "
+             "parent group's OME multiscales metadata, so axes show up as generic "
+             "dim_0..dim_N rather than t/c/z/y/x) — auto-detection would otherwise "
+             "misassign --bbox's values to the wrong axes. Optional: omitting this "
+             "keeps the previous behavior of auto-detecting spatial axes from labels.",
     )
 
     # Output control
@@ -630,7 +668,21 @@ Supported output formats:
         "--axes_order", type=str, default=None,
         help="Override output spatial axis order. Accepts any permutation of x,y,z "
              "(e.g., 'xyz', 'zyx', 'xzy'). Default: preserve source order. "
-             "Example: ND2 source is ZYX, --axes_order xyz transposes to XYZ.",
+             "Example: ND2 source is ZYX, --axes_order xyz transposes to XYZ. "
+             "Does NOT relabel axis identity (e.g. does not turn 't' or 'i' into "
+             "'z') -- use --relabel_axis for that.",
+    )
+
+    # Explicit axis identity correction (does not infer/guess)
+    parser.add_argument(
+        "--relabel_axis", type=str, default=None, action="append",
+        help="Explicitly relabel a source axis whose detected name is wrong "
+             "(e.g. a reader mis-detected a Z-stack as a generic index or time "
+             "axis). Format: OLD=NEW, e.g. '--relabel_axis i=z' or "
+             "'--relabel_axis t=z'. Repeatable for multiple axes. Unlike "
+             "--axes_order, this never fires automatically or infers intent -- "
+             "it only does exactly what you name. Required to reinterpret a "
+             "non-spatial axis (i, t, c, s, ...) as a spatial one.",
     )
 
     # Layout control
@@ -700,28 +752,57 @@ def parse_bbox(bbox_str):
     """Parse bbox string into (origin, size) tuples.
 
     Args:
-        bbox_str: Comma-separated string 'origin_0,origin_1,origin_2,size_0,size_1,size_2'
+        bbox_str: Comma-separated string 'origin_0,...,origin_N,size_0,...,size_N'
+                  — an even number of integers, split into two equal halves.
                   Coordinates are in source voxel coordinates, source dimension order.
                   For Neuroglancer precomputed: x,y,z order.
                   For Zarr/N5: z,y,x order.
+                  N is not fixed at 3 — a source with more than 3 dimensions (e.g. a
+                  5D [t,c,z,y,x] BigStitcher-Spark export) can pass a bbox covering
+                  as many dims as needed; pair with --bbox_axes to say which source
+                  axis index each value corresponds to when axis identity can't be
+                  auto-detected from labels (see --bbox_axes help).
 
     Returns:
-        Tuple of (origin, size) where each is a 3-tuple of ints.
+        Tuple of (origin, size) where each is an N-tuple of ints.
 
     Raises:
         ValueError: If format is invalid.
     """
     values = [int(v.strip()) for v in bbox_str.split(',')]
-    if len(values) != 6:
+    if len(values) < 2 or len(values) % 2 != 0:
         raise ValueError(
-            f"--bbox requires 6 comma-separated integers: origin_0,origin_1,origin_2,size_0,size_1,size_2\n"
-            f"Got {len(values)} values: {bbox_str}"
+            f"--bbox requires an even number of comma-separated integers "
+            f"(origin_0,...,origin_N,size_0,...,size_N), got {len(values)} values: {bbox_str}"
         )
-    origin = tuple(values[:3])
-    size = tuple(values[3:])
+    n = len(values) // 2
+    origin = tuple(values[:n])
+    size = tuple(values[n:])
     if any(s <= 0 for s in size):
         raise ValueError(f"--bbox size values must be positive, got: {size}")
     return origin, size
+
+
+def parse_bbox_axes(bbox_axes_str):
+    """Parse '--bbox_axes' into a tuple of 0-based source axis indices.
+
+    Args:
+        bbox_axes_str: Comma-separated integers, e.g. '2,3,4' for a 5D [t,c,z,y,x]
+                       source where the bbox values target z,y,x (axes 2,3,4) and
+                       t,c (axes 0,1) should stay at full extent.
+
+    Returns:
+        Tuple of ints.
+
+    Raises:
+        ValueError: If any value is not a non-negative integer, or indices repeat.
+    """
+    axes = tuple(int(v.strip()) for v in bbox_axes_str.split(','))
+    if any(a < 0 for a in axes):
+        raise ValueError(f"--bbox_axes indices must be non-negative, got: {axes}")
+    if len(axes) != len(set(axes)):
+        raise ValueError(f"--bbox_axes must not repeat an axis index, got: {axes}")
+    return axes
 
 
 def validate_input_path(path: str, allow_directory: bool = True) -> None:
@@ -739,7 +820,7 @@ def validate_input_path(path: str, allow_directory: bool = True) -> None:
     from .readers.base import is_remote_path
 
     # Skip local filesystem checks for remote URLs — reader handles connectivity
-    if is_remote_path(path) or path.startswith('precomputed://'):
+    if is_remote_path(path) or path.startswith(('precomputed://', 'n5://', 'zarr://')):
         return
 
     if not os.path.exists(path):
@@ -803,6 +884,42 @@ def _tmp_path_for(output_path: str) -> str:
     return output_path.rstrip('/\\') + '.tmp'
 
 
+def _level_has_data(level_path: str) -> bool:
+    """Return True if any actual chunk/shard data files were written at this level.
+
+    zarr3 (sharded or non-sharded): data lives under ``c/``.  Pre-creation only
+    creates empty subdirectories inside ``c/``; actual shard files are written by
+    TensorStore only when a chunk contains non-fill-value data.
+
+    zarr2/N5: chunk files are written as plain files in the level directory.
+
+    Returns False if the level directory is absent or contains only metadata
+    files / empty pre-created directories (i.e. all data was fill-value / all-zero).
+    """
+    if not os.path.isdir(level_path):
+        return False
+
+    # zarr3: check c/ directory for any actual files
+    shard_dir = os.path.join(level_path, 'c')
+    if os.path.isdir(shard_dir):
+        for _root, _dirs, files in os.walk(shard_dir):
+            if files:
+                return True
+        return False
+
+    # zarr2/N5: any non-metadata file or subdirectory with files counts as a chunk
+    metadata_names = {'zarr.json', '.zarray', '.zattrs', 'attributes.json'}
+    for entry in os.listdir(level_path):
+        entry_path = os.path.join(level_path, entry)
+        if os.path.isfile(entry_path) and entry not in metadata_names:
+            return True
+        if os.path.isdir(entry_path) and entry not in metadata_names:
+            for _root, _dirs, files in os.walk(entry_path):
+                if files:
+                    return True
+    return False
+
+
 def _finalize_tmp_path(tmp_path: str, final_path: str, verbose: bool = True) -> None:
     """Rename a completed .tmp output to its final path.
 
@@ -825,17 +942,20 @@ def _finalize_add_to_existing(
     output_format: str,
     verbose: bool = True,
 ) -> None:
-    """Move new label from .tmp subgroup into existing container and update metadata.
+    """Move new label from .tmp into existing container and update metadata.
 
-    During --add-to-existing conversion, data is written to e.g.
-    ``labels.tmp/<label_name>/`` inside the existing container.  This function:
+    For labels subgroups (the common case), the new label is written to
+    ``labels/<label_name>.tmp/`` and renamed to ``labels/<label_name>/`` within
+    the same parent directory.  A same-parent rename is a single atomic metadata
+    operation on Lustre/GPFS, avoiding the cross-directory rename that can
+    silently drop files on multi-MDT Lustre configurations.
 
-    1. Creates ``labels/`` if it does not exist.
-    2. Moves ``labels.tmp/<label_name>/`` → ``labels/<label_name>/`` (replaces
-       only that label if it already exists; all other existing labels are untouched).
-    3. Removes the now-empty ``labels.tmp/`` directory.
-    4. Appends ``<label_name>`` to the root metadata labels list — existing labels
-       in the list are preserved (not replaced).
+    Both ``labels/zarr.json`` (the labels container) and the root ``zarr.json``
+    are updated by replacing the in-flight ``<label_name>.tmp`` entry with the
+    final ``<label_name>``.  Existing labels in those files are never removed.
+
+    For non-labels subgroups (raw/image), the legacy ``subgroup_parent.tmp/``
+    container approach is preserved unchanged.
 
     Args:
         final_output: Container root path (e.g. ``/data/out.zarr``).
@@ -845,71 +965,199 @@ def _finalize_add_to_existing(
         verbose: Print progress messages.
     """
     import json as _json
+    import time as _time
 
-    tmp_name = subgroup_parent + '.tmp'
-    tmp_path = os.path.join(final_output, tmp_name)
+    def _locked_json_update(meta_path, update_fn, timeout=120.0, poll_interval=0.05):
+        """Read-modify-write meta_path under an exclusive, NFS-safe lock.
+
+        Concurrent --add-to-existing invocations targeting the same shared
+        metadata file (e.g. many labels being ingested into one container in
+        parallel, each running as a separate LSF job on a DIFFERENT compute
+        node) otherwise race on this file: a plain open(path)/json.load()
+        followed later by open(path, 'w')/json.dump() lets one process's write
+        truncate the file while another is mid-read (JSONDecodeError), or lets
+        two processes each read the same old list and silently lose one
+        other's update (last writer wins).
+
+        NOTE: an earlier version of this fix used fcntl.flock(), which is only
+        an ADVISORY lock and is frequently NOT coordinated across different
+        client nodes on network filesystems (NFS/Lustre/GPFS) unless the mount
+        explicitly enables distributed lock support (NLM/lockd) -- confirmed
+        broken in production on /groups (cluster.prfs.janelia.org NFS mount):
+        the race still corrupted metadata even with flock held. os.mkdir() is
+        used instead -- directory creation is a POSIX-guaranteed atomic
+        metadata operation that all major network filesystems correctly
+        implement for actual cross-client mutual exclusion, unlike flock.
+
+        The lock is held only across this brief read+modify+write span, not
+        the rest of label conversion (data download/write), so parallel label
+        ingestion into the same container is otherwise unaffected.
+        """
+        lock_dir = meta_path + '.lock'
+        deadline = _time.monotonic() + timeout
+        while True:
+            try:
+                os.mkdir(lock_dir)
+                break
+            except FileExistsError:
+                if _time.monotonic() > deadline:
+                    raise TimeoutError(
+                        f"Could not acquire lock {lock_dir} after {timeout}s "
+                        f"(stale lock from a crashed process?)")
+                _time.sleep(poll_interval)
+        try:
+            with open(meta_path, 'r+') as f:
+                f.seek(0)
+                meta = _json.loads(f.read())
+                meta = update_fn(meta)
+                f.seek(0)
+                f.truncate()
+                _json.dump(meta, f, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+        finally:
+            os.rmdir(lock_dir)
+
     final_path = os.path.join(final_output, subgroup_parent)
 
-    if not os.path.exists(tmp_path):
-        return
+    if subgroup_parent == 'labels':
+        # --- Same-parent rename: labels/<label_name>.tmp/ → labels/<label_name>/ ---
+        tmp_label_name = label_name + '.tmp'
+        tmp_label_path = os.path.join(final_path, tmp_label_name)
+        final_label_path = os.path.join(final_path, label_name)
 
-    # 1. Move only the new label subdir: labels.tmp/<label_name>/ → labels/<label_name>/
-    #    All other existing labels in labels/ are left untouched.
-    tmp_label_path = os.path.join(tmp_path, label_name)
-    final_label_path = os.path.join(final_path, label_name)
+        if not os.path.exists(tmp_label_path):
+            return
 
-    os.makedirs(final_path, exist_ok=True)
-    if os.path.exists(final_label_path):
-        shutil.rmtree(final_label_path)
-    os.rename(tmp_label_path, final_label_path)
+        # 1. Rename within labels/ — same parent dir, single atomic MDT operation
+        os.makedirs(final_path, exist_ok=True)
+        if os.path.exists(final_label_path):
+            shutil.rmtree(final_label_path)
+        os.rename(tmp_label_path, final_label_path)
+        if verbose:
+            print(f"Moved {tmp_label_path} → {final_label_path}")
+
+        # Helper: replace tmp entry with real name in a labels list, preserving others
+        def _fix_labels_list(lst):
+            lst = [l for l in lst if l not in (tmp_label_name, label_name)]
+            lst.append(label_name)
+            return sorted(lst)
+
+        # 2. Update labels/zarr.json — replace <label_name>.tmp with <label_name>.
+        #    Create it if this is the first label and it doesn't exist yet.
+        if output_format == 'zarr3':
+            labels_meta = os.path.join(final_path, 'zarr.json')
+            if not os.path.exists(labels_meta):
+                os.makedirs(final_path, exist_ok=True)
+                with open(labels_meta, 'w') as f:
+                    _json.dump({
+                        'zarr_format': 3,
+                        'node_type': 'group',
+                        'attributes': {
+                            'ome': {'version': '0.5', 'labels': []},
+                            '_software': {
+                                'name': 'TensorSwitch',
+                                'url': 'https://github.com/JaneliaSciComp/tensorswitch',
+                            },
+                        },
+                    }, f, indent=2)
+            def _update_labels_zarr3(meta):
+                ome = meta.setdefault('attributes', {}).setdefault('ome', {})
+                ome['labels'] = _fix_labels_list(ome.get('labels', []))
+                return meta
+            _locked_json_update(labels_meta, _update_labels_zarr3)
+        elif output_format == 'zarr2':
+            labels_meta = os.path.join(final_path, '.zattrs')
+            if not os.path.exists(labels_meta):
+                os.makedirs(final_path, exist_ok=True)
+                with open(labels_meta, 'w') as f:
+                    _json.dump({'labels': []}, f, indent=2)
+            def _update_labels_zarr2(meta):
+                meta['labels'] = _fix_labels_list(meta.get('labels', []))
+                return meta
+            _locked_json_update(labels_meta, _update_labels_zarr2)
+
+        # 3. Update root metadata — replace <label_name>.tmp with <label_name>
+        old_prefix = f'{subgroup_parent}/{tmp_label_name}/'
+        new_prefix = f'{subgroup_parent}/{label_name}/'
+        if output_format == 'zarr3':
+            root_meta = os.path.join(final_output, 'zarr.json')
+            if os.path.exists(root_meta):
+                def _update_root_zarr3(meta):
+                    ome = meta.setdefault('attributes', {}).setdefault('ome', {})
+                    ome['labels'] = _fix_labels_list(ome.get('labels', []))
+                    for ms in ome.get('multiscales', []):
+                        for ds in ms.get('datasets', []):
+                            if ds.get('path', '').startswith(old_prefix):
+                                ds['path'] = new_prefix + ds['path'][len(old_prefix):]
+                    return meta
+                _locked_json_update(root_meta, _update_root_zarr3)
+        elif output_format == 'zarr2':
+            root_meta = os.path.join(final_output, '.zattrs')
+            if os.path.exists(root_meta):
+                def _update_root_zarr2(meta):
+                    meta['labels'] = _fix_labels_list(meta.get('labels', []))
+                    for ms in meta.get('multiscales', []):
+                        for ds in ms.get('datasets', []):
+                            if ds.get('path', '').startswith(old_prefix):
+                                ds['path'] = new_prefix + ds['path'][len(old_prefix):]
+                    return meta
+                _locked_json_update(root_meta, _update_root_zarr2)
+
+    else:
+        # --- Legacy path for raw/image subgroups: subgroup_parent.tmp/ container ---
+        tmp_name = subgroup_parent + '.tmp'
+        tmp_path = os.path.join(final_output, tmp_name)
+        final_label_path = os.path.join(final_path, label_name)
+
+        if not os.path.exists(tmp_path):
+            return
+
+        tmp_label_path = os.path.join(tmp_path, label_name)
+        os.makedirs(final_path, exist_ok=True)
+        if os.path.exists(final_label_path):
+            shutil.rmtree(final_label_path)
+        os.rename(tmp_label_path, final_label_path)
+        if verbose:
+            print(f"Moved {tmp_label_path} → {final_label_path}")
+        shutil.rmtree(tmp_path)
+
+        old_prefix = tmp_name + '/'
+        new_prefix = subgroup_parent + '/'
+        if output_format == 'zarr3':
+            root_meta = os.path.join(final_output, 'zarr.json')
+            if os.path.exists(root_meta):
+                with open(root_meta) as f:
+                    meta = _json.load(f)
+                ome = meta.setdefault('attributes', {}).setdefault('ome', {})
+                lst = [l for l in ome.get('labels', []) if l != tmp_name]
+                if label_name not in lst:
+                    lst.append(label_name)
+                ome['labels'] = sorted(lst)
+                for ms in ome.get('multiscales', []):
+                    for ds in ms.get('datasets', []):
+                        if ds.get('path', '').startswith(old_prefix):
+                            ds['path'] = new_prefix + ds['path'][len(old_prefix):]
+                with open(root_meta, 'w') as f:
+                    _json.dump(meta, f, indent=2)
+        elif output_format == 'zarr2':
+            root_meta = os.path.join(final_output, '.zattrs')
+            if os.path.exists(root_meta):
+                with open(root_meta) as f:
+                    meta = _json.load(f)
+                lst = [l for l in meta.get('labels', []) if l != tmp_name]
+                if label_name not in lst:
+                    lst.append(label_name)
+                meta['labels'] = sorted(lst)
+                for ms in meta.get('multiscales', []):
+                    for ds in ms.get('datasets', []):
+                        if ds.get('path', '').startswith(old_prefix):
+                            ds['path'] = new_prefix + ds['path'][len(old_prefix):]
+                with open(root_meta, 'w') as f:
+                    _json.dump(meta, f, indent=2)
+
     if verbose:
-        print(f"Moved {tmp_label_path} → {final_label_path}")
-
-    # 2. Clean up the now-empty labels.tmp/ directory
-    shutil.rmtree(tmp_path)
-
-    # 3. Update root metadata: append label_name to existing labels list (do not replace)
-    if output_format == 'zarr3':
-        meta_path = os.path.join(final_output, 'zarr.json')
-        if os.path.exists(meta_path):
-            with open(meta_path) as f:
-                meta = _json.load(f)
-            ome = meta.get('attributes', {}).get('ome', {})
-            labels_list = ome.get('labels', [])
-            # Remove any stale labels.tmp entry, append the new label (no duplicates)
-            labels_list = [l for l in labels_list if l != tmp_name]
-            if label_name not in labels_list:
-                labels_list.append(label_name)
-            ome['labels'] = sorted(labels_list)
-            # Fix any multiscale dataset paths still referencing labels.tmp
-            for ms in ome.get('multiscales', []):
-                for ds in ms.get('datasets', []):
-                    path = ds.get('path', '')
-                    if path.startswith(tmp_name + '/'):
-                        ds['path'] = subgroup_parent + path[len(tmp_name):]
-            meta['attributes']['ome'] = ome
-            with open(meta_path, 'w') as f:
-                _json.dump(meta, f, indent=2)
-    elif output_format == 'zarr2':
-        meta_path = os.path.join(final_output, '.zattrs')
-        if os.path.exists(meta_path):
-            with open(meta_path) as f:
-                meta = _json.load(f)
-            labels_list = meta.get('labels', [])
-            labels_list = [l for l in labels_list if l != tmp_name]
-            if label_name not in labels_list:
-                labels_list.append(label_name)
-            meta['labels'] = sorted(labels_list)
-            for ms in meta.get('multiscales', []):
-                for ds in ms.get('datasets', []):
-                    path = ds.get('path', '')
-                    if path.startswith(tmp_name + '/'):
-                        ds['path'] = subgroup_parent + path[len(tmp_name):]
-            with open(meta_path, 'w') as f:
-                _json.dump(meta, f, indent=2)
-
-    if verbose:
-        print(f"Updated root metadata: appended '{label_name}' to {subgroup_parent} labels list")
+        print(f"Updated metadata: registered '{label_name}' in {subgroup_parent} labels list")
 
 
 def parse_shape(s: str, param_name: str = "shape") -> Tuple[int, ...]:
@@ -1014,7 +1262,7 @@ def create_reader(args):
             return Readers.n5(path, dataset_path=args.dataset_path)
         elif path_lower.endswith(".zarr"):
             return Readers.auto_detect(path)
-        elif path_lower.endswith((".h5", ".hdf5")):
+        elif path_lower.endswith((".h5", ".hdf5", ".hdf", ".he5")):
             return Readers.hdf5(path, dataset_path=args.dataset_path)
 
     return Readers.auto_detect(path)
@@ -1038,7 +1286,10 @@ def create_writer(args, data_type: str = 'image'):
     # Determine if we should use nested structure (enabled by default for zarr3 and zarr2)
     use_nested = getattr(args, 'use_nested_structure', True) and fmt in ["zarr3", "zarr2"]
     image_key = getattr(args, 'image_key', 'raw')
-    label_key = getattr(args, 'label_key', 'segmentation')
+    # _label_tmp_key is set by the --add-to-existing routing block to write the label
+    # under a .tmp name (e.g. 'neurons.tmp') so the live labels/ directory is not
+    # touched until the rename completes.  Falls back to the user-facing --label-key.
+    label_key = getattr(args, '_label_tmp_key', None) or getattr(args, 'label_key', 'segmentation')
     labels_container = getattr(args, '_labels_container_override', 'labels')
 
     include_omero = not getattr(args, 'no_omero', False)
@@ -1087,8 +1338,8 @@ def _warn_if_axis_voxel_mismatch(args, axes_order) -> None:
     Example: TIFF reports ``CYX`` (1 non-spatial + 2 spatial), but user passes
     ``--voxel_size 5.99,5.99,5.96`` (3 spatial values). Without this warning
     TS silently drops the Z value and the output scale[0] stays at ``1.0``.
-    Users can fix their TIFF save pipeline or pass ``--axes_order zyx`` to
-    override.
+    Users can fix their TIFF save pipeline or pass ``--relabel_axis`` (e.g.
+    ``--relabel_axis c=z``) to explicitly correct the mis-detected axis.
     """
     if not getattr(args, 'voxel_size', None):
         return
@@ -1109,9 +1360,11 @@ def _warn_if_axis_voxel_mismatch(args, axes_order) -> None:
         f"(non-spatial: {non_spatial}). "
         f"The Z value ({parts[2]}) will NOT be applied to dim-0 — output scale[0] "
         f"will default to 1.0. "
-        f"If this is actually a Z-stack mis-labeled as channels/samples, "
-        f"pass --axes_order zyx to re-interpret dim-0 as Z, "
-        f"or fix the source file's axes tag.",
+        f"If this is actually a Z-stack mis-labeled as channels/samples/index, "
+        f"pass --relabel_axis {non_spatial[0] if non_spatial else 'X'}=z to "
+        f"explicitly re-interpret dim-0 as Z, or fix the source file's axes tag. "
+        f"(--axes_order only reorders already-spatial axes; it does not "
+        f"reinterpret axis identity.)",
         file=_sys.stderr,
     )
 
@@ -1132,6 +1385,22 @@ def _get_input_metadata(args):
         if labels and all(labels):
             # Normalize 'channel' to 'c'
             axes_order = ['c' if l.lower() == 'channel' else l.lower() for l in labels]
+
+    # Apply explicit --relabel_axis here too, so resource estimation (chunk/shard
+    # sizing) and the mismatch warning below both see the corrected axis identity
+    # instead of re-warning about something the user already fixed explicitly.
+    if axes_order and getattr(args, 'relabel_axis', None):
+        relabel = {}
+        for spec in args.relabel_axis:
+            if '=' in spec:
+                old, new = spec.lower().split('=', 1)
+                relabel[old.strip()] = new.strip()
+        relabeled = [relabel.get(a, a) for a in axes_order]
+        if len(relabeled) != len(set(relabeled)):
+            raise ValueError(
+                f"--relabel_axis would create a duplicate axis name: "
+                f"{axes_order} -> {relabeled}")
+        axes_order = relabeled
 
     # Catch CYX/IYX/SYX mis-labeling early, before resource estimation silently
     # drops the Z value from --voxel_size.
@@ -1225,6 +1494,24 @@ def run_local_pyramid(s0_path, root_path, downsample_method="auto",
             verbose=verbose,
             cumulative_factor_for_metadata=cumulative_factors,
         )
+
+        # Check whether any data was actually written at this level.
+        # Sparse label data (e.g. synapse annotations) can produce all-zero output
+        # at coarser scales; zarr3 then writes no chunk files.  Remove the empty
+        # pre-created level directories and stop — all subsequent levels would also
+        # be all-zero since downsampling is chained.
+        level_name_str = get_level_name(level, prefix)
+        level_path = os.path.join(root_path, level_name_str)
+        if not _level_has_data(level_path):
+            print(f"\n  {level_name_str}: no shard data written (all-zero at this scale).")
+            print(f"  Removing empty pre-created levels from {level_name_str} onward.")
+            for future_info in plan['levels'][plan['levels'].index(level_info):]:
+                future_level_path = os.path.join(root_path, get_level_name(future_info['level'], prefix))
+                if os.path.exists(future_level_path):
+                    shutil.rmtree(future_level_path)
+                    print(f"  Removed: {future_level_path}")
+            plan['num_levels'] = level - 1
+            break
 
     update_ome_metadata_if_needed(root_path, use_ome_structure=True, include_translation=include_translation, downsample_method=downsample_method)
 
@@ -1415,8 +1702,15 @@ def submit_job(args, return_job_id=False):
         reinvoke.append("--no-nested-structure")
     if getattr(args, 'bbox', None):
         reinvoke += ["--bbox", args.bbox]
+    if getattr(args, 'bbox_axes', None):
+        reinvoke += ["--bbox_axes", args.bbox_axes]
+    if getattr(args, 'squeeze_singleton_axes', False):
+        reinvoke.append("--squeeze_singleton_axes")
     if getattr(args, 'axes_order', None):
         reinvoke += ["--axes_order", args.axes_order]
+    if getattr(args, 'relabel_axis', None):
+        for spec in args.relabel_axis:
+            reinvoke += ["--relabel_axis", spec]
     if args.log_dir:
         reinvoke += ["--log_dir", args.log_dir]
     if getattr(args, 'no_ome_meta_export', False):
@@ -1429,6 +1723,10 @@ def submit_job(args, return_job_id=False):
         reinvoke += ["--dtype", args.dtype]
     if getattr(args, 'add_to_existing', False):
         reinvoke.append("--add-to-existing")
+    if getattr(args, 'output_offset', None) is not None:
+        reinvoke += ["--output-offset"] + [str(x) for x in args.output_offset]
+    if getattr(args, 'target_shape', None) is not None:
+        reinvoke += ["--target-shape"] + [str(x) for x in args.target_shape]
     # Convert to properly quoted shell command string
     # This handles paths with spaces correctly when bsub creates its wrapper
     reinvoke_str = shlex.join(reinvoke)
@@ -2610,25 +2908,40 @@ def main(argv=None):
                 "--add-to-existing requires --data-type labels or --data-type image "
                 "(or --is-label for label data)"
             )
-        subgroup_parent = subgroup.split('/')[0]  # "labels" or "raw"
-        tmp_subgroup_path = os.path.join(final_output, subgroup_parent + '.tmp')
-        # Clean leftover .tmp subgroup from prior failed run
-        if os.path.exists(tmp_subgroup_path):
-            shutil.rmtree(tmp_subgroup_path)
-            if verbose:
-                print(f"Removed leftover temporary subgroup: {tmp_subgroup_path}")
-        # Warn if target subgroup already exists
-        existing_subgroup = os.path.join(final_output, subgroup_parent)
-        if os.path.exists(existing_subgroup) and verbose:
-            print(f"Warning: existing {subgroup_parent}/ will be replaced on completion")
-        # Route writer to .tmp subgroup via labels_container override
+        subgroup_parent = subgroup.split('/')[0]   # "labels" or "raw"
+        label_name_orig = subgroup.split('/')[-1]  # "neurons"
         if subgroup_parent == 'labels':
-            args._labels_container_override = 'labels.tmp'
+            # New approach: write to labels/<label_name>.tmp/ then rename within
+            # the same parent directory.  A same-parent rename is a single atomic
+            # metadata operation on Lustre/GPFS, avoiding cross-directory renames
+            # that can silently drop files on multi-MDT Lustre configurations.
+            tmp_label_path = os.path.join(final_output, subgroup_parent, label_name_orig + '.tmp')
+            # Clean leftover <label_name>.tmp from a prior failed run
+            if os.path.exists(tmp_label_path):
+                shutil.rmtree(tmp_label_path)
+                if verbose:
+                    print(f"Removed leftover temporary label: {tmp_label_path}")
+            # Signal the writer to use '<label_name>.tmp' as the in-flight label key.
+            # args.label_key is intentionally NOT changed so --label-key is propagated
+            # correctly to worker jobs via reinvoke without double-applying .tmp.
+            args._label_tmp_key = label_name_orig + '.tmp'
+            tmp_output = None
+            if verbose:
+                print(f"Writing to temporary label: {tmp_label_path}")
         else:
+            # Legacy path for non-labels subgroups (raw/image): subgroup_parent.tmp/
+            tmp_subgroup_path = os.path.join(final_output, subgroup_parent + '.tmp')
+            if os.path.exists(tmp_subgroup_path):
+                shutil.rmtree(tmp_subgroup_path)
+                if verbose:
+                    print(f"Removed leftover temporary subgroup: {tmp_subgroup_path}")
+            existing_subgroup = os.path.join(final_output, subgroup_parent)
+            if os.path.exists(existing_subgroup) and verbose:
+                print(f"Warning: existing {subgroup_parent}/ will be replaced on completion")
             args._image_key_override = subgroup_parent + '.tmp'
-        tmp_output = None  # Signal: no container-level .tmp
-        if verbose:
-            print(f"Writing to subgroup: {tmp_subgroup_path}")
+            tmp_output = None
+            if verbose:
+                print(f"Writing to subgroup: {tmp_subgroup_path}")
     else:
         tmp_output = _tmp_path_for(final_output)
         # Clean up leftover .tmp from a prior failed run
@@ -2639,6 +2952,73 @@ def main(argv=None):
         args.output = tmp_output
         if verbose:
             print(f"Writing to temporary path: {tmp_output}")
+
+    # --- --output-offset branch: sparse label ingest at TCZYX position ---
+    # Bypasses the standard converter pipeline. The pyramid coordinator
+    # (submitted separately when --auto_multiscale --submit are used) runs on
+    # the final label path after _finalize_add_to_existing() renames .tmp.
+    if add_to_existing and subgroup_parent == 'labels' and getattr(args, 'output_offset', None) is not None:
+        from .utils.label_ingest import ingest_label_at_offset, _read_target_shape_from_container
+
+        offset = list(args.output_offset)
+        if getattr(args, 'target_shape', None) is not None:
+            target_shape = list(args.target_shape)
+        else:
+            target_shape = _read_target_shape_from_container(final_output)
+
+        ndim = len(target_shape)
+        offset = [0] * (ndim - len(offset)) + offset
+
+        chunk_shape = parse_shape(args.chunk_shape, 'chunk_shape') if args.chunk_shape else (64, 64, 64)
+
+        _reader = create_reader(args)
+        source_ts = _reader.get_tensorstore()
+
+        ingest_label_at_offset(
+            source_ts=source_ts,
+            target_container=final_output,
+            label_tmp_key=args._label_tmp_key,
+            offset=offset,
+            target_shape=target_shape,
+            chunk_shape=chunk_shape,
+            dtype=getattr(args, 'dtype', None) or get_dtype_name(source_ts.dtype),
+            compression=getattr(args, 'compression', 'zstd'),
+            compression_level=getattr(args, 'compression_level', 5),
+        )
+        _finalize_add_to_existing(
+            final_output=final_output,
+            subgroup_parent=subgroup_parent,
+            label_name=label_name_orig,
+            output_format=args.output_format,
+            verbose=verbose,
+        )
+        # --auto_multiscale was previously silently ignored on this branch --
+        # execution returned right here, before the pyramid block below ever
+        # ran, so every --output-offset label stayed at s0 even when
+        # --auto_multiscale was requested. finalize already renamed .tmp ->
+        # final above, so pyramid generation here reads the final (non-.tmp)
+        # label path directly, unlike the standard branch below. Levels with
+        # no real data are still pruned by run_local_pyramid's own
+        # data-presence check, same as any other pyramid generation path.
+        if args.auto_multiscale:
+            s0_path, _ = find_base_level(
+                os.path.join(final_output, 'labels', label_name_orig), verbose=verbose
+            )
+            root_path = os.path.dirname(s0_path)
+            resolved_method = resolve_downsample_method(args.downsample_method, s0_path)
+            custom_per_level_factors = None
+            if args.per_level_factors:
+                custom_per_level_factors = parse_per_level_factors(args.per_level_factors)
+            run_local_pyramid(
+                s0_path=s0_path,
+                root_path=root_path,
+                downsample_method=resolved_method,
+                custom_per_level_factors=custom_per_level_factors,
+                use_shard=use_shard,
+                include_translation=not args.no_translation,
+                verbose=verbose,
+            )
+        return
 
     reader = create_reader(args)
 
@@ -2736,8 +3116,29 @@ def main(argv=None):
         if len(axes_order_override) != len(set(axes_order_override)):
             raise ValueError(f"--axes_order must not have duplicates, got: {args.axes_order}")
 
+    # Parse --relabel_axis (explicit axis identity correction; repeatable OLD=NEW)
+    axis_relabel = None
+    if getattr(args, 'relabel_axis', None):
+        axis_relabel = {}
+        for spec in args.relabel_axis:
+            if '=' not in spec:
+                raise ValueError(
+                    f"--relabel_axis must be in OLD=NEW form (e.g. 'i=z'), got: {spec}")
+            old, new = spec.lower().split('=', 1)
+            old, new = old.strip(), new.strip()
+            if len(old) != 1 or len(new) != 1:
+                raise ValueError(
+                    f"--relabel_axis expects single-character axis names, got: {spec}")
+            axis_relabel[old] = new
+
     # Parse bbox for subvolume extraction
     bbox = parse_bbox(args.bbox) if getattr(args, 'bbox', None) else None
+    bbox_axes = parse_bbox_axes(args.bbox_axes) if getattr(args, 'bbox_axes', None) else None
+    if bbox_axes is not None and bbox is not None and len(bbox_axes) != len(bbox[0]):
+        raise ValueError(
+            f"--bbox_axes has {len(bbox_axes)} indices but --bbox has {len(bbox[0])} "
+            f"origin/size values — they must match 1:1."
+        )
 
     no_ome_meta_export = getattr(args, 'no_ome_meta_export', False)
     no_ome_xml_attr = getattr(args, 'no_ome_xml_attr', False)
@@ -2758,7 +3159,10 @@ def main(argv=None):
             is_label=is_label,
             expand_to_5d=expand_to_5d,
             bbox=bbox,
+            bbox_axes=bbox_axes,
+            squeeze_singleton_axes=getattr(args, 'squeeze_singleton_axes', False),
             axes_order_override=axes_order_override,
+            axis_relabel=axis_relabel,
             no_ome_meta_export=no_ome_meta_export,
             no_ome_xml_attr=no_ome_xml_attr,
             output_dtype=getattr(args, 'dtype', None),
@@ -2776,7 +3180,10 @@ def main(argv=None):
             is_label=is_label,
             expand_to_5d=expand_to_5d,
             bbox=bbox,
+            bbox_axes=bbox_axes,
+            squeeze_singleton_axes=getattr(args, 'squeeze_singleton_axes', False),
             axes_order_override=axes_order_override,
+            axis_relabel=axis_relabel,
             no_ome_meta_export=no_ome_meta_export,
             no_ome_xml_attr=no_ome_xml_attr,
             output_dtype=getattr(args, 'dtype', None),
@@ -2801,11 +3208,15 @@ def main(argv=None):
         # wrong levels.
         pyramid_subgroup = _resolve_conversion_subgroup(args)
         if add_to_existing and pyramid_subgroup:
-            # Pyramid runs on .tmp subgroup before rename
-            # e.g. labels/segmentation → labels.tmp/segmentation
-            parts = pyramid_subgroup.split('/', 1)
-            pyramid_subgroup = parts[0] + '.tmp' + ('/' + parts[1] if len(parts) > 1 else '')
-            base_level_input = os.path.join(final_output, pyramid_subgroup)
+            if subgroup_parent == 'labels':
+                # New approach: _label_tmp_key is already set so _resolve_conversion_subgroup
+                # returns 'labels/<label_name>.tmp' — use it directly, no transformation needed.
+                base_level_input = os.path.join(final_output, pyramid_subgroup)
+            else:
+                # Legacy: transform 'raw/...' → 'raw.tmp/...'
+                parts = pyramid_subgroup.split('/', 1)
+                pyramid_subgroup = parts[0] + '.tmp' + ('/' + parts[1] if len(parts) > 1 else '')
+                base_level_input = os.path.join(final_output, pyramid_subgroup)
         else:
             base_level_input = (
                 os.path.join(args.output, pyramid_subgroup) if pyramid_subgroup else args.output

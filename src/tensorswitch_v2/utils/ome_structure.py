@@ -30,8 +30,47 @@ Usage:
 
 import os
 import json
+import time as _time
+import contextlib
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass
+
+
+@contextlib.contextmanager
+def _file_lock(path, timeout=120.0, poll_interval=0.05):
+    """NFS-safe exclusive lock for a shared metadata file's read-merge-write span.
+
+    Used to guard write_labels_container_metadata() and write_root_metadata(),
+    which read an existing shared zarr.json/.zattrs, merge in a new label, and
+    write the result back -- unsafe if many --add-to-existing label conversions
+    run concurrently against the same container (see __main__.py's
+    _locked_json_update for the full incident writeup, Aug 21 2026).
+
+    Uses os.mkdir() rather than fcntl.flock(): flock is only an ADVISORY lock
+    and is not reliably enforced across different client machines on network
+    filesystems (NFS/Lustre/GPFS) unless the mount explicitly enables
+    distributed lock support -- confirmed broken in production on the
+    /groups NFS mount even with flock held (two jobs on two different compute
+    nodes both "acquired" it independently). os.mkdir() is a POSIX-guaranteed
+    atomic metadata operation that all major network filesystems correctly
+    implement for genuine cross-client mutual exclusion.
+    """
+    lock_dir = path + '.lock'
+    deadline = _time.monotonic() + timeout
+    while True:
+        try:
+            os.mkdir(lock_dir)
+            break
+        except FileExistsError:
+            if _time.monotonic() > deadline:
+                raise TimeoutError(
+                    f"Could not acquire lock {lock_dir} after {timeout}s "
+                    f"(stale lock from a crashed process?)")
+            _time.sleep(poll_interval)
+    try:
+        yield
+    finally:
+        os.rmdir(lock_dir)
 
 
 @dataclass
@@ -446,24 +485,26 @@ class OMEStructure:
             label_names: List of label image names
         """
         path = os.path.join(self.get_labels_container_path(), 'zarr.json')
+        os.makedirs(os.path.dirname(path), exist_ok=True)
 
-        # Read existing labels to merge (avoid clobbering previous label entries)
-        existing_labels = []
-        if os.path.exists(path):
-            try:
-                with open(path, 'r') as f:
-                    existing_metadata = json.load(f)
-                existing_labels = existing_metadata.get('attributes', {}).get('ome', {}).get('labels', [])
-            except (json.JSONDecodeError, IOError):
-                pass
+        with _file_lock(path):
+            # Read existing labels to merge (avoid clobbering previous label entries)
+            existing_labels = []
+            if os.path.exists(path):
+                try:
+                    with open(path, 'r') as f:
+                        existing_metadata = json.load(f)
+                    existing_labels = existing_metadata.get('attributes', {}).get('ome', {}).get('labels', [])
+                except (json.JSONDecodeError, IOError):
+                    pass
 
-        # Merge: union of existing + new label names, preserving order
-        new_labels = label_names or [self.config.label_name]
-        merged = list(dict.fromkeys(existing_labels + new_labels))
+            # Merge: union of existing + new label names, preserving order
+            new_labels = label_names or [self.config.label_name]
+            merged = list(dict.fromkeys(existing_labels + new_labels))
 
-        metadata = self.create_base_group_metadata()
-        metadata['attributes']['ome']['labels'] = merged
-        self.write_metadata(path, metadata)
+            metadata = self.create_base_group_metadata()
+            metadata['attributes']['ome']['labels'] = merged
+            self.write_metadata(path, metadata)
 
     def write_label_image_metadata(
         self,
@@ -526,57 +567,59 @@ class OMEStructure:
             label_name: Label name for path prefix (uses config default if None)
         """
         path = os.path.join(self.output_path, 'zarr.json')
+        os.makedirs(self.output_path, exist_ok=True)
 
-        # Read existing metadata if present (to preserve image multiscales when adding labels)
-        existing_metadata = {}
-        if os.path.exists(path):
-            try:
-                with open(path, 'r') as f:
-                    existing_metadata = json.load(f)
-            except (json.JSONDecodeError, IOError):
-                existing_metadata = {}
+        with _file_lock(path):
+            # Read existing metadata if present (to preserve image multiscales when adding labels)
+            existing_metadata = {}
+            if os.path.exists(path):
+                try:
+                    with open(path, 'r') as f:
+                        existing_metadata = json.load(f)
+                except (json.JSONDecodeError, IOError):
+                    existing_metadata = {}
 
-        # Create new metadata
-        metadata = self.create_root_metadata(
-            image_multiscales=image_multiscales,
-            has_labels=has_labels,
-            image_name=image_name,
-            label_multiscales=label_multiscales,
-            label_name=label_name,
-        )
+            # Create new metadata
+            metadata = self.create_root_metadata(
+                image_multiscales=image_multiscales,
+                has_labels=has_labels,
+                image_name=image_name,
+                label_multiscales=label_multiscales,
+                label_name=label_name,
+            )
 
-        # Merge: preserve existing multiscales if we're not providing new ones
-        existing_ome = existing_metadata.get('attributes', {}).get('ome', {})
-        new_ome = metadata.get('attributes', {}).get('ome', {})
+            # Merge: preserve existing multiscales if we're not providing new ones
+            existing_ome = existing_metadata.get('attributes', {}).get('ome', {})
+            new_ome = metadata.get('attributes', {}).get('ome', {})
 
-        if image_multiscales is None and 'multiscales' in existing_ome:
-            new_ome['multiscales'] = existing_ome['multiscales']
+            if image_multiscales is None and 'multiscales' in existing_ome:
+                new_ome['multiscales'] = existing_ome['multiscales']
 
-        # Merge: preserve existing labels if present and we're adding more
-        if 'labels' in existing_ome and 'labels' in new_ome:
-            existing_labels = set(existing_ome.get('labels', []))
-            new_labels = set(new_ome.get('labels', []))
-            new_ome['labels'] = list(existing_labels | new_labels)
-        elif 'labels' in existing_ome and 'labels' not in new_ome:
-            new_ome['labels'] = existing_ome['labels']
+            # Merge: preserve existing labels if present and we're adding more
+            if 'labels' in existing_ome and 'labels' in new_ome:
+                existing_labels = set(existing_ome.get('labels', []))
+                new_labels = set(new_ome.get('labels', []))
+                new_ome['labels'] = list(existing_labels | new_labels)
+            elif 'labels' in existing_ome and 'labels' not in new_ome:
+                new_ome['labels'] = existing_ome['labels']
 
-        # Note: omero is intentionally NOT written to root zarr.json.
-        # It belongs at the image group level (raw/zarr.json) only.
-        # Writing it at root breaks Neuroglancer's nested label discovery.
+            # Note: omero is intentionally NOT written to root zarr.json.
+            # It belongs at the image group level (raw/zarr.json) only.
+            # Writing it at root breaks Neuroglancer's nested label discovery.
 
-        metadata['attributes']['ome'] = new_ome
+            metadata['attributes']['ome'] = new_ome
 
-        # Preserve existing non-ome attributes (e.g., source provenance)
-        for key, value in existing_metadata.get('attributes', {}).items():
-            if key not in metadata['attributes']:
-                metadata['attributes'][key] = value
+            # Preserve existing non-ome attributes (e.g., source provenance)
+            for key, value in existing_metadata.get('attributes', {}).items():
+                if key not in metadata['attributes']:
+                    metadata['attributes'][key] = value
 
-        # Preserve or set ome_xml at attributes level (consistent with legacy non-nested mode)
-        final_ome_xml = ome_xml or existing_metadata.get('attributes', {}).get('ome_xml')
-        if final_ome_xml and not no_ome_xml_attr:
-            metadata['attributes']['ome_xml'] = final_ome_xml
+            # Preserve or set ome_xml at attributes level (consistent with legacy non-nested mode)
+            final_ome_xml = ome_xml or existing_metadata.get('attributes', {}).get('ome_xml')
+            if final_ome_xml and not no_ome_xml_attr:
+                metadata['attributes']['ome_xml'] = final_ome_xml
 
-        self.write_metadata(path, metadata)
+            self.write_metadata(path, metadata)
 
         # Write OME/METADATA.ome.xml (or .czi.xml) file
         if final_ome_xml and not no_ome_meta_export:
@@ -986,24 +1029,25 @@ class OMEStructureZarr2:
         """Write labels container metadata, merging with existing labels."""
         path = self.get_labels_container_path()
         self._write_zgroup(path)
-
-        # Read existing labels to merge (avoid clobbering previous label entries)
-        existing_labels = []
         zattrs_path = os.path.join(path, '.zattrs')
-        if os.path.exists(zattrs_path):
-            try:
-                with open(zattrs_path, 'r') as f:
-                    existing_metadata = json.load(f)
-                existing_labels = existing_metadata.get('labels', [])
-            except (json.JSONDecodeError, IOError):
-                pass
 
-        # Merge: union of existing + new label names, preserving order
-        new_labels = label_names or [self.config.label_name]
-        merged = list(dict.fromkeys(existing_labels + new_labels))
+        with _file_lock(zattrs_path):
+            # Read existing labels to merge (avoid clobbering previous label entries)
+            existing_labels = []
+            if os.path.exists(zattrs_path):
+                try:
+                    with open(zattrs_path, 'r') as f:
+                        existing_metadata = json.load(f)
+                    existing_labels = existing_metadata.get('labels', [])
+                except (json.JSONDecodeError, IOError):
+                    pass
 
-        metadata = {"labels": merged}
-        self._write_zattrs(path, metadata)
+            # Merge: union of existing + new label names, preserving order
+            new_labels = label_names or [self.config.label_name]
+            merged = list(dict.fromkeys(existing_labels + new_labels))
+
+            metadata = {"labels": merged}
+            self._write_zattrs(path, metadata)
 
     def write_label_image_metadata(
         self,
@@ -1043,54 +1087,55 @@ class OMEStructureZarr2:
     ) -> None:
         """Write root .zattrs metadata, merging with existing if present."""
         self._write_zgroup(self.output_path)
-
-        # Read existing metadata if present (to preserve image multiscales when adding labels)
-        existing_metadata = {}
         zattrs_path = os.path.join(self.output_path, '.zattrs')
-        if os.path.exists(zattrs_path):
-            try:
-                with open(zattrs_path, 'r') as f:
-                    existing_metadata = json.load(f)
-            except (json.JSONDecodeError, IOError):
-                existing_metadata = {}
 
-        # Create new metadata
-        metadata = self.create_root_metadata(
-            image_multiscales=image_multiscales,
-            has_labels=has_labels,
-            image_name=image_name,
-            label_multiscales=label_multiscales,
-            label_name=label_name,
-        )
+        with _file_lock(zattrs_path):
+            # Read existing metadata if present (to preserve image multiscales when adding labels)
+            existing_metadata = {}
+            if os.path.exists(zattrs_path):
+                try:
+                    with open(zattrs_path, 'r') as f:
+                        existing_metadata = json.load(f)
+                except (json.JSONDecodeError, IOError):
+                    existing_metadata = {}
 
-        # Merge: preserve existing multiscales if we're not providing new ones
-        if image_multiscales is None and 'multiscales' in existing_metadata:
-            metadata['multiscales'] = existing_metadata['multiscales']
+            # Create new metadata
+            metadata = self.create_root_metadata(
+                image_multiscales=image_multiscales,
+                has_labels=has_labels,
+                image_name=image_name,
+                label_multiscales=label_multiscales,
+                label_name=label_name,
+            )
 
-        # Merge: preserve existing labels if present and we're adding more
-        if 'labels' in existing_metadata and 'labels' in metadata:
-            # Combine labels lists without duplicates
-            existing_labels = set(existing_metadata.get('labels', []))
-            new_labels = set(metadata.get('labels', []))
-            metadata['labels'] = list(existing_labels | new_labels)
-        elif 'labels' in existing_metadata and 'labels' not in metadata:
-            metadata['labels'] = existing_metadata['labels']
+            # Merge: preserve existing multiscales if we're not providing new ones
+            if image_multiscales is None and 'multiscales' in existing_metadata:
+                metadata['multiscales'] = existing_metadata['multiscales']
 
-        # Note: omero is intentionally NOT written to root .zattrs.
-        # It belongs at the image group level (raw/.zattrs) only.
-        # Writing it at root breaks Neuroglancer's nested label discovery.
+            # Merge: preserve existing labels if present and we're adding more
+            if 'labels' in existing_metadata and 'labels' in metadata:
+                # Combine labels lists without duplicates
+                existing_labels = set(existing_metadata.get('labels', []))
+                new_labels = set(metadata.get('labels', []))
+                metadata['labels'] = list(existing_labels | new_labels)
+            elif 'labels' in existing_metadata and 'labels' not in metadata:
+                metadata['labels'] = existing_metadata['labels']
 
-        # Preserve existing non-ome attributes (e.g., source provenance)
-        for key, value in existing_metadata.items():
-            if key not in metadata:
-                metadata[key] = value
+            # Note: omero is intentionally NOT written to root .zattrs.
+            # It belongs at the image group level (raw/.zattrs) only.
+            # Writing it at root breaks Neuroglancer's nested label discovery.
 
-        # Preserve or set ome_xml (consistent with non-nested Zarr2 mode)
-        final_ome_xml = ome_xml or existing_metadata.get('ome_xml')
-        if final_ome_xml and not no_ome_xml_attr:
-            metadata['ome_xml'] = final_ome_xml
+            # Preserve existing non-ome attributes (e.g., source provenance)
+            for key, value in existing_metadata.items():
+                if key not in metadata:
+                    metadata[key] = value
 
-        self._write_zattrs(self.output_path, metadata)
+            # Preserve or set ome_xml (consistent with non-nested Zarr2 mode)
+            final_ome_xml = ome_xml or existing_metadata.get('ome_xml')
+            if final_ome_xml and not no_ome_xml_attr:
+                metadata['ome_xml'] = final_ome_xml
+
+            self._write_zattrs(self.output_path, metadata)
 
         # Write OME/METADATA.ome.xml (or .czi.xml) file
         if final_ome_xml and not no_ome_meta_export:

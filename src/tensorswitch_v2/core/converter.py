@@ -6,6 +6,7 @@ Provides format-agnostic conversion with LSF multi-job and Dask single-job suppo
 
 import json
 import os
+import re
 import time
 from typing import Optional, Tuple, List, Dict, Any
 import numpy as np
@@ -71,7 +72,10 @@ class DistributedConverter:
         is_label: bool = False,
         expand_to_5d: bool = False,
         bbox: Optional[Tuple[Tuple[int, ...], Tuple[int, ...]]] = None,
+        bbox_axes: Optional[Tuple[int, ...]] = None,
+        squeeze_singleton_axes: bool = False,
         axes_order_override: Optional[List[str]] = None,
+        axis_relabel: Optional[Dict[str, str]] = None,
         no_ome_meta_export: bool = False,
         no_ome_xml_attr: bool = False,
         output_dtype: Optional[str] = None,
@@ -80,10 +84,26 @@ class DistributedConverter:
 
         Args:
             bbox: Optional (origin, size) tuple for subvolume extraction.
-                  origin and size are 3-tuples in source dimension order.
-                  Spatial dimensions are auto-detected from domain labels.
+                  origin and size are N-tuples in source dimension order.
+                  Spatial dimensions are auto-detected from domain labels,
+                  unless bbox_axes is given (see below).
+            bbox_axes: Optional tuple of 0-based source axis indices that bbox's
+                  origin/size values target, same length as bbox's tuples. Use this
+                  when domain labels can't identify spatial axes reliably (e.g. a
+                  source opened at a bare array subpath, bypassing the parent
+                  group's OME multiscales metadata, reports generic dim_0..dim_N
+                  labels instead of t/c/z/y/x — auto-detection would then either
+                  treat every axis as spatial, or fail outright). When set, this
+                  bypasses label-based auto-detection entirely and is authoritative.
             no_ome_meta_export: If True, skip writing OME/METADATA.ome.xml file.
             no_ome_xml_attr: If True, skip embedding OME/CZI XML in zarr.json/.zattrs.
+            axis_relabel: Optional {old_name: new_name} map (lowercase) applied to
+                  the detected axes_order immediately after detection, before any
+                  other axis logic runs. Explicit only -- never inferred. Use this
+                  to correct a reader's mis-detected axis identity (e.g. a plain
+                  TIFF Z-stack that tifffile reports as a generic index axis 'i',
+                  or an OME axis wrongly tagged 't'). Does not touch voxel data,
+                  only the axis name used for all downstream spatial/voxel logic.
         """
         start_time = time.time()
 
@@ -100,8 +120,27 @@ class DistributedConverter:
             except Exception:
                 labels = []
 
-            # Identify spatial dimensions (skip channel, time, etc.)
-            if labels:
+            if bbox_axes is not None:
+                # Explicit, authoritative — bypasses label-based detection entirely.
+                if len(bbox_axes) != len(origin):
+                    raise ValueError(
+                        f"bbox_axes has {len(bbox_axes)} indices but bbox has "
+                        f"{len(origin)} origin/size values — must match 1:1."
+                    )
+                if any(a < 0 or a >= self._input_store.ndim for a in bbox_axes):
+                    raise ValueError(
+                        f"bbox_axes {bbox_axes} out of range for source with "
+                        f"{self._input_store.ndim} dimensions."
+                    )
+                spatial_dims = list(bbox_axes)
+            elif labels:
+                # Identify spatial dimensions (skip channel, time, etc.). Only
+                # reliable when labels are real axis names (x/y/z/c/t/...) — a
+                # source with generic dim_0..dim_N labels (e.g. opened at a bare
+                # array subpath, bypassing the parent group's OME multiscales
+                # metadata) has none of them match NON_SPATIAL_AXES, so every
+                # axis looks "spatial" and origin/size silently lands on the
+                # wrong dims. Pass bbox_axes explicitly in that case.
                 spatial_dims = [i for i, l in enumerate(labels)
                                 if l.lower() not in NON_SPATIAL_AXES]
             else:
@@ -189,13 +228,28 @@ class DistributedConverter:
         use_fortran_order = False
         axes_order = None
 
-        # Get domain labels from TensorStore (works for all tiers now)
+        # Get domain labels from TensorStore (works for all tiers now).
+        # TensorStore synthesizes generic `dim_0..dim_N` labels when a zarr3
+        # array has no `dimension_names` of its own (common when only the
+        # PARENT GROUP carries real axis names, e.g. opening a BigStitcher-Spark
+        # export at a bare array subpath like `.../fused.ome.zarr/0` instead of
+        # `.../fused.ome.zarr` + `--dataset_path 0`). These are non-empty
+        # strings, so a naive "non-empty" check accepts them as real axis
+        # identity -- silently breaking every downstream axis-name-dependent
+        # step (voxel size, spatial-dim detection for --bbox, chunk-shape
+        # auto-padding). Reject the synthetic pattern so metadata-based
+        # detection below gets a chance to recover the real names instead.
+        _dim_n_pattern = re.compile(r'^dim_\d+$')
         try:
             domain_labels = list(self._input_store.domain.labels)
-            if domain_labels and all(isinstance(l, str) and l for l in domain_labels):
+            if (domain_labels and all(isinstance(l, str) and l for l in domain_labels)
+                    and not all(_dim_n_pattern.match(l) for l in domain_labels)):
                 axes_order = domain_labels
                 if verbose:
                     print(f"  Axes from TensorStore domain: {axes_order}")
+            elif domain_labels and verbose and all(_dim_n_pattern.match(l) for l in domain_labels):
+                print(f"  TensorStore domain labels are synthetic ({domain_labels}) -- "
+                      f"falling back to reader metadata for real axis identity")
         except Exception:
             pass
 
@@ -222,8 +276,114 @@ class DistributedConverter:
                         ]
                         if verbose:
                             print(f"  Axes from OME-NGFF metadata: {axes_order}")
+
+                        # The real TensorStore domain still carries whatever labels
+                        # it had before (synthetic dim_N, or none) -- axes_order
+                        # above is just a tracking variable until the domain itself
+                        # is relabeled to match, positionally, same mechanism (and
+                        # same reason) as the --relabel_axis block below.
+                        try:
+                            current_labels = list(self._input_store.domain.labels)
+                        except Exception:
+                            current_labels = []
+                        if (len(axes_order) == self._input_store.ndim
+                                and current_labels != axes_order):
+                            try:
+                                self._input_store = self._input_store[
+                                    ts.d[tuple(range(len(axes_order)))].label[tuple(axes_order)]
+                                ]
+                                if verbose:
+                                    print(f"  Relabeled input domain to match "
+                                          f"recovered axes: {axes_order}")
+                            except Exception as e:
+                                if verbose:
+                                    print(f"  Warning: could not relabel input "
+                                          f"domain to {axes_order}: {e}")
             except Exception:
                 pass
+
+        # 2a-relabel. Apply explicit, user-named axis relabeling (--relabel_axis).
+        # This is the ONLY place axis identity is ever changed from what the
+        # reader detected -- always explicit, never inferred. Runs before any
+        # other axis logic (spatial detection, --axes_order reordering, voxel
+        # size assignment) so everything downstream sees the corrected name.
+        if axis_relabel and axes_order:
+            relabel_lower = {k.lower(): v.lower() for k, v in axis_relabel.items()}
+            new_axes_order = [relabel_lower.get(a.lower(), a) for a in axes_order]
+            if new_axes_order != axes_order:
+                # Guard against creating a duplicate axis name (e.g. relabeling
+                # 'x' to 'z' when the source already has a genuine 'z' axis
+                # elsewhere) -- fail loudly rather than silently producing two
+                # axes with the same name.
+                seen = {}
+                for i, a in enumerate(new_axes_order):
+                    if a in seen:
+                        raise ValueError(
+                            f"--relabel_axis would create duplicate axis '{a}' "
+                            f"(positions {seen[a]} and {i} in {new_axes_order}, "
+                            f"from original axes {axes_order}). Check that the "
+                            f"target axis name isn't already used elsewhere.")
+                    seen[a] = i
+                if verbose:
+                    print(f"  Relabeled axes (--relabel_axis): {axes_order} -> {new_axes_order}")
+
+                # Also rename the labels on the REAL TensorStore domain, not just
+                # the tracking variable above. Several downstream steps (e.g. the
+                # per-chunk read at self._input_store[read_domain]) index the
+                # input store using a domain object built from labels that now
+                # reflect the corrected axes_order (e.g. via the output store's
+                # domain). If self._input_store's own domain still carries the
+                # OLD label, TensorStore's label-based domain matching raises
+                # "Label 'z' does not match one of {...}" -- so both must agree.
+                # Positional (by-index) relabeling avoids any case-sensitivity
+                # or "was it labeled at all" pitfalls.
+                try:
+                    self._input_store = self._input_store[
+                        ts.d[tuple(range(len(new_axes_order)))].label[tuple(new_axes_order)]
+                    ]
+                except Exception as e:
+                    raise ValueError(
+                        f"--relabel_axis could not be applied to the input "
+                        f"TensorStore domain ({axes_order} -> {new_axes_order}): {e}")
+
+                axes_order = new_axes_order
+
+        # 2a-squeeze. Squeeze singleton non-spatial axes (--squeeze_singleton_axes), e.g.
+        # drop t=1,c=1 from a 5D [t,c,z,y,x] BigStitcher-Spark export so the
+        # OUTPUT never has them either -- chunk keys are written directly as
+        # c/<z>/<y>/<x> from the start, not c/0/0/<z>/<y>/<x> requiring a
+        # post-hoc rename (see scripts/lmvd/squeeze_singleton_tc_axes.py, which
+        # is a pure metadata+directory-rename fix for stores already written
+        # with the singleton axes -- this does the same drop, just before any
+        # bytes are written, so nothing needs fixing up afterward).
+        # Only squeezes axes identified as non-spatial (NON_SPATIAL_AXES) with
+        # size 1 -- never a genuinely-spatial axis that happens to be 1 voxel
+        # thick, and never anything when axes_order couldn't be determined.
+        if squeeze_singleton_axes:
+            if not axes_order:
+                raise ValueError(
+                    "--squeeze_singleton_axes requires known axis identity "
+                    "(none could be determined for this source) -- use "
+                    "--relabel_axis to assign axis names first."
+                )
+            squeeze_mask = [
+                s == 1 and axes_order[i].lower() in NON_SPATIAL_AXES
+                for i, s in enumerate(self._input_store.shape)
+            ]
+            if any(squeeze_mask):
+                idx = tuple(0 if m else slice(None) for m in squeeze_mask)
+                dropped = [axes_order[i] for i, m in enumerate(squeeze_mask) if m]
+                self._input_store = self._input_store[idx]
+                axes_order = [a for a, m in zip(axes_order, squeeze_mask) if not m]
+                # input_shape was captured earlier (right after bbox, before axis
+                # detection) and is used throughout the rest of convert() -- it
+                # must be refreshed here or it silently disagrees with the now-3D
+                # axes_order (chunk/shard auto-pad, output spec shape, etc. would
+                # each see a different, inconsistent dimensionality).
+                input_shape = tuple(self._input_store.shape)
+                if verbose:
+                    print(f"  Squeezed singleton non-spatial axes {dropped}: "
+                          f"shape -> {input_shape}, axes -> {axes_order}")
 
         # Handle order: force_order overrides auto-detection
         if force_order is not None:
@@ -280,19 +440,19 @@ class DistributedConverter:
         spatial_transpose = None
         _target_axes_order = None
         if axes_order_override and axes_order:
-            # Re-interpret 't' as 'z' if override contains 'z' but source has
-            # 't' instead (common with TIFF Z-stacks mis-labeled as time)
+            # NOTE: axes_order reflects any --relabel_axis correction applied
+            # above already. --axes_order itself never reinterprets axis
+            # identity (e.g. never assumes 't' or 'i' means 'z') -- use
+            # --relabel_axis for that, explicitly. This flag only reorders
+            # axes already correctly identified as spatial.
             source_spatial = [a for a in axes_order if a.lower() in {'x', 'y', 'z'}]
-            if ('z' in axes_order_override and 'z' not in source_spatial
-                    and 't' in [a.lower() for a in axes_order]):
-                axes_order = ['z' if a.lower() == 't' else a for a in axes_order]
-                source_spatial = [a for a in axes_order if a.lower() in {'x', 'y', 'z'}]
-                if verbose:
-                    print(f"  Re-interpreted 't' as 'z': axes now {axes_order}")
             if sorted(axes_order_override) != sorted(source_spatial):
                 raise ValueError(
                     f"--axes_order {axes_order_override} doesn't match "
-                    f"source spatial axes {source_spatial}")
+                    f"source spatial axes {source_spatial}. If a non-spatial "
+                    f"axis (e.g. 't', 'i', 'c') is actually spatial, use "
+                    f"--relabel_axis to correct it explicitly first (e.g. "
+                    f"--relabel_axis i=z).")
             if axes_order_override != source_spatial:
                 # Build full target axes (non-spatial stay in place, spatial reordered)
                 target_axes = []
@@ -307,6 +467,27 @@ class DistributedConverter:
                 _target_axes_order = target_axes
                 if verbose:
                     print(f"  Axes reorder: {axes_order} -> {target_axes} (transpose: {perm})")
+
+        # 2d. Auto-normalize axis order: move all non-spatial dims before spatial dims.
+        # Handles mixed-order sources like ND2 native (ZCYX -> CZYX),
+        # neuroglancer precomputed (XYZC -> CXYZ), or 5D TZCYX -> TCZYX.
+        # Runs only when --axes_order was not given (spatial_transpose not yet set)
+        # and the detected axes have at least one non-spatial dim interleaved after
+        # a spatial dim (e.g. Z before C in ZCYX).
+        # Reuses the existing spatial_transpose machinery in block 4 and the chunk
+        # loop so no additional data-path code is needed.
+        if not spatial_transpose and axes_order:
+            _ax = [a.lower() for a in axes_order]
+            _non_sp = [i for i, a in enumerate(_ax) if a not in {'x', 'y', 'z'}]
+            _sp     = [i for i, a in enumerate(_ax) if a in     {'x', 'y', 'z'}]
+            if _non_sp and _sp and max(_non_sp) > min(_sp):
+                _norm_perm = tuple(_non_sp + _sp)
+                _norm_axes = [axes_order[i] for i in _norm_perm]
+                spatial_transpose = _norm_perm
+                _target_axes_order = _norm_axes
+                if verbose:
+                    print(f"  Auto-normalize axis order: {axes_order} -> {_norm_axes} "
+                          f"(perm: {list(_norm_perm)})")
 
         # 3. Get metadata from reader
         # Readers return voxel sizes in nanometers when real metadata exists.
@@ -478,6 +659,31 @@ class DistributedConverter:
             axes_order = _target_axes_order
             if verbose:
                 print(f"  Reordered shape: {input_shape}")
+
+        # 4b. Pad chunk/shard to match input dimensionality when a preset
+        # supplied spatial-only shapes (e.g. 3 values) for 4D CZYX/TCZYX data.
+        # The spatial_transpose block above handles this when --axes_order is
+        # given; this block covers the no-reorder case (e.g. BIOIO CZYX output
+        # with mia_lmvd preset that sets chunk=128,128,128 / shard=512,512,512).
+        # Result: (128,128,128) -> (1,128,128,128) for CZYX; shard similarly.
+        if axes_order and not spatial_transpose:
+            for attr_name in ('chunk_shape', 'shard_shape'):
+                shape_val = chunk_shape if attr_name == 'chunk_shape' else shard_shape
+                if shape_val and len(shape_val) < len(input_shape):
+                    padded = []
+                    spatial_iter = iter(shape_val)
+                    for a in axes_order:
+                        if a.lower() in {'x', 'y', 'z'}:
+                            padded.append(next(spatial_iter))
+                        else:
+                            padded.append(1)
+                    if attr_name == 'chunk_shape':
+                        chunk_shape = tuple(padded)
+                    else:
+                        shard_shape = tuple(padded)
+                    if verbose:
+                        print(f"  Auto-padded {attr_name} to match {len(input_shape)}D "
+                              f"input: {shape_val} -> {chunk_shape if attr_name == 'chunk_shape' else shard_shape}")
 
         # 5. Create output spec and open store
         if verbose:

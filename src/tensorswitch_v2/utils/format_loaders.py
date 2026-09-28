@@ -23,6 +23,14 @@ import dask.array as da
 # files with 100K+ planes), which takes seconds on NFS. Re-opening per plane
 # read multiplies that cost by the number of planes and causes jobs to hang.
 _czi_reader_cache: dict = {}
+
+# Process-level cache of open PNG-stack zip handles, same rationale as the CZI
+# cache above: opening a ZipFile parses the archive's central directory, and doing
+# that once per slice read multiplies the cost by the slice count. ZipFile objects
+# are NOT safe for concurrent reads, so each cached handle carries its own lock.
+_png_zip_cache: dict = {}
+_png_zip_locks: dict = {}
+_png_zip_init_lock = threading.Lock()
 _czi_reader_locks: dict = {}
 _czi_cache_init_lock = threading.Lock()
 
@@ -929,3 +937,336 @@ def extract_precomputed_metadata(path, scale_index=0):
             }
 
     return info, voxel_sizes
+
+
+# ---------------------------------------------------------------------------
+# NIfTI (.nii / .nii.gz)
+# ---------------------------------------------------------------------------
+
+def extract_nifti_metadata(nifti_file):
+    """
+    Extract shape, dtype, and voxel sizes from a NIfTI-1/NIfTI-2 file.
+
+    NIfTI stores voxel size in the header's ``pixdim`` field, with the spatial
+    unit encoded separately in ``xyzt_units`` (NIfTI defines meter/mm/micron
+    only -- there is no nanometer code, so EM-scale data is frequently written
+    with a meaningless or unit-less pixdim). Values are converted to nanometers
+    where a real unit is declared; when the unit is unknown or the resulting
+    value is implausible for microscopy, the voxel size is reported as None so
+    the caller can fall back to an explicit ``--voxel_size`` override rather
+    than silently trusting a bogus number.
+
+    Args:
+        nifti_file: Path to a .nii or .nii.gz file
+
+    Returns:
+        tuple: (info_dict, voxel_sizes_or_None)
+            info_dict: shape, dtype, ndim, units, raw pixdim, affine
+            voxel_sizes: {'x','y','z'} in nanometers, or None if not trustworthy
+    """
+    import nibabel as nib
+
+    if not os.path.isfile(nifti_file):
+        raise ValueError(f"NIfTI file does not exist: {nifti_file}")
+
+    img = nib.load(nifti_file)
+    header = img.header
+    shape = tuple(int(s) for s in img.shape)
+
+    try:
+        units = header.get_xyzt_units()
+        space_unit = units[0] if units else 'unknown'
+    except Exception:
+        space_unit = 'unknown'
+
+    try:
+        zooms = tuple(float(z) for z in header.get_zooms()[:3])
+    except Exception:
+        zooms = ()
+
+    info = {
+        'shape': shape,
+        'ndim': len(shape),
+        'dtype': str(img.get_data_dtype()),
+        'space_unit': space_unit,
+        'pixdim': zooms,
+        'nifti_version': 2 if 'Nifti2' in type(header).__name__ else 1,
+    }
+
+    # NIfTI spatial units -> nanometers. NIfTI has no nanometer code, so an EM
+    # dataset can only ever be declared in micron/mm/meter (or left unknown).
+    TO_NM = {'meter': 1e9, 'mm': 1e6, 'micron': 1e3}
+
+    voxel_sizes = None
+    if len(zooms) >= 3 and space_unit in TO_NM and all(z > 0 for z in zooms):
+        factor = TO_NM[space_unit]
+        candidate = {
+            'x': zooms[0] * factor,
+            'y': zooms[1] * factor,
+            'z': zooms[2] * factor,
+        }
+        # Sanity-guard: reject values outside a plausible microscopy range
+        # (0.1 nm - 1 mm). Real-world NIfTI EM exports often carry a garbage
+        # pixdim (e.g. 224980.1875 with no unit set), and silently writing that
+        # into OME-NGFF metadata is worse than reporting nothing.
+        if all(0.1 <= v <= 1e6 for v in candidate.values()):
+            voxel_sizes = candidate
+        else:
+            print(
+                f"Warning: NIfTI pixdim {zooms} (unit={space_unit}) is outside a "
+                f"plausible microscopy range once converted to nm -- ignoring it. "
+                f"Pass --voxel_size explicitly."
+            )
+    elif zooms:
+        print(
+            f"Warning: NIfTI header declares no usable spatial unit "
+            f"(xyzt_units={space_unit!r}, pixdim={zooms}) -- voxel size cannot be "
+            f"derived. Pass --voxel_size explicitly."
+        )
+
+    return info, voxel_sizes
+
+
+def load_nifti_stack(nifti_file):
+    """
+    Load a NIfTI volume as a dask array in ZYX (or TCZYX-ordered) axis order.
+
+    NIfTI stores voxels in Fortran/column-major order with the fastest-varying
+    axis first, i.e. the array nibabel hands back is indexed (x, y, z[, t]).
+    TensorSwitch's convention everywhere else is C-order with the slowest axis
+    first (z, y, x), so the spatial axes are reversed here -- this makes NIfTI
+    sources behave identically to TIFF/HDF5/IMS ones downstream.
+
+    Uses nibabel's ``dataobj`` proxy rather than ``get_fdata()``: the proxy
+    reads lazily from disk and preserves the on-disk dtype, whereas
+    ``get_fdata()`` eagerly loads the entire volume and always upcasts to
+    float64 (an 8x memory blow-up for uint8 EM data).
+
+    Args:
+        nifti_file: Path to a .nii or .nii.gz file
+
+    Returns:
+        tuple: (dask_array, dimension_names)
+            dimension_names: e.g. ['z', 'y', 'x'] or ['t', 'z', 'y', 'x']
+    """
+    import nibabel as nib
+
+    if not os.path.isfile(nifti_file):
+        raise ValueError(f"NIfTI file does not exist: {nifti_file}")
+
+    img = nib.load(nifti_file)
+    ndim = len(img.shape)
+
+    if ndim < 2:
+        raise ValueError(
+            f"NIfTI file has {ndim} dimension(s); at least 2 are required: {nifti_file}"
+        )
+    if ndim > 4:
+        raise ValueError(
+            f"NIfTI file has {ndim} dimensions; only up to 4D (x,y,z,t) is "
+            f"supported: {nifti_file}"
+        )
+
+    dtype = img.get_data_dtype()
+
+    def _read():
+        # np.asarray on the proxy reads at the on-disk dtype (no float64 upcast).
+        arr = np.asarray(img.dataobj)
+        if ndim == 4:
+            # (x, y, z, t) -> (t, z, y, x)
+            return np.ascontiguousarray(np.transpose(arr, (3, 2, 1, 0)))
+        # (x, y, z) -> (z, y, x)  /  (x, y) -> (y, x)
+        return np.ascontiguousarray(np.transpose(arr, tuple(range(ndim))[::-1]))
+
+    if ndim == 4:
+        out_shape = (img.shape[3], img.shape[2], img.shape[1], img.shape[0])
+        dimension_names = ['t', 'z', 'y', 'x']
+    elif ndim == 3:
+        out_shape = (img.shape[2], img.shape[1], img.shape[0])
+        dimension_names = ['z', 'y', 'x']
+    else:
+        out_shape = (img.shape[1], img.shape[0])
+        dimension_names = ['y', 'x']
+
+    dask_array = da.from_delayed(
+        __import__('dask').delayed(_read)(), shape=out_shape, dtype=dtype
+    )
+
+    return dask_array, dimension_names
+
+
+def _find_png_files(directory):
+    """Find PNG files in a directory with natural numeric sorting.
+
+    Mirrors _find_tiff_files. Natural sort matters more for PNG than for TIFF:
+    published EM slice stacks are routinely named im0, im1, ... im1039 without
+    zero padding, and a lexicographic sort would order those im0, im1, im10,
+    im100 -- silently building a volume with shuffled sections.
+
+    Args:
+        directory: Path to directory containing PNG files
+
+    Returns:
+        List of absolute file paths, naturally sorted
+
+    Raises:
+        ValueError: If no PNG files found
+    """
+    import re
+    files = []
+    for entry in os.scandir(directory):
+        if entry.is_file() and entry.name.lower().endswith('.png'):
+            files.append(entry.path)
+    if not files:
+        raise ValueError(f"No PNG files found in: {directory}")
+
+    def natural_sort_key(path):
+        return [int(s) if s.isdigit() else s.lower()
+                for s in re.split(r'(\d+)', os.path.basename(path))]
+    files.sort(key=natural_sort_key)
+    return files
+
+
+def _find_png_members(zip_path):
+    """Naturally-sorted PNG member names inside a zip archive."""
+    import re
+    zf, lock = _get_png_zip(zip_path)
+    with lock:
+        names = [n for n in zf.namelist() if n.lower().endswith('.png')]
+    if not names:
+        raise ValueError(f"No PNG members found in zip: {zip_path}")
+
+    def natural_sort_key(name):
+        return [int(s) if s.isdigit() else s.lower()
+                for s in re.split(r'(\d+)', os.path.basename(name))]
+    names.sort(key=natural_sort_key)
+    return names
+
+
+def load_png_stack(folder_or_file):
+    """Load a PNG Z-stack lazily as a dask array.
+
+    Accepts three inputs:
+      - a directory of 2D PNG slices  -> dask_image.imread over the glob
+      - a .zip of 2D PNG slices       -> lazy per-slice reads from the archive
+      - a single .png                 -> a one-slice (2D) array
+
+    PNG is 2D-only by definition, so a stack is always many files; there is no
+    single-file 3D case as there is for TIFF/HDF5. PNG also carries NO voxel
+    size metadata of any kind, so callers must pass --voxel_size; PngReader
+    surfaces that through the standard _default_voxel_sizes warning.
+
+    The zip path exists because published EM volumes ship this way (PyTC's
+    EM30-H is a 24 GB zip of 1040 PNGs) and extracting one only to convert it
+    doubles the transient disk for no benefit. Slices are decoded on demand,
+    one at a time, so memory stays at one slice regardless of volume size.
+
+    Args:
+        folder_or_file: directory of PNGs, .zip of PNGs, or a single .png
+
+    Returns:
+        dask.array.Array: lazy (Z, Y, X) for a stack, (Y, X) for a single file
+    """
+    from dask_image import imread as dask_imread
+
+    if os.path.isdir(folder_or_file):
+        files = _find_png_files(folder_or_file)          # validates + orders
+        print(f"Loading PNG Z-stack from {folder_or_file} ({len(files)} slices)")
+        # dask_image globs and sorts lexicographically, which is wrong for
+        # unpadded names, so hand it the naturally-sorted list explicitly.
+        return da.stack([
+            dask_imread.imread(f)[0] for f in files
+        ])
+
+    if os.path.isfile(folder_or_file):
+        if folder_or_file.lower().endswith('.zip'):
+            return _load_png_zip(folder_or_file)
+        if folder_or_file.lower().endswith('.png'):
+            return dask_imread.imread(folder_or_file)[0]
+        raise ValueError(
+            f"Not a PNG, a zip of PNGs, or a directory: {folder_or_file}")
+
+    raise ValueError(f"Path does not exist: {folder_or_file}")
+
+
+def _load_png_zip(zip_path):
+    """Lazily stack PNG slices straight out of a zip, without extracting it."""
+    import io
+    import zipfile
+    import dask
+    from PIL import Image
+
+    names = _find_png_members(zip_path)
+
+    # Probe the first slice for shape/dtype; every slice in an EM stack shares
+    # them, and a mismatch would be a corrupt archive worth failing loudly on.
+    zf, lock = _get_png_zip(zip_path)
+    with lock:
+        probe = np.array(Image.open(io.BytesIO(zf.read(names[0]))))
+    shape, dtype = probe.shape, probe.dtype
+
+    def _read(member):
+        # One cached handle per archive, guarded by its own lock: ZipFile is not
+        # safe for concurrent reads, but re-opening it per slice re-parses the
+        # central directory every time (the CZI cache fix, PR #15, same problem).
+        zf, lock = _get_png_zip(zip_path)
+        with lock:
+            raw = zf.read(member)
+        a = np.array(Image.open(io.BytesIO(raw)))
+        if a.shape != shape or a.dtype != dtype:
+            raise ValueError(
+                f"{member}: shape/dtype {a.shape}/{a.dtype} does not match "
+                f"first slice {shape}/{dtype}")
+        return a
+
+    print(f"Loading PNG Z-stack from {os.path.basename(zip_path)} "
+          f"({len(names)} slices, streamed from the archive)")
+    return da.stack([
+        da.from_delayed(dask.delayed(_read)(n), shape=shape, dtype=dtype)
+        for n in names
+    ])
+
+
+def _get_png_zip(zip_path):
+    """Return a cached (ZipFile, read_lock) pair for a PNG-stack archive."""
+    import zipfile
+    with _png_zip_init_lock:
+        if zip_path not in _png_zip_cache:
+            zf = zipfile.ZipFile(zip_path)
+            _png_zip_cache[zip_path] = zf
+            _png_zip_locks[zip_path] = threading.Lock()
+
+            @atexit.register
+            def _close(zf=zf):
+                try:
+                    zf.close()
+                except Exception:
+                    pass
+    return _png_zip_cache[zip_path], _png_zip_locks[zip_path]
+
+
+def is_png_zstack_directory(path):
+    """Check if a directory contains a PNG Z-stack (2D PNG slices, one volume).
+
+    Simpler than the TIFF equivalent: a PNG is always a single plane, so there is
+    no 2D-vs-3D ambiguity to resolve by opening files -- any directory holding more
+    than one PNG is a Z-stack. A lone PNG is an image, not a volume.
+
+    Args:
+        path: Path to check
+
+    Returns:
+        bool: True if the directory holds 2+ PNG files
+    """
+    if not os.path.isdir(path):
+        return False
+    try:
+        n = 0
+        for entry in os.scandir(path):
+            if entry.is_file() and entry.name.lower().endswith('.png'):
+                n += 1
+                if n > 1:
+                    return True
+        return False
+    except OSError:
+        return False

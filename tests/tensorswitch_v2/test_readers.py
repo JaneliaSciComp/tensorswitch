@@ -113,6 +113,61 @@ class TestZarr2Reader:
         assert isinstance(reader, Zarr2Reader)
 
 
+class TestZarr2ReaderFallback:
+    """Zarr2Reader falls back to zarr-python for incompatible compressor metadata."""
+
+    def test_fallback_emits_warning(self, sample_zarr2_incompatible_path):
+        """gzip level=-1 triggers fallback with a UserWarning."""
+        import warnings
+        reader = Zarr2Reader(sample_zarr2_incompatible_path, dataset_path="s0")
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            reader.get_tensorstore()
+        assert any(
+            issubclass(w.category, UserWarning) and "fallback" in str(w.message).lower()
+            for w in caught
+        )
+
+    def test_fallback_returns_tensorstore(self, sample_zarr2_incompatible_path):
+        """Fallback returns a ts.TensorStore with correct shape."""
+        import tensorstore as ts
+        import warnings
+        reader = Zarr2Reader(sample_zarr2_incompatible_path, dataset_path="s0")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            store = reader.get_tensorstore()
+        assert isinstance(store, ts.TensorStore)
+        assert list(store.shape) == [32, 64, 64]
+
+    def test_fallback_correct_values(self, sample_zarr2_incompatible_path, sample_3d_array):
+        """Fallback returns correct data values."""
+        import warnings
+        reader = Zarr2Reader(sample_zarr2_incompatible_path, dataset_path="s0")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            store = reader.get_tensorstore()
+        result = store[...].read().result()
+        np.testing.assert_array_equal(result, sample_3d_array)
+
+    def test_fallback_bigendian_byteswap(self, sample_zarr2_bigendian_path):
+        """Fallback correctly byte-swaps big-endian >u2 data to native uint16."""
+        import warnings
+        path, expected = sample_zarr2_bigendian_path
+        reader = Zarr2Reader(path, dataset_path="s0")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            store = reader.get_tensorstore()
+        result = store[...].read().result()
+        assert result.dtype == np.dtype('uint16')  # native, not big-endian
+        np.testing.assert_array_equal(result, expected.astype('uint16'))
+
+    def test_native_driver_unaffected(self, sample_zarr2_path):
+        """Normal zarr2 (valid gzip level) still uses TensorStore native driver."""
+        reader = Zarr2Reader(sample_zarr2_path, dataset_path="s0")
+        store = reader.get_tensorstore()
+        assert store.spec().to_json().get('driver') == 'zarr'
+
+
 class TestN5Reader:
     """Tests for N5Reader (Tier 1)."""
 
@@ -149,6 +204,55 @@ class TestN5Reader:
         """Test auto_detect returns N5Reader for .n5 paths."""
         reader = Readers.auto_detect(sample_n5_path)
         assert isinstance(reader, N5Reader)
+
+
+class TestN5ReaderPixelResFallback:
+    """Tests for N5Reader fallback for N5 v2.0.0 pixelResolution groups.
+
+    Covers the case where the group-level attributes.json uses
+    {"pixelResolution": {...}} without a standard "dimensions" array,
+    causing TensorStore's native N5 driver to raise "member is missing".
+    N5Reader should auto-discover s0 and open it transparently.
+    """
+
+    def test_fallback_emits_warning(self, n5_pixelres_group):
+        """N5Reader emits UserWarning when using pixelResolution fallback."""
+        import warnings as _warnings
+        reader = N5Reader(n5_pixelres_group)
+        with _warnings.catch_warnings(record=True) as w:
+            _warnings.simplefilter("always")
+            reader.get_tensorstore()
+        assert any(issubclass(x.category, UserWarning) for x in w), \
+            "Expected a UserWarning when falling back for pixelResolution group"
+
+    def test_fallback_correct_shape(self, n5_pixelres_group, sample_3d_array):
+        """N5Reader fallback opens s0 with the correct array shape."""
+        import tensorstore as ts
+        reader = N5Reader(n5_pixelres_group)
+        store = reader.get_tensorstore()
+        assert isinstance(store, ts.TensorStore)
+        assert tuple(store.shape) == sample_3d_array.shape
+
+    def test_fallback_correct_values(self, n5_pixelres_group, sample_3d_array):
+        """N5Reader fallback reads correct data values from s0."""
+        reader = N5Reader(n5_pixelres_group)
+        store = reader.get_tensorstore()
+        data = store.read().result()
+        np.testing.assert_array_equal(data, sample_3d_array)
+
+    def test_standard_n5_unaffected(self, sample_n5_path, sample_3d_array):
+        """Standard N5 array (with dataset_path='s0') opens without fallback warning."""
+        import warnings as _warnings
+        import tensorstore as ts
+        reader = N5Reader(sample_n5_path, dataset_path="s0")
+        with _warnings.catch_warnings(record=True) as w:
+            _warnings.simplefilter("always")
+            store = reader.get_tensorstore()
+        fallback_warns = [x for x in w if 'pixelResolution' in str(x.message)]
+        assert len(fallback_warns) == 0, \
+            "Standard N5 array should not trigger pixelResolution fallback warning"
+        assert isinstance(store, ts.TensorStore)
+        assert tuple(store.shape) == sample_3d_array.shape
 
 
 class TestReadersFactory:

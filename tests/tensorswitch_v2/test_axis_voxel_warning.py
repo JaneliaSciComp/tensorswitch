@@ -23,7 +23,7 @@ def test_warn_fires_on_cyx_with_3_voxel_values(capsys):
     err = capsys.readouterr().err
     assert 'WARNING' in err
     assert '5.96' in err  # Z value dropped
-    assert '--axes_order zyx' in err  # suggested workaround
+    assert '--relabel_axis c=z' in err  # suggested workaround (explicit, not --axes_order)
     assert "['c', 'y', 'x']" in err
 
 

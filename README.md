@@ -1,6 +1,6 @@
 # TensorSwitch v2
 
-**Version**: 2.0.3
+**Version**: 2.0.4
 **Status**: Production Ready
 **Branch**: `main`
 
@@ -93,7 +93,7 @@ A high-performance microscopy data conversion tool with TensorStore as the unifi
 | Tier | Performance | Formats | Description |
 |------|-------------|---------|-------------|
 | **Tier 1** | Maximum | N5, Zarr2, Zarr3, Precomputed | Native TensorStore drivers |
-| **Tier 2** | Optimized | TIFF, ND2, IMS, HDF5, CZI | Custom optimized readers |
+| **Tier 2** | Optimized | TIFF, ND2, IMS, HDF5, CZI, NIfTI, PNG | Custom optimized readers |
 | **Tier 3** | Compatible | LIF + 20 more | BIOIO Python plugins |
 | **Tier 4** | Universal | 150+ formats | Bio-Formats Java (via bioio-bioformats) |
 
@@ -163,21 +163,21 @@ tensorswitch-v2 --version
 
 # Using pixi
 pixi run tensorswitch-v2 --version
-# Output: tensorswitch_v2 2.0.3
+# Output: tensorswitch_v2 2.0.4
 ```
 
 ### Python API
 
 ```python
 from tensorswitch_v2 import __version__, TensorSwitchDataset, Readers, Writers
-print(__version__)  # 2.0.3
+print(__version__)  # 2.0.4
 ```
 
 ### What's Included
 
 | Install Command | Formats Supported | Dependencies |
 |---|---|---|
-| `pip install tensorswitch` | N5, Zarr, TIFF, ND2, IMS, HDF5, CZI, LIF, Precomputed + 20 more | tensorstore, numpy, tifffile, h5py, nd2, dask, bioio |
+| `pip install tensorswitch` | N5, Zarr, TIFF, ND2, IMS, HDF5, CZI, NIfTI, PNG, LIF, Precomputed + 20 more | tensorstore, numpy, tifffile, h5py, nd2, nibabel, dask, bioio |
 | `pip install "tensorswitch[bioformats]"` | + 150 more via Bio-Formats | + bioio-bioformats, scyjava (requires Java 8+) |
 | `pip install "tensorswitch[mcp]"` | + MCP server for AI agents | + mcp |
 | `pip install "tensorswitch[all]"` | Everything above | All of the above |
@@ -357,7 +357,8 @@ pixi run python -m tensorswitch_v2 --upsample --auto_multiscale \
 
 | Argument | Description |
 |----------|-------------|
-| `--axes_order` | Override output spatial axis order (e.g., `xyz`, `zyx`, `xzy`). Default: preserve source order. |
+| `--axes_order` | Override output spatial axis order (e.g., `xyz`, `zyx`, `xzy`). Default: preserve source order. Reorders only -- never reinterprets axis identity (does not turn `t`/`i`/`c` into `z`); use `--relabel_axis` for that. |
+| `--relabel_axis` | Explicitly relabel a source axis whose detected name is wrong (format `OLD=NEW`, e.g. `i=z`). Repeatable. Never fires automatically or infers intent -- only does exactly what you name. |
 | `--expand-to-5d` | Force 5D TCZYX expansion (legacy behavior) |
 
 **Default behavior (RFC-3 compliant)**: Source dimensionality and axis order are preserved:
@@ -372,6 +373,16 @@ pixi run python -m tensorswitch_v2 --upsample --auto_multiscale \
 pixi run python -m tensorswitch_v2 -i input.nd2 -o output.zarr \
   --preset webknossos --axes_order xyz --voxel_size 160,160,400
 ```
+
+**Axis identity correction**: Some readers can't tell a Z-stack from a generic sequence -- e.g. a multi-page TIFF written without ImageJ hyperstack tags (`slices=N`, `spacing=`, `unit=`) gets its leading dimension reported by `tifffile` as index axis `i` instead of `z`. Use `--relabel_axis OLD=NEW` to correct this explicitly (repeatable for multiple axes):
+
+```bash
+# Plain ITK-written TIFF Z-stack mis-detected as axis 'i' instead of 'z'
+pixi run python -m tensorswitch_v2 -i stack.tif -o output.zarr \
+  --preset mia_lmvd --voxel_size 5,5,5 --relabel_axis i=z --auto_multiscale
+```
+
+`--relabel_axis` is intentionally separate from `--axes_order` and never infers anything on its own -- it only relabels the exact axis you name, and raises an error if that would create a duplicate axis name (e.g. relabeling `x` to `z` when a genuine `z` already exists elsewhere).
 
 **Singleton channel squeeze**: When reading neuroglancer precomputed format with `num_channels=1`, the implicit 4th channel dimension is automatically squeezed out to preserve true 3D output.
 
@@ -390,7 +401,9 @@ Use `--expand-to-5d` for compatibility with tools requiring strict 5D TCZYX form
 
 | Argument | Description |
 |----------|-------------|
-| `--bbox` | Bounding box for subvolume extraction: `origin_0,origin_1,origin_2,size_0,size_1,size_2`. Values are voxel indices in source dimension order. |
+| `--bbox` | Bounding box for subvolume extraction: `origin_0,...,origin_N,size_0,...,size_N` (an even number of integers, split into two equal halves). Values are voxel indices in source dimension order. N is not fixed at 3 — a source with more dims than x/y/z (e.g. a 5D `[t,c,z,y,x]` export with `t=c=1`) can pass a bbox covering however many dims it needs. |
+| `--bbox_axes` | Comma-separated 0-based source axis indices that `--bbox`'s values target, e.g. `2,3,4` for a 5D `[t,c,z,y,x]` source cropping only z,y,x (t,c stay at full extent). Optional — omitting it auto-detects spatial axes from domain labels, which works as long as the source reports real axis names. Use `--bbox_axes` when it can't (see next section). |
+| `--squeeze_singleton_axes` | Drop any size-1 axis identified as non-spatial (t/c/v/channel) from the OUTPUT before writing — e.g. a 5D `[t,c,z,y,x]` source with `t=c=1` becomes a plain 3D `[z,y,x]` output, with chunk keys written natively as `c/<z>/<y>/<x>` (never `c/0/0/<z>/<y>/<x>`, no post-hoc rename needed). Requires axis identity to be known; raises an error rather than guessing if it isn't. |
 
 **Remote URL support**: Tier 1 readers (Neuroglancer precomputed, Zarr2/3, N5) accept remote URLs as input — GCS (`gs://`), S3 (`s3://`), and HTTP/HTTPS. Prefix with `precomputed://` for Neuroglancer precomputed format.
 
@@ -407,11 +420,24 @@ pixi run python -m tensorswitch_v2 \
   -i "precomputed://https://storage.googleapis.com/iarpa_microns/minnie/minnie65/em" \
   -o /output/microns.zarr --output_format zarr2 \
   --voxel_size 8,8,40
+
+# Crop a bbox out of a 5D [t,c,z,y,x] BigStitcher-Spark / OME-NGFF export (t=c=1),
+# dropping t,c from the output entirely. Voxel size and axis names are recovered
+# automatically from the parent group's OME multiscales metadata -- no --voxel_size
+# override needed even though -i points at the bare finest-level array.
+pixi run python -m tensorswitch_v2 \
+  -i "/data/fused.ome.zarr/0" \
+  -o /output/crop.zarr \
+  --bbox 544,2812,240,1849,10118,7542 --bbox_axes 2,3,4 \
+  --squeeze_singleton_axes \
+  --preset mia_lmvd --auto_multiscale
 ```
 
 **Bbox coordinates** are always in voxel indices (integers), in the source's dimension order:
 - For Neuroglancer precomputed: X, Y, Z order
 - For Zarr/N5: Z, Y, X order (or whatever the source axes are)
+
+**When to add `--bbox_axes`**: source axis identity is auto-detected from TensorStore domain labels or, failing that, the reader's own OME-NGFF metadata. This can fail specifically when `-i` points at a bare array subpath one level inside a multiscale group (e.g. `.../fused.ome.zarr/0` rather than `.../fused.ome.zarr` + `--dataset_path 0`) — TensorStore then has no `dimension_names` for that array on its own and synthesizes generic `dim_0..dim_N` labels. TensorSwitch's Zarr3 reader recovers real names by checking the parent directory's `zarr.json` for a matching multiscales dataset entry, so this usually isn't needed in practice — but if a source still reports synthetic labels (check for a `"falling back to reader metadata"` message in verbose output, or a `RuntimeWarning` about spatial axis count), pass `--bbox_axes` explicitly rather than relying on auto-detection.
 
 ### Metadata Override
 
@@ -492,6 +518,8 @@ reader = Readers.tiff("/path/to/data.tif")      # Tier 2
 reader = Readers.nd2("/path/to/data.nd2")       # Tier 2
 reader = Readers.czi("/path/to/data.czi")       # Tier 2
 reader = Readers.ims("/path/to/data.ims")       # Tier 2
+reader = Readers.nifti("/path/to/vol.nii.gz")   # Tier 2
+reader = Readers.png("/path/to/slices/")        # Tier 2 (dir, .zip or .png)
 reader = Readers.n5("/path/to/data.n5")         # Tier 1
 reader = Readers.zarr3("/path/to/data.zarr")    # Tier 1
 reader = Readers.bioio("/path/to/data.lif")     # Tier 3
@@ -620,6 +648,8 @@ print(f"Completed: {result.completed}/{result.total}")
 | TIFF | `.tif`, `.tiff` | 2 | TiffReader |
 | ND2 (Nikon) | `.nd2` | 2 | ND2Reader |
 | IMS (Imaris) | `.ims` | 2 | IMSReader |
+| NIfTI | `.nii`, `.nii.gz` | 2 | NIfTIReader |
+| PNG Z-stack | directory, `.zip`, `.png` | 2 | PngReader |
 | CZI (Zeiss) | `.czi` | 2 | CZIReader |
 | HDF5 | `.h5`, `.hdf5` | 2 | HDF5Reader |
 | N5 | `.n5` | 1 | N5Reader |
@@ -631,6 +661,41 @@ print(f"Completed: {result.completed}/{result.total}")
 | 20+ more | various | 3 | BIOIOReader |
 | Olympus VSI, Leica SCN, etc. | various | 3+ | BioFormatsReader (Java) |
 | 150+ formats | various | 3+ | BioFormatsReader (Java) |
+
+### NIfTI notes (`.nii`, `.nii.gz`)
+
+NIfTI-1 and NIfTI-2 are read via `nibabel`, plain or gzipped. Two behaviours are worth knowing:
+
+**Axis order is normalised.** NIfTI stores voxels column-major with the fastest-varying axis first, so the on-disk layout is `(x, y, z)`. The reader transposes to TensorSwitch's `(z, y, x)` convention, so NIfTI sources behave identically to TIFF/HDF5/IMS downstream.
+
+**Voxel size is often not trustworthy — pass `--voxel_size`.** The NIfTI header can only express meter/mm/micron; there is **no nanometer unit**, so EM-scale datasets are routinely published with a unit-less or meaningless `pixdim`. The reader accepts the header value only when it declares a real unit *and* converts to a plausible microscopy scale (0.1 nm – 1 mm); otherwise it warns and leaves the voxel size unset rather than writing a bogus scale into the OME-NGFF metadata.
+
+```bash
+# Real-world example: the UroCell FIB-SEM release declares pixdim 224980.1875 "mm".
+# That is rejected, so the true voxel size must be supplied explicitly.
+pixi run python -m tensorswitch_v2 -i vol.nii.gz -o out.zarr \
+  --preset mia_lmvd --voxel_size 16,16,15 --voxel_unit nanometer \
+  --dtype uint8 --auto_multiscale
+```
+
+Reading goes through nibabel's lazy `dataobj` proxy, which preserves the on-disk dtype — unlike `get_fdata()`, which would upcast everything to float64.
+
+### PNG notes (directory, `.zip`, or single `.png`)
+
+PNG slice stacks are a common EM release format — Harvard's mEMbrain GT and PyTC's EM30 both ship this way. Three behaviours are worth knowing:
+
+**Slices are sorted naturally, not lexicographically.** Published stacks are routinely named without zero padding (`im0 … im1039`). A plain sort orders those `im0, im1, im10, im100`, which builds a volume with shuffled sections and reports no error at all. `PngReader` sorts numerically, so unpadded names stack correctly.
+
+**A `.zip` of slices is read lazily, never extracted.** EM30-H is 1040 slices in a 24 GB archive; extracting it just to convert would double the transient disk for nothing. Slices are decoded on demand, one at a time, so memory stays at one slice regardless of volume size. A slice whose shape or dtype differs from the first is treated as a corrupt archive and raises rather than being silently padded or skipped.
+
+**There is no voxel size in a PNG — `--voxel_size` is mandatory.** Unlike TIFF or NIfTI, PNG has no scientific metadata whatsoever. (Its optional `pHYs` chunk records pixels-per-metre for *printing* and is absent from every scientific export seen in practice, so it is deliberately not consulted.) The reader always warns and defaults to `[1,1,1]` if no voxel size is supplied.
+
+```bash
+# PyTC EM30-H: 1040 PNG slices in one zip, read without extracting
+pixi run python -m tensorswitch_v2 -i EM30-H-im-pad.zip -o out.zarr \
+  --preset mia_lmvd --voxel_size 8,8,30 --voxel_unit nanometer \
+  --auto_multiscale
+```
 
 ### Source Layout Preservation
 
@@ -1102,6 +1167,7 @@ bmod -W 96:00 <job_id>
 .tif, .tiff  → TiffReader (Tier 2)
 .nd2         → ND2Reader (Tier 2)
 .ims         → IMSReader (Tier 2)
+.nii/.nii.gz → NIfTIReader (Tier 2)
 .czi         → CZIReader (Tier 2)
 .n5          → N5Reader (Tier 1)
 .zarr        → Zarr3Reader or Zarr2Reader (Tier 1)
@@ -1337,7 +1403,7 @@ If you use TensorSwitch in your research, please cite it:
 @software{chen2026tensorswitch,
   author = {Chen, Diyi},
   title = {TensorSwitch},
-  version = {2.0.3},
+  version = {2.0.4},
   year = {2026},
   url = {https://github.com/JaneliaSciComp/tensorswitch}
 }

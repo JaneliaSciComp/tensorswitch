@@ -71,8 +71,8 @@ def detect_input_mode(input_path: str, output_path: str = None) -> str:
     from ..readers.base import is_local_precomputed, is_remote_path
     from ..utils.folder_discovery import discover_datasets, is_neuroglancer_precomputed
 
-    # Remote URLs (gs://, s3://, http://, precomputed://) are always single-file mode
-    if is_remote_path(input_path) or input_path.startswith('precomputed://'):
+    # Remote URLs (gs://, s3://, http://, precomputed://, n5://, zarr://) are always single-file mode
+    if is_remote_path(input_path) or input_path.startswith(('precomputed://', 'n5://', 'zarr://')):
         return 'single_file'
 
     # Check if path ends with known format extension
@@ -105,6 +105,16 @@ def detect_input_mode(input_path: str, output_path: str = None) -> str:
         if is_tiff_zstack_directory(input_path):
             # If output path looks like a directory (no .zarr/.n5 extension),
             # the user likely wants batch mode even with 2D TIFFs
+            if output_path:
+                out_ext = os.path.splitext(output_path)[1].lower()
+                if out_ext not in ('.zarr', '.n5'):
+                    return 'batch_directory'
+            return 'single_file'
+        # Check if directory is a PNG Z-stack (2D PNG slices forming one volume).
+        # Without this a slice directory falls through to batch_directory and each
+        # slice is converted as its own dataset -- 1040 "datasets" for one volume.
+        from ..utils.format_loaders import is_png_zstack_directory
+        if is_png_zstack_directory(input_path):
             if output_path:
                 out_ext = os.path.splitext(output_path)[1].lower()
                 if out_ext not in ('.zarr', '.n5'):
