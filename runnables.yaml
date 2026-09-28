@@ -250,7 +250,18 @@ runnables:
           - flag: --bbox
             name: Bounding Box
             type: string
-            description: "Extract a subvolume: origin_z,origin_y,origin_x,size_z,size_y,size_x. Example: 0,0,0,512,512,512."
+            description: "Extract a subvolume: origin_0,...,origin_N,size_0,...,size_N (source dimension order). Usually 3 dims (z,y,x), e.g. 0,0,0,512,512,512 -- but can cover more dims for a source with extra non-spatial axes (e.g. a 5D source with t,c included), paired with Bbox Axes below."
+
+          - flag: --bbox_axes
+            name: Bbox Axes
+            type: string
+            description: "Which source axis indices (0-based) the Bounding Box values target, e.g. 2,3,4 for a 5D [t,c,z,y,x] source cropping only z,y,x. Optional -- omit to auto-detect from axis labels; set explicitly if the source reports generic axis names (common when pointing at one array inside a multiscale group, e.g. a path ending in /0)."
+
+          - flag: --squeeze_singleton_axes
+            name: Squeeze Singleton Axes
+            type: boolean
+            description: "Drop any size-1 non-spatial axis (t/c/channel) from the output before writing, e.g. a source with t=1,c=1 becomes a plain 3D output. Requires axis identity to be known."
+            default: false
 
       - section: Label Ingestion
         description: >
