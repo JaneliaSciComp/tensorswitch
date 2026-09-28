@@ -197,6 +197,53 @@ class Zarr3Reader(BaseReader):
         except Exception as e:
             print(f"Warning: Failed to read Zarr3 metadata: {e}")
 
+        # Recover axis identity + voxel size from the PARENT group's OME multiscales
+        # when the array subpath was folded directly into `self.path` (e.g. `-i
+        # .../fused.ome.zarr/0` instead of `-i .../fused.ome.zarr --dataset_path 0`).
+        # This is the common pattern for pointing at one pyramid level of an
+        # already-multiscale source (see e.g. the FlyID49 MirrorScope ingest scripts).
+        # In that case `self._dataset_path` is empty, so the block above only ever
+        # reads `<self.path>/zarr.json` — the ARRAY's own zarr.json, which for a
+        # BigStitcher-Spark / typical OME-NGFF export carries no `dimension_names`
+        # or `multiscales` of its own (those live one level up, on the GROUP). The
+        # array's own zarr.json is read fine either way (shape/dtype/chunk_shape),
+        # but axis names and voxel size are silently unavailable: TensorStore then
+        # falls back to synthesizing generic `dim_0..dim_N` labels for the opened
+        # array, and voxel-size/spatial-axis detection elsewhere in TensorSwitch has
+        # nothing else to go on. Fix: walk up one directory from `self.path`, read
+        # its zarr.json, and match the multiscales `datasets[].path` entry equal to
+        # this array's own path component (`os.path.basename(self.path)`).
+        if not self._dataset_path and 'multiscales' not in metadata:
+            parent_dir = os.path.dirname(self.path.rstrip('/'))
+            array_name = os.path.basename(self.path.rstrip('/'))
+            parent_zarr_json = os.path.join(parent_dir, 'zarr.json')
+            try:
+                with open(parent_zarr_json, 'r') as f:
+                    parent_metadata = json.load(f)
+                parent_ms_list = parent_metadata.get('attributes', {}).get('ome', {}).get('multiscales') \
+                    or parent_metadata.get('attributes', {}).get('multiscales')
+                if parent_ms_list:
+                    for ms in parent_ms_list:
+                        matching = [ds for ds in ms.get('datasets', [])
+                                    if ds.get('path') == array_name]
+                        if matching:
+                            axes = ms.get('axes')
+                            if axes:
+                                metadata['dimension_names'] = [a.get('name') for a in axes]
+                            # Build a single-dataset multiscales block scoped to
+                            # just this array's own coordinateTransformations, so
+                            # existing multiscales-consuming code (voxel size
+                            # extraction, etc.) works unmodified.
+                            metadata['multiscales'] = [{
+                                **{k: v for k, v in ms.items() if k != 'datasets'},
+                                'datasets': [matching[0]],
+                            }]
+                            metadata.setdefault('attributes', {})
+                            metadata['attributes'].setdefault('ome', {})['multiscales'] = metadata['multiscales']
+                            break
+            except Exception:
+                pass
+
         return metadata
 
     def _read_remote_metadata(self) -> Dict:

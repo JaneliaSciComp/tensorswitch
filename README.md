@@ -401,7 +401,9 @@ Use `--expand-to-5d` for compatibility with tools requiring strict 5D TCZYX form
 
 | Argument | Description |
 |----------|-------------|
-| `--bbox` | Bounding box for subvolume extraction: `origin_0,origin_1,origin_2,size_0,size_1,size_2`. Values are voxel indices in source dimension order. |
+| `--bbox` | Bounding box for subvolume extraction: `origin_0,...,origin_N,size_0,...,size_N` (an even number of integers, split into two equal halves). Values are voxel indices in source dimension order. N is not fixed at 3 — a source with more dims than x/y/z (e.g. a 5D `[t,c,z,y,x]` export with `t=c=1`) can pass a bbox covering however many dims it needs. |
+| `--bbox_axes` | Comma-separated 0-based source axis indices that `--bbox`'s values target, e.g. `2,3,4` for a 5D `[t,c,z,y,x]` source cropping only z,y,x (t,c stay at full extent). Optional — omitting it auto-detects spatial axes from domain labels, which works as long as the source reports real axis names. Use `--bbox_axes` when it can't (see next section). |
+| `--squeeze_singleton_axes` | Drop any size-1 axis identified as non-spatial (t/c/v/channel) from the OUTPUT before writing — e.g. a 5D `[t,c,z,y,x]` source with `t=c=1` becomes a plain 3D `[z,y,x]` output, with chunk keys written natively as `c/<z>/<y>/<x>` (never `c/0/0/<z>/<y>/<x>`, no post-hoc rename needed). Requires axis identity to be known; raises an error rather than guessing if it isn't. |
 
 **Remote URL support**: Tier 1 readers (Neuroglancer precomputed, Zarr2/3, N5) accept remote URLs as input — GCS (`gs://`), S3 (`s3://`), and HTTP/HTTPS. Prefix with `precomputed://` for Neuroglancer precomputed format.
 
@@ -418,11 +420,24 @@ pixi run python -m tensorswitch_v2 \
   -i "precomputed://https://storage.googleapis.com/iarpa_microns/minnie/minnie65/em" \
   -o /output/microns.zarr --output_format zarr2 \
   --voxel_size 8,8,40
+
+# Crop a bbox out of a 5D [t,c,z,y,x] BigStitcher-Spark / OME-NGFF export (t=c=1),
+# dropping t,c from the output entirely. Voxel size and axis names are recovered
+# automatically from the parent group's OME multiscales metadata -- no --voxel_size
+# override needed even though -i points at the bare finest-level array.
+pixi run python -m tensorswitch_v2 \
+  -i "/data/fused.ome.zarr/0" \
+  -o /output/crop.zarr \
+  --bbox 544,2812,240,1849,10118,7542 --bbox_axes 2,3,4 \
+  --squeeze_singleton_axes \
+  --preset mia_lmvd --auto_multiscale
 ```
 
 **Bbox coordinates** are always in voxel indices (integers), in the source's dimension order:
 - For Neuroglancer precomputed: X, Y, Z order
 - For Zarr/N5: Z, Y, X order (or whatever the source axes are)
+
+**When to add `--bbox_axes`**: source axis identity is auto-detected from TensorStore domain labels or, failing that, the reader's own OME-NGFF metadata. This can fail specifically when `-i` points at a bare array subpath one level inside a multiscale group (e.g. `.../fused.ome.zarr/0` rather than `.../fused.ome.zarr` + `--dataset_path 0`) — TensorStore then has no `dimension_names` for that array on its own and synthesizes generic `dim_0..dim_N` labels. TensorSwitch's Zarr3 reader recovers real names by checking the parent directory's `zarr.json` for a matching multiscales dataset entry, so this usually isn't needed in practice — but if a source still reports synthetic labels (check for a `"falling back to reader metadata"` message in verbose output, or a `RuntimeWarning` about spatial axis count), pass `--bbox_axes` explicitly rather than relying on auto-detection.
 
 ### Metadata Override
 

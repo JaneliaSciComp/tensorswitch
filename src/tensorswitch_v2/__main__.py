@@ -564,10 +564,33 @@ Supported output formats:
     # Subvolume extraction
     parser.add_argument(
         "--bbox", type=str, default=None,
-        help="Bounding box for subvolume extraction: origin_0,origin_1,origin_2,size_0,size_1,size_2 "
-             "(in source voxel coordinates, source dimension order). "
+        help="Bounding box for subvolume extraction: origin_0,...,origin_N,size_0,...,size_N "
+             "(in source voxel coordinates, source dimension order). N need not be 3 — "
+             "a source with more dims than just x/y/z (e.g. a 5D [t,c,z,y,x] "
+             "BigStitcher-Spark export with t=c=1) can pass a bbox covering however "
+             "many dims it needs. "
              "For Neuroglancer precomputed: x,y,z order. For Zarr/N5: z,y,x order. "
-             "Example: --bbox 116316,87591,20800,10240,10240,1024",
+             "Example (3D): --bbox 116316,87591,20800,10240,10240,1024",
+    )
+    parser.add_argument(
+        "--squeeze_singleton_axes", action="store_true", default=False,
+        help="Drop any size-1 axis identified as non-spatial (t/c/v/channel) from the "
+             "OUTPUT before writing, e.g. a 5D [t,c,z,y,x] source with t=c=1 becomes a "
+             "plain 3D [z,y,x] output. Chunk keys are written directly as c/<z>/<y>/<x> "
+             "from the start (never c/0/0/<z>/<y>/<x>), so no post-hoc rename is needed. "
+             "Requires axis identity to be known (real labels, or --relabel_axis) -- "
+             "raises an error otherwise rather than guessing.",
+    )
+    parser.add_argument(
+        "--bbox_axes", type=str, default=None,
+        help="Comma-separated 0-based source axis indices that --bbox's values target, "
+             "e.g. '2,3,4' for a 5D [t,c,z,y,x] source cropping only z,y,x (axes t,c "
+             "stay at full extent). Use this when the source's axis labels can't be "
+             "auto-detected (e.g. pointing directly at an array subpath bypasses the "
+             "parent group's OME multiscales metadata, so axes show up as generic "
+             "dim_0..dim_N rather than t/c/z/y/x) — auto-detection would otherwise "
+             "misassign --bbox's values to the wrong axes. Optional: omitting this "
+             "keeps the previous behavior of auto-detecting spatial axes from labels.",
     )
 
     # Output control
@@ -729,28 +752,57 @@ def parse_bbox(bbox_str):
     """Parse bbox string into (origin, size) tuples.
 
     Args:
-        bbox_str: Comma-separated string 'origin_0,origin_1,origin_2,size_0,size_1,size_2'
+        bbox_str: Comma-separated string 'origin_0,...,origin_N,size_0,...,size_N'
+                  — an even number of integers, split into two equal halves.
                   Coordinates are in source voxel coordinates, source dimension order.
                   For Neuroglancer precomputed: x,y,z order.
                   For Zarr/N5: z,y,x order.
+                  N is not fixed at 3 — a source with more than 3 dimensions (e.g. a
+                  5D [t,c,z,y,x] BigStitcher-Spark export) can pass a bbox covering
+                  as many dims as needed; pair with --bbox_axes to say which source
+                  axis index each value corresponds to when axis identity can't be
+                  auto-detected from labels (see --bbox_axes help).
 
     Returns:
-        Tuple of (origin, size) where each is a 3-tuple of ints.
+        Tuple of (origin, size) where each is an N-tuple of ints.
 
     Raises:
         ValueError: If format is invalid.
     """
     values = [int(v.strip()) for v in bbox_str.split(',')]
-    if len(values) != 6:
+    if len(values) < 2 or len(values) % 2 != 0:
         raise ValueError(
-            f"--bbox requires 6 comma-separated integers: origin_0,origin_1,origin_2,size_0,size_1,size_2\n"
-            f"Got {len(values)} values: {bbox_str}"
+            f"--bbox requires an even number of comma-separated integers "
+            f"(origin_0,...,origin_N,size_0,...,size_N), got {len(values)} values: {bbox_str}"
         )
-    origin = tuple(values[:3])
-    size = tuple(values[3:])
+    n = len(values) // 2
+    origin = tuple(values[:n])
+    size = tuple(values[n:])
     if any(s <= 0 for s in size):
         raise ValueError(f"--bbox size values must be positive, got: {size}")
     return origin, size
+
+
+def parse_bbox_axes(bbox_axes_str):
+    """Parse '--bbox_axes' into a tuple of 0-based source axis indices.
+
+    Args:
+        bbox_axes_str: Comma-separated integers, e.g. '2,3,4' for a 5D [t,c,z,y,x]
+                       source where the bbox values target z,y,x (axes 2,3,4) and
+                       t,c (axes 0,1) should stay at full extent.
+
+    Returns:
+        Tuple of ints.
+
+    Raises:
+        ValueError: If any value is not a non-negative integer, or indices repeat.
+    """
+    axes = tuple(int(v.strip()) for v in bbox_axes_str.split(','))
+    if any(a < 0 for a in axes):
+        raise ValueError(f"--bbox_axes indices must be non-negative, got: {axes}")
+    if len(axes) != len(set(axes)):
+        raise ValueError(f"--bbox_axes must not repeat an axis index, got: {axes}")
+    return axes
 
 
 def validate_input_path(path: str, allow_directory: bool = True) -> None:
@@ -1650,6 +1702,10 @@ def submit_job(args, return_job_id=False):
         reinvoke.append("--no-nested-structure")
     if getattr(args, 'bbox', None):
         reinvoke += ["--bbox", args.bbox]
+    if getattr(args, 'bbox_axes', None):
+        reinvoke += ["--bbox_axes", args.bbox_axes]
+    if getattr(args, 'squeeze_singleton_axes', False):
+        reinvoke.append("--squeeze_singleton_axes")
     if getattr(args, 'axes_order', None):
         reinvoke += ["--axes_order", args.axes_order]
     if getattr(args, 'relabel_axis', None):
@@ -3077,6 +3133,12 @@ def main(argv=None):
 
     # Parse bbox for subvolume extraction
     bbox = parse_bbox(args.bbox) if getattr(args, 'bbox', None) else None
+    bbox_axes = parse_bbox_axes(args.bbox_axes) if getattr(args, 'bbox_axes', None) else None
+    if bbox_axes is not None and bbox is not None and len(bbox_axes) != len(bbox[0]):
+        raise ValueError(
+            f"--bbox_axes has {len(bbox_axes)} indices but --bbox has {len(bbox[0])} "
+            f"origin/size values — they must match 1:1."
+        )
 
     no_ome_meta_export = getattr(args, 'no_ome_meta_export', False)
     no_ome_xml_attr = getattr(args, 'no_ome_xml_attr', False)
@@ -3097,6 +3159,8 @@ def main(argv=None):
             is_label=is_label,
             expand_to_5d=expand_to_5d,
             bbox=bbox,
+            bbox_axes=bbox_axes,
+            squeeze_singleton_axes=getattr(args, 'squeeze_singleton_axes', False),
             axes_order_override=axes_order_override,
             axis_relabel=axis_relabel,
             no_ome_meta_export=no_ome_meta_export,
@@ -3116,6 +3180,8 @@ def main(argv=None):
             is_label=is_label,
             expand_to_5d=expand_to_5d,
             bbox=bbox,
+            bbox_axes=bbox_axes,
+            squeeze_singleton_axes=getattr(args, 'squeeze_singleton_axes', False),
             axes_order_override=axes_order_override,
             axis_relabel=axis_relabel,
             no_ome_meta_export=no_ome_meta_export,
