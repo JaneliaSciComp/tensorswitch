@@ -1,6 +1,6 @@
 name: TensorSwitch
 description: High-performance microscopy data conversion tool. Converts 200+ formats (TIFF, ND2, CZI, IMS, HDF5, N5, Zarr, etc.) to Zarr3/Zarr2/N5 with automatic multi-scale pyramid generation.
-version: "2.0.3"
+version: "2.1.0"
 
 requirements:
   - "pixi>=0.40"
