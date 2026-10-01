@@ -86,6 +86,7 @@ class Readers:
             - .nd2 → ND2Reader
             - .ims → IMSReader
             - .nii, .nii.gz → NIfTIReader
+            - .mrc, .mrcs, .rec, .ali, .st → MRCReader
             - .h5, .hdf5 → HDF5Reader
 
             Tier 3 (Broad Compatibility):
@@ -143,6 +144,8 @@ class Readers:
             return Readers.ims(path)
         elif path_lower.endswith(('.nii', '.nii.gz')):
             return Readers.nifti(path)
+        elif path_lower.endswith(('.mrc', '.mrcs', '.rec', '.ali', '.st')):
+            return Readers.mrc(path)
         elif path_lower.endswith('.png'):
             return Readers.png(path)
         elif path_lower.endswith('.zip') and _is_png_zip(path):
@@ -393,6 +396,22 @@ class Readers:
         """
         from ..readers.nifti import NIfTIReader
         return NIfTIReader(path)
+
+    @staticmethod
+    def mrc(path: str) -> BaseReader:
+        """
+        Create MRC reader (Tier 2 - Custom Optimized).
+
+        Supports .mrc, .mrcs, .rec, .ali and .st files (2D images and 3D
+        volumes). Voxel size is read from the header (angstroms, converted to
+        nanometers); an uncalibrated header (zero, or 1.0 A on every axis) is
+        reported as missing so --voxel_size is required.
+
+        Example:
+            >>> reader = Readers.mrc("/data/tomogram.mrc")
+        """
+        from ..readers.mrc import MRCReader
+        return MRCReader(path)
 
     @staticmethod
     def hdf5(path: str, dataset_path: Optional[str] = None) -> BaseReader:
