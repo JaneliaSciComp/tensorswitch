@@ -9,6 +9,8 @@ Usage:
     claude mcp add --transport stdio tensorswitch -- pixi run python -m tensorswitch_v2.mcp_server
 """
 
+import contextlib
+import io
 import json
 import logging
 import os
@@ -85,15 +87,18 @@ def inspect_dataset(path: str) -> str:
     try:
         path = path.strip()
 
-        # For local paths, check if this is an OME-Zarr container
-        if not is_remote_path(path):
-            zarr_json = os.path.join(path, "zarr.json")
-            zattrs = os.path.join(path, ".zattrs")
-            if os.path.isfile(zarr_json) or os.path.isfile(zattrs):
-                return _inspect_zarr_container(path)
+        # Stdout carries the JSON-RPC stream under stdio transport, so nothing
+        # the readers or discovery code print may reach it.
+        with contextlib.redirect_stdout(io.StringIO()):
+            # For local paths, check if this is an OME-Zarr container
+            if not is_remote_path(path):
+                zarr_json = os.path.join(path, "zarr.json")
+                zattrs = os.path.join(path, ".zattrs")
+                if os.path.isfile(zarr_json) or os.path.isfile(zattrs):
+                    return _inspect_zarr_container(path)
 
-        # Remote paths or non-container local: inspect as single dataset
-        return _inspect_single_dataset(path)
+            # Remote paths or non-container local: inspect as single dataset
+            return _inspect_single_dataset(path)
     except Exception as e:
         logger.error(f"inspect_dataset failed: {e}\n{traceback.format_exc()}")
         return f"Error inspecting {path}: {e}"
@@ -124,7 +129,8 @@ def _inspect_zarr_container(path: str) -> str:
     if "multiscales" in ome:
         ms = ome["multiscales"][0]
         result["axes"] = [a["name"] for a in ms.get("axes", [])]
-        result["unit"] = ms.get("axes", [{}])[0].get("unit", "unknown")
+        axis_units = [a["unit"] for a in ms.get("axes", []) if a.get("unit")]
+        result["unit"] = axis_units[0] if axis_units else "unknown"
         result["name"] = ms.get("name", "unknown")
         result["type"] = ms.get("type", "unknown")
         result["num_levels"] = len(ms.get("datasets", []))
@@ -301,7 +307,8 @@ def discover_datasets(
             discover_datasets as _discover,
         )
 
-        result = _discover(path.strip(), verbose=False, pattern=pattern, recursive=recursive)
+        with contextlib.redirect_stdout(io.StringIO()):
+            result = _discover(path.strip(), verbose=False, pattern=pattern, recursive=recursive)
 
         output = {"path": path, "images": [], "segmentations": []}
 
