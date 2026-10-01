@@ -1523,6 +1523,33 @@ def run_local_pyramid(s0_path, root_path, downsample_method="auto",
     return plan
 
 
+def _require_voxel_metadata_before_submit(args):
+    """Fail fast, before queueing, when the cluster job would refuse the source.
+
+    The converter refuses a source whose voxel size is not fully stated (see
+    DistributedConverter.convert). Without --voxel_size that would only surface
+    after the job had waited in the queue, so check it here, whether or not
+    resources are auto-calculated.
+    """
+    if getattr(args, 'voxel_size', None):
+        return
+    try:
+        reader = create_reader(args)
+        if reader.has_voxel_metadata():
+            return
+        missing = getattr(reader.get_voxel_sizes(), 'missing', None)
+    except Exception:
+        return  # cannot tell from the submit host; the job will report it
+
+    axes = f" (no value for axis {', '.join(missing)})" if missing else ""
+    raise ValueError(
+        f"No voxel size metadata found in source file{axes}. "
+        "Please provide --voxel_size X,Y,Z (and optionally --voxel_unit) "
+        "so the output metadata is correct. "
+        "Example: --voxel_size 0.108,0.108,0.268 --voxel_unit micrometer"
+    )
+
+
 def submit_job(args, return_job_id=False):
     """Submit a single LSF bsub job that re-invokes tensorswitch_v2.
 
@@ -1544,6 +1571,8 @@ def submit_job(args, return_job_id=False):
             "The -P flag specifies your LSF project for job accounting."
         )
 
+    _require_voxel_metadata_before_submit(args)
+
     # Auto-calculate resources from source data when not explicitly provided
     memory_gb = args.memory
     wall_time = args.wall_time
@@ -1553,21 +1582,6 @@ def submit_job(args, return_job_id=False):
     if needs_auto:
         print("Reading input metadata for resource estimation...")
         volume_shape, dtype_str, axes_order = _get_input_metadata(args)
-
-        # Fast-fail: if no --voxel_size override and source has placeholder [1,1,1] sizes,
-        # reject early before wasting a cluster job.
-        if not getattr(args, 'voxel_size', None):
-            try:
-                _voxels = create_reader(args).get_voxel_sizes()
-            except Exception:
-                _voxels = None
-            if _voxels and all(v == 1.0 for v in _voxels.values()):
-                raise ValueError(
-                    "No voxel size metadata found in source file. "
-                    "Please provide --voxel_size X,Y,Z (and optionally --voxel_unit) "
-                    "so the output metadata is correct. "
-                    "Example: --voxel_size 0.108,0.108,0.268 --voxel_unit micrometer"
-                )
 
         # When --bbox is used, estimate resources from the bbox subvolume, not the full source
         if getattr(args, 'bbox', None):
