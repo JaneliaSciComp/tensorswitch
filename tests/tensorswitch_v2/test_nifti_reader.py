@@ -107,6 +107,31 @@ class TestNIfTIVoxelSizes:
         _, voxel = extract_nifti_metadata(path)
         assert voxel is None
 
+    @pytest.mark.parametrize("unit", ["mm", "micron", "meter"])
+    def test_all_ones_pixdim_is_uncalibrated_whatever_the_unit(self, temp_dir, unit):
+        """pixdim 1.0 with a declared unit is NIfTI's default, not a measurement."""
+        arr = np.zeros((4, 4, 4), dtype=np.uint8)
+        path = _write_nifti(os.path.join(temp_dir, f"ones_{unit}.nii.gz"), arr,
+                            zooms=(1.0, 1.0, 1.0), units=(unit, "sec"))
+        with pytest.warns(UserWarning, match="uncalibrated default"):
+            _, voxel = extract_nifti_metadata(path)
+        assert voxel is None
+
+    def test_calibrated_header_is_still_trusted(self, temp_dir):
+        arr = np.zeros((4, 4, 4), dtype=np.uint8)
+        path = _write_nifti(os.path.join(temp_dir, "ok.nii.gz"), arr,
+                            zooms=(0.5, 0.5, 2.0), units=("micron", "sec"))
+        reader = NIfTIReader(path)
+        assert reader.has_voxel_metadata() is True
+        assert reader.get_voxel_sizes() == {"x": 500.0, "y": 500.0, "z": 2000.0}
+
+    def test_reader_reports_missing_metadata_for_uncalibrated_header(self, temp_dir):
+        arr = np.zeros((4, 4, 4), dtype=np.uint8)
+        path = _write_nifti(os.path.join(temp_dir, "ones.nii.gz"), arr,
+                            zooms=(1.0, 1.0, 1.0), units=("mm", "sec"))
+        with pytest.warns(UserWarning):
+            assert NIfTIReader(path).has_voxel_metadata() is False
+
 
 class TestNIfTIMetadata:
     def test_reports_shape_dtype_and_version(self, nifti_3d):

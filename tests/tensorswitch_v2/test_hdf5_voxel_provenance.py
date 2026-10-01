@@ -86,6 +86,48 @@ class TestConverterUsesProvenance:
         assert os.path.exists(os.path.join(temp_dir, "out.zarr"))
 
 
+class TestOverrideMismatchWarning:
+    ATTRS = {"voxel_size_x": 0.02, "voxel_size_y": 0.02, "voxel_size_z": 0.025}
+
+    def _convert(self, temp_dir, override, unit="nanometer"):
+        src = _write_h5(os.path.join(temp_dir, "full.h5"), (4, 8, 8), self.ATTRS)
+        reader = Readers.hdf5(src, dataset_path="main")
+        out = os.path.join(temp_dir, "out.zarr")
+        DistributedConverter(reader, Writers.zarr3(out)).convert(
+            voxel_size_override=override, voxel_unit=unit
+        )
+
+    def test_matching_override_is_silent(self, temp_dir):
+        import warnings
+
+        with warnings.catch_warnings():
+            warnings.filterwarnings("error", message=".*differs from the source header.*")
+            self._convert(temp_dir, {"x": 20.0, "y": 20.0, "z": 25.0})
+
+    def test_disagreeing_override_warns_but_wins(self, temp_dir):
+        with pytest.warns(UserWarning, match="differs from the source header"):
+            self._convert(temp_dir, {"x": 200.0, "y": 20.0, "z": 25.0})
+
+    def test_unit_is_taken_into_account(self, temp_dir):
+        import warnings
+
+        # 0.02 um == 20 nm, so this agrees with the header
+        with warnings.catch_warnings():
+            warnings.filterwarnings("error", message=".*differs from the source header.*")
+            self._convert(temp_dir, {"x": 0.02, "y": 0.02, "z": 0.025}, unit="micrometer")
+
+    def test_no_warning_when_header_has_no_voxel_metadata(self, temp_dir):
+        import warnings
+
+        src = _write_h5(os.path.join(temp_dir, "bare.h5"), (4, 8, 8))
+        reader = Readers.hdf5(src, dataset_path="main")
+        with warnings.catch_warnings():
+            warnings.filterwarnings("error", message=".*differs from the source header.*")
+            DistributedConverter(reader, Writers.zarr3(os.path.join(temp_dir, "o.zarr"))).convert(
+                voxel_size_override={"x": 20.0, "y": 20.0, "z": 25.0}, voxel_unit="nanometer"
+            )
+
+
 class TestBaseDefault:
     def test_reader_that_does_not_track_returns_none(self, temp_dir):
         import tifffile

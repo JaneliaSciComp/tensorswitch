@@ -55,6 +55,37 @@ class DistributedConverter:
         self._output_store = None
         self._total_chunks = None
 
+    def _warn_if_override_disagrees(self, override: Dict[str, float], unit: str, tolerance: float = 0.01):
+        """Warn when an explicit voxel size differs from a header the reader trusts.
+
+        The override still wins; this only flags a likely typo or unit mix-up.
+        """
+        import warnings
+
+        try:
+            if self.reader.has_voxel_metadata() is not True:
+                return
+            header_nm = self.reader.get_voxel_sizes()
+        except Exception:
+            return
+
+        to_nm = {'nanometer': 1.0, 'micrometer': 1e3, 'millimeter': 1e6}
+        factor = to_nm.get(unit)
+        if factor is None:
+            return
+        for axis in ('x', 'y', 'z'):
+            given = override.get(axis)
+            header = header_nm.get(axis)
+            if not given or not header or given <= 0 or header <= 0:
+                continue
+            if abs(given * factor - header) / header > tolerance:
+                warnings.warn(
+                    f"--voxel_size {axis}={given} {unit} differs from the source header "
+                    f"({header:g} nm). Using the value you passed.",
+                    stacklevel=3,
+                )
+                return
+
     def convert(
         self,
         start_idx: int = 0,
@@ -501,6 +532,7 @@ class DistributedConverter:
             source_unit = target_unit  # override already in target unit
             if verbose:
                 print(f"  Using voxel size override ({source_unit}): {voxel_sizes}")
+            self._warn_if_override_disagrees(voxel_size_override, target_unit)
         else:
             try:
                 voxel_sizes = self.reader.get_voxel_sizes()

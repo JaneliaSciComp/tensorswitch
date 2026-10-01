@@ -97,5 +97,9 @@ class NIfTIReader(DaskReader):
 
         return _default_voxel_sizes("NIfTI")
 
+    def has_voxel_metadata(self) -> bool:
+        self.get_metadata()  # populates _voxel_sizes_cache
+        return bool(self._voxel_sizes_cache)
+
     def __repr__(self) -> str:
         return f"NIfTIReader(path='{self.path}')"

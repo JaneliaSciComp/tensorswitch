@@ -998,7 +998,16 @@ def extract_nifti_metadata(nifti_file):
     TO_NM = {'meter': 1e9, 'mm': 1e6, 'micron': 1e3}
 
     voxel_sizes = None
-    if len(zooms) >= 3 and space_unit in TO_NM and all(z > 0 for z in zooms):
+    if len(zooms) >= 3 and all(z == 1.0 for z in zooms[:3]):
+        # pixdim 1.0 on every axis is what NIfTI writers emit for an
+        # uncalibrated volume (1 mm by default), whatever the declared unit.
+        import warnings
+        warnings.warn(
+            f"NIfTI pixdim {zooms} (unit={space_unit}) is the uncalibrated default -- "
+            f"ignoring it. Pass --voxel_size explicitly.",
+            stacklevel=2,
+        )
+    elif len(zooms) >= 3 and space_unit in TO_NM and all(z > 0 for z in zooms):
         factor = TO_NM[space_unit]
         candidate = {
             'x': zooms[0] * factor,
