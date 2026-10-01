@@ -221,7 +221,8 @@ def extract_tiff_ome_metadata(tiff_file):
     Returns:
         tuple: (ome_xml, voxel_sizes)
             ome_xml: OME-XML string or None
-            voxel_sizes: {'x': float, 'y': float, 'z': float} in nanometers, or None
+            voxel_sizes: {'x': float, 'y': float, 'z': float} in nanometers, None for an axis
+                the file does not state, or None if it states nothing
     """
     import tifffile
 
@@ -251,9 +252,9 @@ def extract_tiff_ome_metadata(tiff_file):
                         z_unit = str(pixels.physical_size_z_unit) if hasattr(pixels, 'physical_size_z_unit') and pixels.physical_size_z_unit else 'micrometer'
 
                         voxel_sizes = {
-                            'x': convert_to_nanometers(pixels.physical_size_x, x_unit) if pixels.physical_size_x else 1.0,
-                            'y': convert_to_nanometers(pixels.physical_size_y, y_unit) if pixels.physical_size_y else 1.0,
-                            'z': convert_to_nanometers(pixels.physical_size_z, z_unit) if pixels.physical_size_z else 1.0
+                            'x': convert_to_nanometers(pixels.physical_size_x, x_unit) if pixels.physical_size_x else None,
+                            'y': convert_to_nanometers(pixels.physical_size_y, y_unit) if pixels.physical_size_y else None,
+                            'z': convert_to_nanometers(pixels.physical_size_z, z_unit) if pixels.physical_size_z else None
                         }
                         return ome_xml, voxel_sizes
                 except Exception as e:
@@ -272,8 +273,8 @@ def extract_tiff_ome_metadata(tiff_file):
                     z_spacing_nm = convert_to_nanometers(z_spacing, unit)
 
                     # Read XY resolution from TIFF tags (pixels per unit)
-                    xy_nm_x = 1.0
-                    xy_nm_y = 1.0
+                    xy_nm_x = None
+                    xy_nm_y = None
                     page = tif.pages[0]
                     x_res_tag = page.tags.get('XResolution')
                     y_res_tag = page.tags.get('YResolution')
@@ -338,7 +339,8 @@ def extract_nd2_ome_metadata(nd2_file):
     Returns:
         tuple: (ome_xml, voxel_sizes)
             ome_xml: OME-XML string or None
-            voxel_sizes: {'x': float, 'y': float, 'z': float} in nanometers, or None
+            voxel_sizes: {'x': float, 'y': float, 'z': float} in nanometers, None for an axis
+                the file does not state, or None if it states nothing
     """
     import nd2
 
@@ -361,9 +363,9 @@ def extract_nd2_ome_metadata(nd2_file):
                     z_unit = str(pixels.physical_size_z_unit) if hasattr(pixels, 'physical_size_z_unit') and pixels.physical_size_z_unit else 'micrometer'
 
                     voxel_sizes = {
-                        'x': convert_to_nanometers(pixels.physical_size_x, x_unit) if pixels.physical_size_x else 1.0,
-                        'y': convert_to_nanometers(pixels.physical_size_y, y_unit) if pixels.physical_size_y else 1.0,
-                        'z': convert_to_nanometers(pixels.physical_size_z, z_unit) if pixels.physical_size_z else 1.0
+                        'x': convert_to_nanometers(pixels.physical_size_x, x_unit) if pixels.physical_size_x else None,
+                        'y': convert_to_nanometers(pixels.physical_size_y, y_unit) if pixels.physical_size_y else None,
+                        'z': convert_to_nanometers(pixels.physical_size_z, z_unit) if pixels.physical_size_z else None
                     }
             except Exception as e:
                 print(f"Warning: Could not extract voxel sizes from ND2 OME metadata: {e}")
@@ -790,7 +792,8 @@ def extract_czi_metadata(czi_file):
 
     Returns:
         tuple: (raw_xml_metadata, voxel_sizes_dict)
-            voxel_sizes_dict: {'x': float, 'y': float, 'z': float} in nanometers
+            voxel_sizes_dict: {'x': float, 'y': float, 'z': float} in nanometers, None for
+                an axis the file does not state
     """
     from pylibCZIrw import czi
     import xml.etree.ElementTree as ET
@@ -810,7 +813,7 @@ def extract_czi_metadata(czi_file):
                 if scaling is not None:
                     items = scaling.find('Items')
                     if items is not None:
-                        voxel_sizes = {'x': 1.0, 'y': 1.0, 'z': 1.0}
+                        voxel_sizes = {'x': None, 'y': None, 'z': None}
                         for dist in items.findall('Distance'):
                             id_attr = dist.get('Id')
                             value = dist.find('Value')
@@ -824,7 +827,7 @@ def extract_czi_metadata(czi_file):
                                 elif id_attr.upper() == 'Z':
                                     voxel_sizes['z'] = val_nm
 
-                        print(f"Extracted CZI voxel sizes (nm): x={voxel_sizes['x']:.2f}, y={voxel_sizes['y']:.2f}, z={voxel_sizes['z']:.2f}")
+                        print(f"Extracted CZI voxel sizes (nm): {voxel_sizes}")
 
             except Exception as e:
                 print(f"Warning: Could not parse CZI metadata: {e}")

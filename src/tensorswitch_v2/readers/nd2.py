@@ -57,9 +57,7 @@ class ND2Reader(DaskReader):
                 ome_xml, voxel_sizes = extract_nd2_ome_metadata(self.path)
                 self._metadata_cache = {
                     'ome_xml': ome_xml,
-                    'voxel_size_x': voxel_sizes.get('x', 1.0) if voxel_sizes else 1.0,
-                    'voxel_size_y': voxel_sizes.get('y', 1.0) if voxel_sizes else 1.0,
-                    'voxel_size_z': voxel_sizes.get('z', 1.0) if voxel_sizes else 1.0,
+                    'voxel_sizes_stated': dict(voxel_sizes) if voxel_sizes else {},
                 }
             except Exception as e:
                 print(f"Warning: Failed to extract ND2 metadata: {e}")
@@ -67,14 +65,9 @@ class ND2Reader(DaskReader):
 
         return self._metadata_cache
 
-    def get_voxel_sizes(self) -> Dict[str, float]:
-        """Return voxel dimensions from ND2 metadata in nanometers."""
-        metadata = self.get_metadata()
-        return {
-            'x': metadata.get('voxel_size_x', 1.0),
-            'y': metadata.get('voxel_size_y', 1.0),
-            'z': metadata.get('voxel_size_z', 1.0)
-        }
+    def _read_voxel_sizes(self) -> Optional[Dict[str, Optional[float]]]:
+        """Voxel sizes stated by the ND2 OME metadata, in nanometers."""
+        return self.get_metadata().get('voxel_sizes_stated') or None
 
     def __repr__(self) -> str:
         return f"ND2Reader(path='{self.path}')"

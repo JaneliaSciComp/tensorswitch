@@ -68,9 +68,7 @@ class CZIReader(DaskReader):
             self._metadata_cache = {
                 'raw_xml': raw_xml,
                 'axes_order': self.axes_order,
-                'voxel_size_x': voxel_sizes.get('x', 1.0) if voxel_sizes else 1.0,
-                'voxel_size_y': voxel_sizes.get('y', 1.0) if voxel_sizes else 1.0,
-                'voxel_size_z': voxel_sizes.get('z', 1.0) if voxel_sizes else 1.0,
+                'voxel_sizes_stated': dict(voxel_sizes) if voxel_sizes else {},
                 'shape': tuple(self._dask_array.shape),
                 'dtype': str(self._dask_array.dtype),
             }
@@ -84,14 +82,9 @@ class CZIReader(DaskReader):
 
         return self._metadata_cache
 
-    def get_voxel_sizes(self) -> Dict[str, float]:
-        """Return voxel dimensions from CZI metadata in nanometers."""
-        metadata = self.get_metadata()
-        return {
-            'x': metadata.get('voxel_size_x', 1.0),
-            'y': metadata.get('voxel_size_y', 1.0),
-            'z': metadata.get('voxel_size_z', 1.0),
-        }
+    def _read_voxel_sizes(self) -> Optional[Dict[str, Optional[float]]]:
+        """Voxel sizes stated by the CZI Scaling block, in nanometers."""
+        return self.get_metadata().get('voxel_sizes_stated') or None
 
     def get_ome_metadata(self) -> Dict:
         """Return OME-NGFF metadata using CZI axes order."""
