@@ -506,8 +506,15 @@ class DistributedConverter:
                 voxel_sizes = self.reader.get_voxel_sizes()
             except Exception:
                 voxel_sizes = None
-            if voxel_sizes and all(v == 1.0 for v in voxel_sizes.values()):
-                # Default placeholder [1,1,1] — no real voxel metadata in source.
+            try:
+                has_meta = self.reader.has_voxel_metadata()
+            except Exception:
+                has_meta = None
+            if has_meta is False or (
+                has_meta is None and voxel_sizes and all(v == 1.0 for v in voxel_sizes.values())
+            ):
+                # Reader reports no real voxel metadata, or (for readers that
+                # don't track it) an all-1.0 placeholder.
                 # Refuse to guess; require user to specify explicitly.
                 raise ValueError(
                     "No voxel size metadata found in source file. "

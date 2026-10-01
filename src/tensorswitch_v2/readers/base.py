@@ -354,6 +354,18 @@ class BaseReader(ABC):
         """
         pass
 
+    def has_voxel_metadata(self) -> Optional[bool]:
+        """
+        Whether get_voxel_sizes() came from real source metadata.
+
+        Returns:
+            True  - every spatial axis size was read from the source
+            False - at least one spatial axis fell back to a placeholder (1.0)
+            None  - this reader does not track it; callers fall back to
+                    treating an all-1.0 result as a placeholder
+        """
+        return None
+
     def get_source_info(self) -> Dict:
         """
         Return comprehensive source metadata for auto-detection.
