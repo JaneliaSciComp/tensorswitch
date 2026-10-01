@@ -407,7 +407,7 @@ Supported output formats:
         choices=["nanometer", "micrometer", "millimeter"],
         help="Override the spatial unit in OME metadata. "
              "When set, voxel sizes are written as-is in this unit (no nm conversion). "
-             "Without --voxel_size, defaults to scale [1,1,1] in the specified unit.",
+             "Use with --voxel_size; a source with no voxel metadata is refused without it.",
     )
 
     # Label/segmentation mode
