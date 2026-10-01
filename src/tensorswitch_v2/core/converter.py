@@ -63,7 +63,7 @@ class DistributedConverter:
         import warnings
 
         try:
-            if self.reader.has_voxel_metadata() is not True:
+            if not self.reader.has_voxel_metadata():
                 return
             header_nm = self.reader.get_voxel_sizes()
         except Exception:
@@ -536,17 +536,13 @@ class DistributedConverter:
         else:
             try:
                 voxel_sizes = self.reader.get_voxel_sizes()
-            except Exception:
-                voxel_sizes = None
-            try:
                 has_meta = self.reader.has_voxel_metadata()
             except Exception:
-                has_meta = None
-            if has_meta is False or (
-                has_meta is None and voxel_sizes and all(v == 1.0 for v in voxel_sizes.values())
-            ):
-                # Reader reports no real voxel metadata, or (for readers that
-                # don't track it) an all-1.0 placeholder.
+                # Reader could not report voxel sizes at all: unchanged behaviour,
+                # do not block the conversion on it.
+                voxel_sizes, has_meta = None, True
+            if not has_meta:
+                # Some spatial axis has no real value in the source.
                 # Refuse to guess; require user to specify explicitly.
                 raise ValueError(
                     "No voxel size metadata found in source file. "

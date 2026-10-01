@@ -29,6 +29,48 @@ def _default_voxel_sizes(source_format: str = "unknown") -> Dict[str, float]:
     return {'x': 1.0, 'y': 1.0, 'z': 1.0}
 
 
+class VoxelSizes(dict):
+    """
+    Voxel sizes in nanometers, plus which axes were actually read from the source.
+
+    Behaves like the plain ``{'x': ..., 'y': ..., 'z': ...}`` dict every caller
+    already expects. Axes the source does not state hold the 1.0 placeholder;
+    ``known`` says which ones are real, ``required`` which ones the array has.
+
+    Example:
+        >>> vs = VoxelSizes({'x': 116.0, 'y': 116.0, 'z': None}, required=('x', 'y', 'z'))
+        >>> vs['z'], vs.is_complete, vs.missing
+        (1.0, False, ['z'])
+    """
+
+    AXES = ('x', 'y', 'z')
+
+    def __init__(self, sizes=None, required=AXES):
+        sizes = dict(sizes or {})
+        known = {a for a, v in sizes.items() if v is not None and v > 0}
+        super().__init__({a: (sizes[a] if a in known else 1.0) for a in self.AXES})
+        for extra, value in sizes.items():  # e.g. 't'
+            if extra not in self.AXES and value is not None:
+                self[extra] = value
+        self.known = frozenset(known)
+        self.required = tuple(required)
+
+    def copy(self) -> "VoxelSizes":
+        clone = VoxelSizes.__new__(VoxelSizes)
+        dict.update(clone, self)
+        clone.known = self.known
+        clone.required = self.required
+        return clone
+
+    @property
+    def missing(self) -> List[str]:
+        return [a for a in self.required if a not in self.known]
+
+    @property
+    def is_complete(self) -> bool:
+        return not self.missing
+
+
 # ============================================================================
 # Shared kvstore utilities for all Tier 1 readers
 # ============================================================================
@@ -325,46 +367,69 @@ class BaseReader(ABC):
         """
         pass
 
-    @abstractmethod
-    def get_voxel_sizes(self) -> Dict[str, float]:
+    def _read_voxel_sizes(self) -> Optional[Dict[str, Optional[float]]]:
+        """
+        Subclass hook: the voxel sizes the source file actually states.
+
+        Return a dict in **nanometers** with keys among 'x', 'y', 'z'. Use None
+        (or omit the key) for any axis the source does not state, and return
+        None if it states nothing. Never invent a default here: the base class
+        fills the 1.0 placeholder and tracks which axes are real.
+
+        Apply format-specific plausibility checks here (e.g. an uncalibrated
+        header default) and return None for a value you do not trust.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} must implement _read_voxel_sizes() "
+            f"(or override get_voxel_sizes())"
+        )
+
+    def _required_voxel_axes(self) -> Tuple[str, ...]:
+        """Spatial axes of x, y, z that this array actually has."""
+        try:
+            labels = [str(label).lower() for label in self.get_tensorstore().domain.labels]
+        except Exception:
+            labels = []
+        axes = tuple(a for a in VoxelSizes.AXES if a in labels)
+        return axes or VoxelSizes.AXES
+
+    def get_voxel_sizes(self) -> "VoxelSizes":
         """
         Return physical pixel/voxel dimensions in nanometers.
 
-        Extracts the physical size of each voxel from format metadata.
         Critical for anisotropic downsampling and coordinate transformations.
+        The result is a dict ``{'x': 116.0, 'y': 116.0, 'z': 500.0}`` (with a
+        't' entry if applicable) that also records which axes were read from
+        the source (``.known``) and which the array needs (``.required``).
+        Axes the source does not state hold the 1.0 placeholder, with a warning.
 
-        Returns:
-            dict: Voxel dimensions with keys 'x', 'y', 'z' (and 't' if applicable):
-                {
-                    'x': 116.0,  # nanometers per pixel in X
-                    'y': 116.0,  # nanometers per pixel in Y
-                    'z': 500.0   # nanometers per pixel in Z
-                }
-
-        Example (isotropic):
-            {'x': 100.0, 'y': 100.0, 'z': 100.0}
-
-        Example (anisotropic - common in microscopy):
-            {'x': 116.0, 'y': 116.0, 'z': 500.0}  # Z is coarser
-
-        Notes:
-            - Return 1.0 if physical size is unknown
-            - Units MUST be nanometers (convert from other units)
-            - Anisotropic voxels will trigger warnings and smart downsampling
+        Subclasses implement _read_voxel_sizes() rather than overriding this.
         """
-        pass
+        result = getattr(self, '_voxel_sizes_result', None)
+        if result is None:
+            result = VoxelSizes(self._read_voxel_sizes(), required=self._required_voxel_axes())
+            if not result.is_complete:
+                warnings.warn(
+                    f"No voxel size found for axis {', '.join(result.missing)} in "
+                    f"{type(self).__name__} source; using placeholder 1.0. "
+                    f"Use --voxel_size X,Y,Z to provide the correct voxel sizes.",
+                    stacklevel=2,
+                )
+            self._voxel_sizes_result = result
+        return result.copy()
 
-    def has_voxel_metadata(self) -> Optional[bool]:
+    def has_voxel_metadata(self) -> bool:
         """
-        Whether get_voxel_sizes() came from real source metadata.
+        True when get_voxel_sizes() holds real source values for every axis the
+        array has; False when any is a placeholder.
 
-        Returns:
-            True  - every spatial axis size was read from the source
-            False - at least one spatial axis fell back to a placeholder (1.0)
-            None  - this reader does not track it; callers fall back to
-                    treating an all-1.0 result as a placeholder
+        Readers that still override get_voxel_sizes() and return a plain dict
+        are judged by the old rule: an all-1.0 result is a placeholder.
         """
-        return None
+        sizes = self.get_voxel_sizes()
+        if isinstance(sizes, VoxelSizes):
+            return sizes.is_complete
+        return not all(v == 1.0 for v in sizes.values())
 
     def get_source_info(self) -> Dict:
         """

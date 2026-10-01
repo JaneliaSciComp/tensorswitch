@@ -204,7 +204,6 @@ class HDF5Reader(DaskReader):
         metadata['voxel_size_found'] = [
             d for d in ('x', 'y', 'z') if f'voxel_size_{d}' in metadata
         ]
-        metadata['voxel_size_required'] = list(('z', 'y', 'x')[-min(3, len(dataset.shape)):])
         for dim in ('x', 'y', 'z'):
             if f'voxel_size_{dim}' not in metadata:
                 metadata[f'voxel_size_{dim}'] = 1.0
@@ -212,26 +211,16 @@ class HDF5Reader(DaskReader):
         self._metadata_cache = metadata
         return metadata
 
-    def get_voxel_sizes(self) -> Dict[str, float]:
-        """Return voxel dimensions from HDF5 attributes in nanometers.
-
-        Axes with no voxel attribute stay at the 1.0 placeholder (not unit-converted),
-        so the converter can tell "unknown" from a real size.
-        """
+    def _read_voxel_sizes(self) -> Dict[str, float]:
+        """Voxel sizes stated by the dataset's HDF5 attributes, in nanometers."""
         from ..utils.format_loaders import convert_to_nanometers
 
         metadata = self.get_metadata()
         unit = metadata.get('voxel_unit', 'micrometer')
-        found = metadata['voxel_size_found']
-
         return {
-            dim: convert_to_nanometers(metadata[f'voxel_size_{dim}'], unit) if dim in found else 1.0
-            for dim in ('x', 'y', 'z')
+            dim: convert_to_nanometers(metadata[f'voxel_size_{dim}'], unit)
+            for dim in metadata['voxel_size_found']
         }
-
-    def has_voxel_metadata(self) -> bool:
-        metadata = self.get_metadata()
-        return all(d in metadata['voxel_size_found'] for d in metadata['voxel_size_required'])
 
     def __del__(self):
         """Close HDF5 file on cleanup."""

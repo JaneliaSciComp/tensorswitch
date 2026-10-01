@@ -13,7 +13,7 @@ from typing import Dict, List, Optional
 
 # Import utility functions from v2 utils (independent from v1)
 from ..utils import load_nifti_stack, extract_nifti_metadata
-from .base import DaskReader, _default_voxel_sizes
+from .base import DaskReader
 
 
 class NIfTIReader(DaskReader):
@@ -84,22 +84,12 @@ class NIfTIReader(DaskReader):
 
         return self._metadata_cache
 
-    def get_voxel_sizes(self) -> Dict[str, float]:
-        """Return voxel dimensions in nanometers.
-
-        Falls back to the shared default when the NIfTI header does not carry a
-        trustworthy physical scale (see class docstring) -- pass --voxel_size.
+    def _read_voxel_sizes(self) -> Optional[Dict[str, float]]:
+        """Header voxel size in nanometers, or None when the header is not trustworthy
+        (no unit, the uncalibrated 1.0 default, or an implausible scale) -- pass --voxel_size.
         """
         self.get_metadata()  # populates _voxel_sizes_cache
-
-        if self._voxel_sizes_cache:
-            return self._voxel_sizes_cache
-
-        return _default_voxel_sizes("NIfTI")
-
-    def has_voxel_metadata(self) -> bool:
-        self.get_metadata()  # populates _voxel_sizes_cache
-        return bool(self._voxel_sizes_cache)
+        return self._voxel_sizes_cache or None
 
     def __repr__(self) -> str:
         return f"NIfTIReader(path='{self.path}')"

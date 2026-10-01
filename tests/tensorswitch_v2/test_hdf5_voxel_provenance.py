@@ -128,10 +128,12 @@ class TestOverrideMismatchWarning:
             )
 
 
-class TestBaseDefault:
-    def test_reader_that_does_not_track_returns_none(self, temp_dir):
+class TestUnmigratedReaderFallback:
+    """Readers that still override get_voxel_sizes() are judged by the all-1.0 rule."""
+
+    def test_all_ones_is_a_placeholder(self, temp_dir):
         import tifffile
 
         path = os.path.join(temp_dir, "a.tif")
         tifffile.imwrite(path, np.zeros((3, 8, 8), dtype=np.uint8))
-        assert Readers.tiff(path).has_voxel_metadata() is None
+        assert Readers.tiff(path).has_voxel_metadata() is False

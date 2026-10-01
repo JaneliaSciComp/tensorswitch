@@ -42,7 +42,7 @@ Public API:
     - BaseReader: Abstract base class for all readers
 """
 
-from .base import BaseReader, DaskReader
+from .base import BaseReader, DaskReader, VoxelSizes
 
 # Tier 1: Native TensorStore
 from .n5 import N5Reader
@@ -67,7 +67,7 @@ from .bioformats import BioFormatsReader
 
 __all__ = [
     # Base
-    'BaseReader', 'DaskReader',
+    'BaseReader', 'DaskReader', 'VoxelSizes',
     # Tier 1
     'N5Reader', 'Zarr3Reader', 'Zarr2Reader', 'PrecomputedReader',
     # Tier 2

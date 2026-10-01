@@ -94,13 +94,13 @@ class MRCReader(DaskReader):
             }
         return self._metadata_cache
 
-    def _required_axes(self) -> List[str]:
+    def _header_axes(self) -> List[str]:
         return ["x", "y"] if self._dask_array.ndim == 2 else ["x", "y", "z"]
 
     def _voxel_problem(self) -> Optional[str]:
         """Why the header voxel size cannot be trusted, or None if it can."""
         meta = self.get_metadata()["voxel_size_angstrom"]
-        required = [meta[a] for a in self._required_axes()]
+        required = [meta[a] for a in self._header_axes()]
         if any(v <= 0 for v in required):
             return "the header voxel size is zero"
         if all(v == _PLACEHOLDER_ANGSTROM for v in required):
@@ -112,25 +112,15 @@ class MRCReader(DaskReader):
             )
         return None
 
-    def has_voxel_metadata(self) -> bool:
-        return self._voxel_problem() is None
-
-    def get_voxel_sizes(self) -> Dict[str, float]:
-        """Return voxel dimensions in nanometers (angstrom header values / 10)."""
+    def _read_voxel_sizes(self) -> Optional[Dict[str, float]]:
+        """Header voxel size in nanometers (angstrom values / 10), or None if untrusted."""
         problem = self._voxel_problem()
         if problem:
-            warnings.warn(
-                f"MRC voxel size ignored: {problem}. Using placeholder [1.0, 1.0, 1.0]; "
-                f"pass --voxel_size X,Y,Z to set it.",
-                stacklevel=2,
-            )
-            return {"x": 1.0, "y": 1.0, "z": 1.0}
+            warnings.warn(f"MRC voxel size ignored: {problem}.", stacklevel=2)
+            return None
 
         meta = self.get_metadata()["voxel_size_angstrom"]
-        sizes = {a: meta[a] * _ANGSTROM_TO_NM for a in ("x", "y")}
-        # a 2D image has no meaningful z; mirror x so downstream code sees a number
-        sizes["z"] = meta["z"] * _ANGSTROM_TO_NM if self._dask_array.ndim == 3 else sizes["x"]
-        return sizes
+        return {a: meta[a] * _ANGSTROM_TO_NM for a in self._header_axes()}
 
     def __del__(self):
         mrc = getattr(self, "_mrc", None)

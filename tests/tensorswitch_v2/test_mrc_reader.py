@@ -79,9 +79,9 @@ class TestMRCVoxelSize:
         # BioSR LLS-SIM: 0.0926 um x 0.0926 um x 0.3906 um stored as "angstroms"
         path = _write_mrc(os.path.join(temp_dir, "v.mrc"), volume, (0.0926, 0.0926, 0.3906))
         reader = MRCReader(path)
-        assert reader.has_voxel_metadata() is False
         with pytest.warns(UserWarning, match="implausibly small"):
-            assert reader.get_voxel_sizes() == {"x": 1.0, "y": 1.0, "z": 1.0}
+            assert reader.has_voxel_metadata() is False
+        assert reader.get_voxel_sizes() == {"x": 1.0, "y": 1.0, "z": 1.0}
 
     def test_2d_image_needs_only_x_and_y(self, temp_dir):
         arr = np.zeros((6, 8), dtype=np.uint8)
