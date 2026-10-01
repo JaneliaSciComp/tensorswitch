@@ -108,7 +108,8 @@ def test_voxel_size_always_defaults_with_warning(tmp_path):
         warnings.simplefilter("always")
         vs = r.get_voxel_sizes()
     assert vs == {"x": 1.0, "y": 1.0, "z": 1.0}
-    assert any("PNG" in str(w.message) for w in caught)
+    assert any("PngReader" in str(w.message) for w in caught)
+    assert r.has_voxel_metadata() is False
 
 
 def test_dimension_names_for_stack(tmp_path):

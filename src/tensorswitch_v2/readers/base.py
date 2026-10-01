@@ -387,7 +387,10 @@ class BaseReader(ABC):
     def _required_voxel_axes(self) -> Tuple[str, ...]:
         """Spatial axes of x, y, z that this array actually has."""
         try:
-            labels = [str(label).lower() for label in self.get_tensorstore().domain.labels]
+            store = self.get_tensorstore()
+            labels = [str(label).lower() for label in store.domain.labels]
+            if not all(labels):  # unlabelled store (e.g. Zarr2): infer from the shape
+                labels = [n.lower() for n in infer_dimension_names(tuple(store.shape))]
         except Exception:
             labels = []
         axes = tuple(a for a in VoxelSizes.AXES if a in labels)
@@ -407,7 +410,12 @@ class BaseReader(ABC):
         """
         result = getattr(self, '_voxel_sizes_result', None)
         if result is None:
-            result = VoxelSizes(self._read_voxel_sizes(), required=self._required_voxel_axes())
+            required = self._required_voxel_axes()
+            result = VoxelSizes(self._read_voxel_sizes(), required=required)
+            if result.is_complete and len(required) > 1 and all(result[a] == 1.0 for a in required):
+                # A stated 1.0 nm on every axis cannot be told from the placeholder
+                # (and is not a plausible microscopy voxel), so it counts as unstated.
+                result = VoxelSizes(None, required=required)
             if not result.is_complete:
                 warnings.warn(
                     f"No voxel size found for axis {', '.join(result.missing)} in "

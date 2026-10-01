@@ -11,7 +11,7 @@ import json
 import warnings
 import numpy as np
 import tensorstore as ts
-from .base import BaseReader, _default_voxel_sizes, build_kvstore as _build_kvstore_shared
+from .base import BaseReader, build_kvstore as _build_kvstore_shared
 from ..utils import get_tensorstore_context, infer_dimension_names
 from ..utils.format_loaders import convert_to_nanometers
 
@@ -27,7 +27,8 @@ def _extract_voxel_sizes_from_multiscales(metadata, dataset_path, default_paths)
         default_paths: Fallback path strings to match when dataset_path is empty.
 
     Returns:
-        dict with 'x','y','z' in nanometers, or None if not found.
+        dict with 'x','y','z' in nanometers (None for an axis without a scale),
+        or None if not found.
     """
     multiscales = metadata.get('multiscales', [])
     if not multiscales:
@@ -54,7 +55,7 @@ def _extract_voxel_sizes_from_multiscales(metadata, dataset_path, default_paths)
             for t in transforms:
                 if t.get('type') == 'scale':
                     scales = t.get('scale', [])
-                    voxel_sizes = {'x': 1.0, 'y': 1.0, 'z': 1.0}
+                    voxel_sizes = {'x': None, 'y': None, 'z': None}
                     for i, axis in enumerate(axes):
                         axis_name = axis.get('name', '').lower()
                         if i < len(scales) and axis_name in voxel_sizes:
@@ -294,23 +295,13 @@ class Zarr3Reader(BaseReader):
             if 'multiscales' in zarr_metadata['attributes']:
                 metadata['multiscales'] = zarr_metadata['attributes']['multiscales']
 
-    def get_voxel_sizes(self) -> Dict[str, float]:
+    def _read_voxel_sizes(self) -> Optional[Dict[str, Optional[float]]]:
+        """Voxel sizes from OME-NGFF coordinateTransformations, in nanometers.
+
+        Converts using the unit in the multiscales axes metadata.
         """
-        Return voxel dimensions from OME-NGFF coordinateTransformations.
-
-        Extracts voxel sizes from the multiscales metadata if available.
-        Converts to nanometers based on the unit specified in axes metadata.
-
-        Returns:
-            dict: Voxel dimensions with keys 'x', 'y', 'z' in nanometers
-
-        Example:
-            >>> reader = Zarr3Reader("/data.zarr")
-            >>> voxel_sizes = reader.get_voxel_sizes()
-        """
-        result = _extract_voxel_sizes_from_multiscales(
+        return _extract_voxel_sizes_from_multiscales(
             self.get_metadata(), self._dataset_path, ('', '0', 's0'))
-        return result if result else _default_voxel_sizes("Zarr")
 
     def supports_remote(self) -> bool:
         """Check if this is a remote store."""
@@ -612,18 +603,10 @@ class Zarr2Reader(BaseReader):
 
         return metadata
 
-    def get_voxel_sizes(self) -> Dict[str, float]:
-        """
-        Return voxel dimensions from OME-NGFF coordinateTransformations.
-
-        Converts to nanometers based on the unit specified in axes metadata.
-
-        Returns:
-            dict: Voxel dimensions with keys 'x', 'y', 'z' in nanometers
-        """
-        result = _extract_voxel_sizes_from_multiscales(
+    def _read_voxel_sizes(self) -> Optional[Dict[str, Optional[float]]]:
+        """Voxel sizes from OME-NGFF coordinateTransformations, in nanometers."""
+        return _extract_voxel_sizes_from_multiscales(
             self.get_metadata(), self._dataset_path, ('', '0', 's0'))
-        return result if result else _default_voxel_sizes("Zarr")
 
     def supports_remote(self) -> bool:
         """Check if this is a remote store."""

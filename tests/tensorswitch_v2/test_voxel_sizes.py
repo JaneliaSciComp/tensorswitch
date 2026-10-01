@@ -118,6 +118,19 @@ class TestBaseContract:
             Bare((2, 2, 2), None).get_voxel_sizes()
 
 
+class TestAllOnesSafetyNet:
+    """A stated 1.0 nm on every axis is indistinguishable from the placeholder."""
+
+    def test_all_ones_is_treated_as_unstated(self):
+        reader = FakeReader((4, 5, 6), {"x": 1.0, "y": 1.0, "z": 1.0})
+        with pytest.warns(UserWarning):
+            assert reader.has_voxel_metadata() is False
+
+    def test_a_single_one_among_real_values_is_fine(self):
+        reader = FakeReader((4, 5, 6), {"x": 1.0, "y": 8.0, "z": 8.0})
+        assert reader.has_voxel_metadata() is True
+
+
 class TestConverterUsesContract:
     def _convert(self, reader, temp_dir, **kwargs):
         out = os.path.join(temp_dir, "out.zarr")

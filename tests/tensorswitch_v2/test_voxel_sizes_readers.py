@@ -1,5 +1,5 @@
 """
-Per-reader checks of the voxel-size contract for TIFF, ND2 and IMS.
+Per-reader checks of the voxel-size contract for TIFF, ND2, IMS and Zarr.
 
 These readers used to fill any unstated axis with 1.0 silently, so a file with a
 calibrated XY but no Z spacing came out with Z = 1.0 nm and was accepted. They
@@ -109,3 +109,40 @@ class TestIMSVoxelSizes:
         reader = self._reader(None)
         with pytest.warns(UserWarning):
             assert reader.has_voxel_metadata() is False
+
+
+class TestZarrVoxelSizes:
+    """Round trip through TensorSwitch's own writers (Zarr2 has no axis labels)."""
+
+    @pytest.mark.parametrize("fmt", ["zarr3", "zarr2"])
+    def test_3d_round_trip(self, temp_dir, fmt):
+        from tensorswitch_v2.api import Readers
+        from tensorswitch_v2.core.converter import DistributedConverter
+        from tensorswitch_v2.api import Writers
+
+        src = os.path.join(temp_dir, "a.tif")
+        tifffile.imwrite(src, np.zeros((20, 24, 24), dtype=np.uint8), metadata={"axes": "ZYX"})
+        out = os.path.join(temp_dir, "o.zarr")
+        writer = Writers.zarr3(out) if fmt == "zarr3" else Writers.zarr2(out)
+        DistributedConverter(TiffReader(src), writer).convert(
+            voxel_size_override={"x": 8.0, "y": 8.0, "z": 40.0}, voxel_unit="nanometer"
+        )
+        reader = Readers.auto_detect(os.path.join(out, "raw", "s0"))
+        assert reader.has_voxel_metadata() is True
+        assert dict(reader.get_voxel_sizes()) == {"x": 8.0, "y": 8.0, "z": 40.0}
+
+    @pytest.mark.parametrize("fmt", ["zarr3", "zarr2"])
+    def test_2d_store_does_not_need_z(self, temp_dir, fmt):
+        from tensorswitch_v2.api import Readers, Writers
+        from tensorswitch_v2.core.converter import DistributedConverter
+
+        src = os.path.join(temp_dir, "a.tif")
+        tifffile.imwrite(src, np.zeros((24, 24), dtype=np.uint8), metadata={"axes": "YX"})
+        out = os.path.join(temp_dir, "o.zarr")
+        writer = Writers.zarr3(out) if fmt == "zarr3" else Writers.zarr2(out)
+        DistributedConverter(TiffReader(src), writer).convert(
+            voxel_size_override={"x": 8.0, "y": 8.0, "z": 8.0}, voxel_unit="nanometer"
+        )
+        reader = Readers.auto_detect(os.path.join(out, "raw", "s0"))
+        assert reader.has_voxel_metadata() is True
+

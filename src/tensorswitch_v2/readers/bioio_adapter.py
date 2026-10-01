@@ -6,7 +6,7 @@ Converts BIOIO's dask arrays to TensorStore via DaskReader's virtual_chunked.
 """
 
 from typing import Dict, Optional, List, Any
-from .base import DaskReader, _default_voxel_sizes
+from .base import DaskReader
 
 
 class BIOIOReader(DaskReader):
@@ -214,19 +214,19 @@ class BIOIOReader(DaskReader):
         self._metadata_cache = metadata
         return metadata
 
-    def get_voxel_sizes(self) -> Dict[str, float]:
-        """Return voxel dimensions from BIOIO in nanometers."""
+    def _read_voxel_sizes(self) -> Optional[Dict[str, Optional[float]]]:
+        """Physical pixel sizes stated by the BIOIO plugin (micrometers), in nanometers."""
         self._load_bioimage()
 
         try:
             pps = self._bioimage.physical_pixel_sizes
             return {
-                'x': pps.X * 1000.0 if pps.X else 1.0,
-                'y': pps.Y * 1000.0 if pps.Y else 1.0,
-                'z': pps.Z * 1000.0 if pps.Z else 1.0,
+                'x': pps.X * 1000.0 if pps.X else None,
+                'y': pps.Y * 1000.0 if pps.Y else None,
+                'z': pps.Z * 1000.0 if pps.Z else None,
             }
         except Exception:
-            return _default_voxel_sizes("BioIO")
+            return None
 
     def supports_remote(self) -> bool:
         """Check if BIOIO supports remote access for this format."""
