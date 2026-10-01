@@ -93,7 +93,7 @@ A high-performance microscopy data conversion tool with TensorStore as the unifi
 | Tier | Performance | Formats | Description |
 |------|-------------|---------|-------------|
 | **Tier 1** | Maximum | N5, Zarr2, Zarr3, Precomputed | Native TensorStore drivers |
-| **Tier 2** | Optimized | TIFF, ND2, IMS, HDF5, CZI, NIfTI, PNG | Custom optimized readers |
+| **Tier 2** | Optimized | TIFF, ND2, IMS, HDF5, CZI, NIfTI, MRC, PNG | Custom optimized readers |
 | **Tier 3** | Compatible | LIF + 20 more | BIOIO Python plugins |
 | **Tier 4** | Universal | 150+ formats | Bio-Formats Java (via bioio-bioformats) |
 
@@ -177,7 +177,7 @@ print(__version__)  # 2.1.0
 
 | Install Command | Formats Supported | Dependencies |
 |---|---|---|
-| `pip install tensorswitch` | N5, Zarr, TIFF, ND2, IMS, HDF5, CZI, NIfTI, PNG, LIF, Precomputed + 20 more | tensorstore, numpy, tifffile, h5py, nd2, nibabel, dask, bioio |
+| `pip install tensorswitch` | N5, Zarr, TIFF, ND2, IMS, HDF5, CZI, NIfTI, MRC, PNG, LIF, Precomputed + 20 more | tensorstore, numpy, tifffile, h5py, nd2, nibabel, mrcfile, dask, bioio |
 | `pip install "tensorswitch[bioformats]"` | + 150 more via Bio-Formats | + bioio-bioformats, scyjava (requires Java 8+) |
 | `pip install "tensorswitch[mcp]"` | + MCP server for AI agents | + mcp |
 | `pip install "tensorswitch[all]"` | Everything above | All of the above |
@@ -451,6 +451,8 @@ pixi run python -m tensorswitch_v2 \
 
 **Use case**: When source files lack embedded voxel size metadata (e.g., raw TIFF stacks, flat Zarr arrays). If a source file has no voxel metadata and `--voxel_size` is not provided, the converter will error rather than silently guessing.
 
+**What counts as "no voxel metadata"**: every reader reports only the sizes its file actually states, and the conversion is refused if any spatial axis the array has is missing (a 2D image needs x and y; a 3D volume needs x, y and z). So a TIFF with a calibrated XY but no Z spacing is refused rather than written with Z = 1.0 nm. A stated 1.0 nm on every axis is also treated as unstated, since it cannot be told apart from a placeholder. Readers also reject headers they know to be unreliable (NIfTI's uncalibrated 1.0 `pixdim`, MRC's micrometer-in-angstrom values). The check also runs at `--submit` time, so a cluster job is never queued just to fail on this. If you pass `--voxel_size` and the source has a trusted header that differs by more than 1%, a warning is printed and your value is used.
+
 ```bash
 # Set voxel size in nanometers (default unit)
 pixi run python -m tensorswitch_v2 -i input.tif -o output.zarr \
@@ -519,6 +521,7 @@ reader = Readers.nd2("/path/to/data.nd2")       # Tier 2
 reader = Readers.czi("/path/to/data.czi")       # Tier 2
 reader = Readers.ims("/path/to/data.ims")       # Tier 2
 reader = Readers.nifti("/path/to/vol.nii.gz")   # Tier 2
+reader = Readers.mrc("/path/to/tomogram.mrc")   # Tier 2
 reader = Readers.png("/path/to/slices/")        # Tier 2 (dir, .zip or .png)
 reader = Readers.n5("/path/to/data.n5")         # Tier 1
 reader = Readers.zarr3("/path/to/data.zarr")    # Tier 1
@@ -649,6 +652,7 @@ print(f"Completed: {result.completed}/{result.total}")
 | ND2 (Nikon) | `.nd2` | 2 | ND2Reader |
 | IMS (Imaris) | `.ims` | 2 | IMSReader |
 | NIfTI | `.nii`, `.nii.gz` | 2 | NIfTIReader |
+| MRC / CCP4 | `.mrc`, `.mrcs`, `.rec`, `.ali`, `.st` | 2 | MRCReader |
 | PNG Z-stack | directory, `.zip`, `.png` | 2 | PngReader |
 | CZI (Zeiss) | `.czi` | 2 | CZIReader |
 | HDF5 | `.h5`, `.hdf5` | 2 | HDF5Reader |
@@ -679,6 +683,12 @@ pixi run python -m tensorswitch_v2 -i vol.nii.gz -o out.zarr \
 ```
 
 Reading goes through nibabel's lazy `dataobj` proxy, which preserves the on-disk dtype — unlike `get_fdata()`, which would upcast everything to float64.
+
+### MRC notes (`.mrc`, `.mrcs`, `.rec`, `.ali`, `.st`)
+
+MRC/CCP4 files (cryo-ET tomograms, many EM volumes) are read via `mrcfile`, memory-mapped and lazy. The data block is already `(z, y, x)`, 2D images and 3D volumes/stacks are supported, and the on-disk dtype is kept (including signed `int8`). 4D volume stacks and complex-valued data are rejected rather than guessed at.
+
+**The header voxel size is in angstroms and is converted to nm, but it is only trusted when it looks calibrated.** A size that is zero, exactly 1.0 Å on every axis (the uncalibrated default), or below 0.25 Å is treated as missing, so TensorSwitch asks for `--voxel_size` instead of writing a wrong scale. Light-microscopy MRCs such as BioSR store micrometers in the angstrom field (0.0926 for a 92.6 nm pixel), which is caught by the 0.25 Å limit. Values above it cannot be told from real angstroms, so pass `--voxel_size` whenever you know the true size.
 
 ### PNG notes (directory, `.zip`, or single `.png`)
 
@@ -1289,12 +1299,12 @@ TensorSwitch v2 includes an MCP (Model Context Protocol) server that allows Clau
 |------|-------------|
 | `inspect_dataset` | Returns shape, dtype, voxel sizes, axes, pyramid levels, OME metadata. Supports remote S3/HTTP URLs with auto-discovery: groups with OME-NGFF multiscales auto-resolve; S3 containers use bounded directory listing (BFS, max 4 levels) to find arrays automatically; non-S3 URLs require full array path. |
 | `discover_datasets` | Scans a directory for image/segmentation layers. Supports `pattern` (e.g., `"*.tif"`) and `recursive` for finding proprietary files (TIFF, ND2, CZI, IMS, HDF5) in subdirectories. |
-| `convert` | Converts between formats with full CLI parity. Supports `auto_multiscale` (one-step convert + pyramid), `omero` channel metadata (default ON, opt out with `omero=False`), `no_translation`, `force_order` (C/F memory layout), remote S3/HTTP with `--bbox`, `add_to_existing` (safe label addition to existing containers). 2 GB size guard — larger datasets redirect to `submit_job`. |
+| `convert` | Converts between formats with full CLI parity. Supports `auto_multiscale` (one-step convert + pyramid), `omero` channel metadata (default ON, opt out with `omero=False`), `no_translation`, `force_order` (C/F memory layout), remote S3/HTTP with `--bbox`, `add_to_existing` (safe label addition to existing containers). 2 GB size guard — larger datasets redirect to `submit_job`. Sources with no (or only partial) voxel size metadata are refused unless `voxel_size` is given as X,Y,Z. |
 | `upsample_to_isotropic` | Resamples anisotropic data to isotropic resolution using `scipy.ndimage.zoom`. Supports zarr2, zarr3, zarr3+sharding output via TensorStore backend. Safe write, auto-pyramid, size guard. |
 | `generate_pyramid` | Creates multiscale pyramid locally with chained downsampling, anisotropic handling, optional `no_translation`, and custom `per_level_factors` |
 | `list_formats` | Lists all supported input/output formats by tier |
 | `estimate_resources` | Estimates memory, wall time, and cores needed for a conversion |
-| `submit_job` | Submits conversion to LSF cluster. With `auto_multiscale`: auto-detects whether to run pyramid-only or conversion + dependent pyramid coordinator. Supports `force_order`, `add_to_existing`. |
+| `submit_job` | Submits conversion to LSF cluster. With `auto_multiscale`: auto-detects whether to run pyramid-only or conversion + dependent pyramid coordinator. Supports `force_order`, `add_to_existing`. Checks the source's voxel size before queueing and returns a `validation_error` if it is missing (unless `voxel_size` is given), instead of failing later on the cluster node. |
 | `check_job_status` | Checks LSF job status (supports multiple job IDs) |
 
 ### Setup (Claude Code)
