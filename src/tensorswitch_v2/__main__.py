@@ -933,6 +933,18 @@ def _finalize_tmp_path(tmp_path: str, final_path: str, verbose: bool = True) -> 
     os.rename(tmp_path, final_path)
     if verbose:
         print(f"Renamed {tmp_path} → {final_path}")
+    from .utils.output_group import apply_parent_group
+    apply_parent_group(final_path)
+
+
+def _apply_group_to_added_label(final_output, subgroup_parent, label_name):
+    """Give a label just added to an existing container the output folder's group.
+
+    Only the new label is touched; the rest of the container keeps its group.
+    """
+    from .utils.output_group import apply_parent_group
+    added = os.path.join(final_output, subgroup_parent, label_name)
+    apply_parent_group(added if os.path.exists(added) else os.path.join(final_output, subgroup_parent))
 
 
 def _finalize_add_to_existing(
@@ -1435,6 +1447,7 @@ from .utils.resource_utils import calculate_memory as _calculate_memory
 from .utils.resource_utils import calculate_wall_time as _calculate_wall_time
 from .utils.resource_utils import calculate_job_resources as _calculate_job_resources
 from .utils.resource_utils import is_native_source as _is_native_source
+from .utils.output_group import wrap_for_project
 
 
 def run_local_pyramid(s0_path, root_path, downsample_method="auto",
@@ -1579,8 +1592,8 @@ def submit_job(args, return_job_id=False):
     needs_auto = memory_gb is None or wall_time is None or args.cores is None
 
     dataset_size_gb = None
-    if needs_auto:
     is_native = True  # explicit resources: no source-type headroom added to the user's memory
+    if needs_auto:
         print("Reading input metadata for resource estimation...")
         volume_shape, dtype_str, axes_order = _get_input_metadata(args)
 
@@ -1760,7 +1773,7 @@ def submit_job(args, return_job_id=False):
     ]
     if args.job_group:
         command += ["-g", args.job_group]
-    command += ["/bin/bash", "-c", reinvoke_str]
+    command += wrap_for_project(args.project, ["/bin/bash", "-c", reinvoke_str])
 
     # Print summary and submit
     print("=" * 72)
@@ -1866,7 +1879,7 @@ def _submit_dependent_pyramid(args, conversion_job_id: str):
     ]
     if args.job_group:
         command += ["-g", args.job_group]
-    command += ["/bin/bash", "-c", reinvoke_str]
+    command += wrap_for_project(args.project, ["/bin/bash", "-c", reinvoke_str])
 
     result = subprocess.run(command, capture_output=True, text=True)
     if result.returncode == 0:
@@ -2020,7 +2033,7 @@ def _submit_upsample_job(args, verbose=True):
     ]
     if args.job_group:
         command += ["-g", args.job_group]
-    command += ["/bin/bash", "-c", reinvoke_str]
+    command += wrap_for_project(args.project, ["/bin/bash", "-c", reinvoke_str])
 
     print("=" * 72)
     print("LSF Upsample Job Submission")
@@ -2136,7 +2149,7 @@ def submit_downsample_job(args, cumulative_factors):
     ]
     if args.job_group:
         command += ["-g", args.job_group]
-    command += ["/bin/bash", "-c", reinvoke_str]
+    command += wrap_for_project(args.project, ["/bin/bash", "-c", reinvoke_str])
 
     # Print summary and submit
     print("=" * 72)
@@ -3007,6 +3020,7 @@ def main(argv=None):
             output_format=args.output_format,
             verbose=verbose,
         )
+        _apply_group_to_added_label(final_output, subgroup_parent, label_name_orig)
         # --auto_multiscale was previously silently ignored on this branch --
         # execution returned right here, before the pyramid block below ever
         # ran, so every --output-offset label stayed at s0 even when
@@ -3264,6 +3278,7 @@ def main(argv=None):
             output_format=args.output_format,
             verbose=verbose,
         )
+        _apply_group_to_added_label(final_output, subgroup_parent, subgroup.split('/')[-1])
     else:
         _finalize_tmp_path(tmp_output, final_output, verbose=verbose)
 

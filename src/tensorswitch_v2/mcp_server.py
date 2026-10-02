@@ -23,6 +23,7 @@ import tensorstore as ts
 
 from tensorswitch_v2.readers.base import is_remote_path
 from tensorswitch_v2.utils.tensorstore_utils import get_zarr_store_spec
+from tensorswitch_v2.utils.output_group import apply_parent_group, wrap_for_project
 
 from mcp.server.fastmcp import FastMCP
 
@@ -704,6 +705,7 @@ def convert(
             if os.path.exists(final_output):
                 shutil.rmtree(final_output)
             os.rename(tmp_output, final_output)
+            apply_parent_group(final_output)
         response["output"] = final_output
 
         return json.dumps(response, indent=2)
@@ -1348,7 +1350,7 @@ def _submit_dependent_pyramid_mcp(
     ]
     if job_group:
         command += ["-g", job_group]
-    command += ["/bin/bash", "-c", reinvoke_str]
+    command += wrap_for_project(project, ["/bin/bash", "-c", reinvoke_str])
 
     result = subprocess.run(command, capture_output=True, text=True)
     if result.returncode == 0:

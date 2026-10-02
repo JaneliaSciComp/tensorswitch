@@ -127,3 +127,100 @@ class TestApplyParentGroup:
         os.makedirs(out)
         monkeypatch.setattr(og, "_member_gids", lambda: set())
         assert og.apply_parent_group(out) == 0
+
+
+class TestSubmitUsesProjectGroup:
+    """The real submit path builds a bsub command; check what it would run."""
+
+    @pytest.fixture
+    def shared_dir(self):
+        import shutil
+        import tempfile
+
+        # the MCP refuses /tmp paths (invisible to LSF nodes), so work under $HOME
+        path = tempfile.mkdtemp(dir=os.path.expanduser("~"), prefix=".ts_group_test_")
+        yield path
+        shutil.rmtree(path, ignore_errors=True)
+
+    def _submit(self, shared_dir, project):
+        import json
+        from unittest import mock
+
+        import numpy as np
+        import tifffile
+
+        pytest.importorskip("mcp")
+        from tensorswitch_v2 import mcp_server as m
+
+        src = os.path.join(shared_dir, "a.tif")
+        tifffile.imwrite(src, np.zeros((4, 8, 8), dtype=np.uint8))
+        calls = []
+
+        def fake_run(cmd, *a, **k):
+            calls.append(cmd)
+            return subprocess.CompletedProcess(cmd, 0, stdout="Job <4242> is submitted to queue <x>.", stderr="")
+
+        with mock.patch("subprocess.run", side_effect=fake_run):
+            result = json.loads(m.submit_job(src, os.path.join(shared_dir, "o.zarr"), project=project,
+                                             voxel_size="1,2,3", memory=15, wall_time="0:10", cores=1))
+        assert result["status"] == "submitted", result
+        return [c for c in calls if c and c[0] == "bsub"][0]
+
+    def test_job_runs_under_the_projects_group(self, shared_dir):
+        name = grp.getgrgid(os.getgid()).gr_name
+        cmd = self._submit(shared_dir, name)
+        assert cmd[cmd.index("-P") + 1] == name
+        assert cmd[-4:-1] == ["sg", name, "-c"]
+        inner = shlex.split(cmd[-1])
+        assert inner[:3] == ["env", "TENSORSWITCH_GROUP_APPLIED=1", "/bin/bash"]
+
+    def test_project_without_a_group_is_submitted_unchanged(self, shared_dir):
+        og._warned.discard("proj_without_group")
+        with pytest.warns(UserWarning, match="proj_without_group"):
+            cmd = self._submit(shared_dir, "proj_without_group")
+        assert cmd[-3:-1] == ["/bin/bash", "-c"]
+        assert "sg" not in cmd
+
+
+class TestLocalConversionTakesParentGroup:
+    """A local conversion into a folder with another group ends up in that group."""
+
+    def _tiff(self, folder):
+        import numpy as np
+        import tifffile
+
+        path = os.path.join(folder, "a.tif")
+        tifffile.imwrite(path, np.zeros((4, 8, 8), dtype=np.uint8), metadata={"axes": "ZYX"})
+        return path
+
+    def test_mcp_convert_output_is_regrouped(self, temp_dir):
+        import json
+
+        gid, _ = _other_group()
+        if gid is None:
+            pytest.skip("user has no secondary group")
+        pytest.importorskip("mcp")
+        from tensorswitch_v2 import mcp_server as m
+
+        outdir = os.path.join(temp_dir, "dest")
+        os.makedirs(outdir)
+        os.chown(outdir, -1, gid)
+        out = os.path.join(outdir, "o.zarr")
+        assert json.loads(m.convert(self._tiff(temp_dir), out, voxel_size="1,2,3"))["status"] == "success"
+        for root, dirs, files in os.walk(out):
+            for name in dirs + files:
+                assert os.stat(os.path.join(root, name)).st_gid == gid, os.path.join(root, name)
+
+    def test_cli_finalize_regroups_the_renamed_output(self, temp_dir):
+        gid, _ = _other_group()
+        if gid is None:
+            pytest.skip("user has no secondary group")
+        from tensorswitch_v2.__main__ import _finalize_tmp_path
+
+        outdir = os.path.join(temp_dir, "dest")
+        os.makedirs(outdir)
+        os.chown(outdir, -1, gid)
+        tmp = os.path.join(outdir, "o.zarr.tmp")
+        os.makedirs(os.path.join(tmp, "raw"))
+        _finalize_tmp_path(tmp, os.path.join(outdir, "o.zarr"), verbose=False)
+        assert os.stat(os.path.join(outdir, "o.zarr", "raw")).st_gid == gid

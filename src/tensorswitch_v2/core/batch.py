@@ -25,6 +25,7 @@ import sys
 import glob
 import json
 import shlex
+from ..utils.output_group import wrap_for_project, wrap_script_line
 import subprocess
 from dataclasses import dataclass, field
 from typing import List, Tuple, Optional, Dict
@@ -504,7 +505,7 @@ class BatchConverter:
             bsub_cmd += ["-g", job_group]
 
         # Use bash -c with quoted command to handle paths with spaces
-        bsub_cmd += ["/bin/bash", "-c", worker_cmd_str]
+        bsub_cmd += wrap_for_project(project, ["/bin/bash", "-c", worker_cmd_str])
 
         # Print summary
         print("=" * 72)
@@ -1028,7 +1029,7 @@ def _generate_coordinator_script(
             '-g', job_group,
             '-o', shlex.quote(log_path),
             '-e', shlex.quote(err_path),
-            '/bin/bash', '-c', shlex.quote(worker_cmd_str),
+            wrap_script_line(project, ['/bin/bash', '-c', worker_cmd_str]),
         ]
         lines.append(' '.join(bsub_parts))
         lines.append(f'echo "=== Step {i}/{total} complete ==="')
@@ -1333,11 +1334,8 @@ def submit_discovered_folder_lsf(
         ]
         if job_group:
             bsub_cmd += ["-g", job_group]
-        bsub_cmd += [
-            "-o", coord_log,
-            "-e", coord_err,
-            "/bin/bash", script_path,
-        ]
+        bsub_cmd += ["-o", coord_log, "-e", coord_err]
+        bsub_cmd += wrap_for_project(project, ["/bin/bash", script_path])
         submit_result = subprocess.run(bsub_cmd, capture_output=True, text=True)
         if submit_result.returncode == 0:
             print(f"\nCoordinator submitted: {submit_result.stdout.strip()}")
@@ -1408,7 +1406,7 @@ def submit_discovered_folder_lsf(
         if has_both and job_info['data_type'] == 'labels' and image_job_id:
             bsub_cmd.extend(["-w", f"done({image_job_id})"])
 
-        bsub_cmd += ["/bin/bash", "-c", worker_cmd_str]
+        bsub_cmd += wrap_for_project(project, ["/bin/bash", "-c", worker_cmd_str])
 
         print(f"\n{'='*60}")
         print(f"LSF Job: {job_info['data_type'].upper()}")

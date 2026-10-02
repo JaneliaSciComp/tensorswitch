@@ -16,6 +16,7 @@ Key Features:
 import os
 import json
 import shlex
+from ..utils.output_group import wrap_for_project
 import subprocess
 import sys
 from typing import Optional, List, Dict, Any, Tuple
@@ -1110,8 +1111,8 @@ echo "=========================================="
             "-P", project,
             "-o", log_path,
             "-e", error_path,
-            "/bin/bash", script_path
         ]
+        bsub_cmd += wrap_for_project(project, ["/bin/bash", script_path])
 
         if verbose:
             print(f"\nSubmitting metadata coordinator job...")
@@ -1283,8 +1284,8 @@ echo "=========================================="
             "-P", project,
             "-o", log_path,
             "-e", error_path,
-            "/bin/bash", script_path
         ]
+        bsub_cmd += wrap_for_project(project, ["/bin/bash", script_path])
 
         if verbose:
             print(f"\nSubmitting coordinator job...")
