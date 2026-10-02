@@ -2292,11 +2292,11 @@ def show_conversion_spec(reader, writer, args, chunk_shape, shard_shape):
     print("=" * 72 + "\n")
 
 
-def main(argv=None):
-    """Run single-process conversion, downsampling, or submit LSF job."""
-    args = parse_args(argv)
+def _apply_preset(args):
+    """Fill in the settings a --preset implies (only where the user gave none).
 
-    # Apply preset configurations
+    Shared by main() and the MCP tools so a preset means the same thing everywhere.
+    """
     if args.preset == "webknossos":
         # WebKnossos preset: zarr3, chunk 32x32x32, shard 1024x1024x1024
         if args.output_format == "zarr3":  # Only override if using default
@@ -2334,6 +2334,13 @@ def main(argv=None):
         if not args.quiet:
             print("Using mia_lmvd preset: zarr3, chunk=128³, shard=512³, "
                   "zstd-5, C-order. Axis order, dtype, and voxel size preserved from source.")
+
+
+def main(argv=None):
+    """Run single-process conversion, downsampling, or submit LSF job."""
+    args = parse_args(argv)
+
+    _apply_preset(args)
 
     # Parse optional shapes
     chunk_shape = parse_shape(args.chunk_shape, "chunk_shape") if args.chunk_shape else None
