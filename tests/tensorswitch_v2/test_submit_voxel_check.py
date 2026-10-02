@@ -88,3 +88,26 @@ class TestSubmitEntryPoints:
         assert "voxel size" in result["message"].lower()
         run.assert_not_called()
         popen.assert_not_called()
+
+
+def test_submit_with_all_resources_explicit_does_not_crash():
+    """-M, -W and -n all given used to raise UnboundLocalError (is_native)."""
+    import shutil
+    import subprocess
+    import tempfile
+
+    from tensorswitch_v2.__main__ import parse_args, submit_job
+
+    work = tempfile.mkdtemp(dir=os.path.expanduser("~"), prefix=".ts_submit_test_")
+    try:
+        src = _h5(os.path.join(work, "ok.h5"), FULL)
+        args = parse_args(["-i", src, "-o", os.path.join(work, "o.zarr"), "--dataset_path", "main",
+                           "--submit", "-P", "proj", "--memory", "30", "--wall_time", "1:00", "--cores", "2"])
+        done = subprocess.CompletedProcess([], 0, stdout="Job <7> is submitted.", stderr="")
+        with mock.patch("subprocess.run", return_value=done) as run:
+            assert submit_job(args, return_job_id=True) == "7"
+        cmd = [c for c in (call.args[0] for call in run.call_args_list) if c and c[0] == "bsub"][0]
+        assert cmd[cmd.index("-n") + 1] == "2"
+        assert cmd[cmd.index("-M") + 1] == "30GB"
+    finally:
+        shutil.rmtree(work, ignore_errors=True)

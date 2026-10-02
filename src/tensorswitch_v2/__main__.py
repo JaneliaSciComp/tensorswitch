@@ -1580,6 +1580,7 @@ def submit_job(args, return_job_id=False):
 
     dataset_size_gb = None
     if needs_auto:
+    is_native = True  # explicit resources: no source-type headroom added to the user's memory
         print("Reading input metadata for resource estimation...")
         volume_shape, dtype_str, axes_order = _get_input_metadata(args)
 
