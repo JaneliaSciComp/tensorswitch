@@ -46,8 +46,28 @@ class TestWrap:
         name = grp.getgrgid(os.getgid()).gr_name
         wrapped = og.wrap_for_project(name, ["/bin/bash", "-c", "echo 'hi there'"])
         assert wrapped[:3] == ["sg", name, "-c"]
-        assert shlex.split(wrapped[3]) == ["env", "TENSORSWITCH_GROUP_APPLIED=1",
-                                           "/bin/bash", "-c", "echo 'hi there'"]
+        assert wrapped[3] == "export TENSORSWITCH_GROUP_APPLIED=1; echo 'hi there'"
+
+    def test_script_path_form(self):
+        name = grp.getgrgid(os.getgid()).gr_name
+        assert og.wrap_for_project(name, ["/bin/bash", "/a b/run.sh"])[3] == \
+            "export TENSORSWITCH_GROUP_APPLIED=1; /bin/bash '/a b/run.sh'"
+
+    @pytest.mark.parametrize("command", [
+        "/py -m tensorswitch_v2 --input '/nrs/Different mouse regions/f.nd2' --output /o",
+        "/py -m x --input '/a b/c.tif' --output '/d e/f.zarr' --voxel_size 1,2,3",
+    ])
+    def test_command_with_spaced_paths_has_one_quote_level_only(self, command):
+        """LSF cannot carry an argument that mixes ' and "; spaced paths must not produce that."""
+        name = grp.getgrgid(os.getgid()).gr_name
+        arg = og.wrap_for_project(name, ["/bin/bash", "-c", command])[3]
+        assert not ("'" in arg and '"' in arg)
+
+    def test_command_mixing_both_quote_types_is_not_wrapped(self):
+        name = grp.getgrgid(os.getgid()).gr_name
+        argv = ["/bin/bash", "-c", "echo \"a\" 'b'"]
+        with pytest.warns(UserWarning, match="single and double quotes"):
+            assert og.wrap_for_project(name, argv) == argv
 
     def test_unchanged_with_warning_when_no_group(self):
         og._warned.discard("nope_project")
@@ -75,6 +95,13 @@ class TestWrap:
         argv = ["/bin/bash", "-c", shlex.join(["touch", out])]
         subprocess.run(og.wrap_for_project(name, argv), check=True)
         assert os.path.exists(out)
+
+    def test_marker_reaches_every_part_of_a_compound_command(self, temp_dir):
+        name = grp.getgrgid(os.getgid()).gr_name
+        out = shlex.quote(os.path.join(temp_dir, "o.txt"))
+        command = f"echo $TENSORSWITCH_GROUP_APPLIED > {out}; echo $TENSORSWITCH_GROUP_APPLIED >> {out}"
+        subprocess.run(og.wrap_for_project(name, ["/bin/bash", "-c", command]), check=True)
+        assert open(os.path.join(temp_dir, "o.txt")).read().split() == ["1", "1"]
 
     def test_script_line_form(self):
         name = grp.getgrgid(os.getgid()).gr_name
@@ -171,8 +198,7 @@ class TestSubmitUsesProjectGroup:
         cmd = self._submit(shared_dir, name)
         assert cmd[cmd.index("-P") + 1] == name
         assert cmd[-4:-1] == ["sg", name, "-c"]
-        inner = shlex.split(cmd[-1])
-        assert inner[:3] == ["env", "TENSORSWITCH_GROUP_APPLIED=1", "/bin/bash"]
+        assert cmd[-1].startswith("export TENSORSWITCH_GROUP_APPLIED=1; ")
 
     def test_project_without_a_group_is_submitted_unchanged(self, shared_dir):
         og._warned.discard("proj_without_group")

@@ -38,8 +38,14 @@ def project_group(project: Optional[str]) -> Optional[str]:
 def wrap_for_project(project: Optional[str], argv: List[str]) -> List[str]:
     """The tail of a bsub command, run under the project's group when there is one.
 
-    ``argv`` is the command the job runs (e.g. ``["/bin/bash", "-c", "..."]``).
+    ``argv`` is the command the job runs (e.g. ``["/bin/bash", "-c", "<command>"]``).
     Without a usable group it is returned unchanged, with a one-time warning.
+
+    LSF re-quotes each argument it is given and cannot carry one that mixes single
+    and double quotes: the job then runs nothing yet is reported as done. So the
+    command is passed as ONE level of shell text (``sg <group> -c "export ...; <cmd>"``)
+    instead of nested ``bash -c '...'`` quoting, and if it would still mix both quote
+    types the wrap is skipped with a warning.
     """
     group = project_group(project)
     if group is None:
@@ -51,7 +57,16 @@ def wrap_for_project(project: Optional[str], argv: List[str]) -> List[str]:
                 stacklevel=2,
             )
         return argv
-    return ["sg", group, "-c", shlex.join(["env", f"{APPLIED_ENV}=1", *argv])]
+    inner = argv[2] if len(argv) == 3 and argv[:2] == ["/bin/bash", "-c"] else shlex.join(argv)
+    command = f"export {APPLIED_ENV}=1; {inner}"
+    if "'" in command and '"' in command:
+        warnings.warn(
+            "The job command contains both single and double quotes, which LSF cannot pass on safely; "
+            "the job will use its default group instead of the project's.",
+            stacklevel=2,
+        )
+        return argv
+    return ["sg", group, "-c", command]
 
 
 def wrap_script_line(project: Optional[str], argv: List[str]) -> str:

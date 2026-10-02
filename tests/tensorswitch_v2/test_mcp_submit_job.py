@@ -59,7 +59,7 @@ def reinvoke(cmd):
     """The CLI command a bsub job runs (unwraps the project-group sg wrapper)."""
     tail = cmd[-1]
     if "sg" in cmd:
-        tail = shlex.split(tail)[-1]
+        tail = tail.split("; ", 1)[1]   # drop 'export TENSORSWITCH_GROUP_APPLIED=1; '
     return shlex.split(tail)
 
 
