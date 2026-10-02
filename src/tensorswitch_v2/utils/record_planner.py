@@ -20,6 +20,7 @@ CATALOG_REPO = "AI-HHMI/mia-agentic-search"
 IN_SCOPE_DIMENSIONS = ("3D", "3D+t")
 MCP_LIMIT_BYTES = 2 * 1024 ** 3
 CLUSTER_LIMIT_BYTES = 50 * 1024 ** 3
+SHORT_FIRST_AXIS = 10     # TensorSwitch guesses axis names for HDF5; a first dimension this short becomes 'c'
 
 # record array format -> how TensorSwitch can read it
 STORE_FORMATS = {"zarr", "ome-zarr", "n5", "precomputed"}   # folders: readable remotely, not fetchable
@@ -336,6 +337,13 @@ def plan_record(record: Dict[str, Any], output_dir: str, project: Optional[str] 
             args["voxel_size"] = voxel
         if fmt == "hdf5":
             args["dataset_path"] = dataset_path
+            shape = array.get("shape")
+            if shape and len(shape) == 3 and 0 < int(shape[0]) <= SHORT_FIRST_AXIS:
+                # HDF5 has no axis names; TensorSwitch reads a first dimension this short as a
+                # channel, so a 3-D record's z-stack would be written without a z axis
+                args["relabel_axis"] = "c=z"
+                notes.append(f"first axis has only {shape[0]} entries, which TensorSwitch would read as a channel "
+                             f"for HDF5; the step passes relabel_axis='c=z' so it becomes z")
         if role == "label":
             label_count += 1
             args.update({"is_label": True, "data_type": "labels", "label_key": "segmentation" if label_count == 1

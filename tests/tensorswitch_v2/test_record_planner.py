@@ -405,3 +405,39 @@ class TestMcpTool:
         for step in tool(path, OUT, project="miaai")["steps"]:
             params = inspect.signature(getattr(mcp_server, step["tool"])).parameters
             assert set(step["args"]) <= set(params), (step["tool"], set(step["args"]) - set(params))
+
+
+class TestShortHdf5:
+    def plan(self, shape):
+        rec = record()
+        rec["technical"]["sample"]["urls"] = ["https://zenodo.org/records/3/files/n.zip::nuclei/a.h5"]
+        rec["technical"]["arrays"] = [
+            {"role": "raw", "format": "hdf5", "shape": shape, "path_pattern": "n.zip::nuclei/*.h5 (volumes/raw)"},
+            {"role": "label", "format": "hdf5", "shape": shape, "path_pattern": "n.zip::nuclei/*.h5 (volumes/lab)"}]
+        return rp.plan_record(rec, OUT)
+
+    def test_short_first_axis_gets_relabel_axis_and_a_note(self):
+        plan = self.plan([8, 100, 100])
+        converts = [a for t, a in tools(plan) if t == "convert"]
+        assert all(c["relabel_axis"] == "c=z" for c in converts)
+        assert any("relabel_axis='c=z'" in n for a in plan["arrays"] for n in a["notes"])
+
+    @pytest.mark.parametrize("shape", [[11, 100, 100], [104, 350, 350], None, [8, 100], [3, 4, 100, 100]])
+    def test_other_shapes_are_left_alone(self, shape):
+        assert all("relabel_axis" not in a for t, a in tools(self.plan(shape)) if t == "convert")
+
+    def test_boundary_is_ten(self):
+        assert all(a.get("relabel_axis") == "c=z" for t, a in tools(self.plan([10, 9, 9])) if t == "convert")
+
+    def test_other_formats_never_get_it(self):
+        rec = record()
+        rec["technical"]["arrays"][0]["shape"] = [4, 50, 50]
+        assert all("relabel_axis" not in a for t, a in tools(rp.plan_record(rec, OUT)) if t == "convert")
+
+    def test_relabel_axis_is_a_real_convert_parameter(self):
+        import inspect
+
+        pytest.importorskip("mcp")
+        from tensorswitch_v2 import mcp_server
+
+        assert "relabel_axis" in inspect.signature(mcp_server.convert).parameters
