@@ -1308,6 +1308,12 @@ TensorSwitch v2 includes an MCP (Model Context Protocol) server that allows Clau
 | `fetch_dataset` | Downloads a URL (http, https, ftp, s3), or one member of a remote zip with `"<zip url>::<path in zip>"` (range requests, the rest of the zip is never downloaded), into a folder you choose. 2 GB limit (larger requests return a `bsub` command that runs `python -m tensorswitch_v2.utils.fetch`), host allowlist (extend with `TENSORSWITCH_FETCH_HOSTS`), no writes outside the folder, CRC-checked. |
 | `check_job_status` | Checks LSF job status (supports multiple job IDs) |
 
+### File group ownership
+
+TensorSwitch sets only `umask 0002` (group-writable); the group of the files it writes is chosen as follows.
+- **Cluster jobs (`--submit`, `submit_job`)**: if a Unix group named like the LSF project (`-P`) exists and you belong to it, the job runs under that group (`sg <group>`), so everything it writes gets that group, whatever the output folder's group is. If there is no such group, a warning is printed and the job uses its default group (the folder's, if it is setgid). The LSF log files are created by `bsub` itself and keep your default group.
+- **Local runs**: the finished output takes the group of the folder it was written into, if you belong to that group.
+
 ### Setup (Claude Code)
 
 ```bash
