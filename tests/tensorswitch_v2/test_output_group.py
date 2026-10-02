@@ -191,6 +191,7 @@ class TestSubmitUsesProjectGroup:
             result = json.loads(m.submit_job(src, os.path.join(shared_dir, "o.zarr"), project=project,
                                              voxel_size="1,2,3", memory=15, wall_time="0:10", cores=1))
         assert result["status"] == "submitted", result
+        self.last_result = result
         return [c for c in calls if c and c[0] == "bsub"][0]
 
     def test_job_runs_under_the_projects_group(self, shared_dir):
@@ -202,10 +203,11 @@ class TestSubmitUsesProjectGroup:
 
     def test_project_without_a_group_is_submitted_unchanged(self, shared_dir):
         og._warned.discard("proj_without_group")
-        with pytest.warns(UserWarning, match="proj_without_group"):
-            cmd = self._submit(shared_dir, "proj_without_group")
+        cmd = self._submit(shared_dir, "proj_without_group")
         assert cmd[-3:-1] == ["/bin/bash", "-c"]
         assert "sg" not in cmd
+        # the MCP hands the warning to the caller instead of dropping it
+        assert any("proj_without_group" in w for w in self.last_result["warnings"])
 
 
 class TestLocalConversionTakesParentGroup:

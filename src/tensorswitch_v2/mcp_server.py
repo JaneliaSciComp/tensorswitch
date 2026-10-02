@@ -41,6 +41,36 @@ logger = logging.getLogger("tensorswitch-mcp")
 
 mcp = FastMCP("tensorswitch")
 
+_PLACEHOLDER_VOXEL_NOTE = "No voxel size found for axis"
+
+
+def _relevant(notes: list, voxel_size: str) -> list:
+    """Drop the 'using placeholder 1.0' note when the caller gave voxel_size (the placeholder is unused)."""
+    return [n for n in notes if not (voxel_size and n.startswith(_PLACEHOLDER_VOXEL_NOTE))]
+
+
+@contextlib.contextmanager
+def _quiet_capture():
+    """Silence stdout (it carries the JSON-RPC stream) and collect what the code warns about.
+
+    Yields a list that is filled when the block ends with the distinct UserWarning messages
+    and any 'WARNING ...' lines written to stderr, so the tool response can show them.
+    """
+    import warnings
+
+    notes: list = []
+    out, err = io.StringIO(), io.StringIO()
+    with warnings.catch_warnings(record=True) as caught, contextlib.redirect_stdout(out), \
+            contextlib.redirect_stderr(err):
+        warnings.simplefilter("always")
+        yield notes
+        found = [str(w.message).strip() for w in caught if issubclass(w.category, UserWarning)]
+        found += [line.strip() for line in err.getvalue().splitlines() if line.strip().startswith("WARNING")]
+        for message in found:
+            if message and message not in notes:
+                notes.append(message)
+
+
 # Size guard: refuse in-process conversion for datasets larger than this
 MCP_CONVERT_MAX_GB = 2
 
@@ -454,7 +484,7 @@ def convert(
         _apply_preset(args)
 
         # Size guard: refuse large datasets (the bbox volume counts when one is given)
-        with contextlib.redirect_stdout(io.StringIO()):
+        with _quiet_capture() as notes:
             reader = create_reader(args)
             store = reader.get_tensorstore()
         shape = [int(n) for n in store.shape]
@@ -488,8 +518,9 @@ def convert(
 
         # Suppress stdout - MCP uses stdio transport (stdout = JSON-RPC)
         try:
-            with contextlib.redirect_stdout(io.StringIO()):
+            with _quiet_capture() as run_notes:
                 info = run_conversion(args) or {}
+            notes.extend(n for n in run_notes if n not in notes)
         except (FileNotFoundError, ValueError) as e:
             if str(e).startswith("--add-to-existing"):
                 return json.dumps({"error": str(e)}, indent=2)
@@ -514,6 +545,9 @@ def convert(
                     {"level": f"s{lv['level']}", "factors": lv["cumulative_factor"], "shape": lv["predicted_shape"]}
                     for lv in plan.get("levels", [])
                 ]
+        notes = _relevant(notes, args.voxel_size)
+        if notes:
+            response["warnings"] = notes
         return json.dumps(response, indent=2)
     except Exception as e:
         logger.error(f"convert failed: {e}\n{traceback.format_exc()}")
@@ -983,10 +1017,11 @@ def submit_job(
                 )
 
         # Suppress stdout - MCP uses stdio transport (stdout = JSON-RPC)
-        with contextlib.redirect_stdout(io.StringIO()):
+        with _quiet_capture() as notes:
             job_id = _cli_submit_job(args, return_job_id=True)
             coordinator_id = (_submit_dependent_pyramid(args, conversion_job_id=str(job_id))
                               if args.auto_multiscale and job_id else None)
+        notes = _relevant(notes, args.voxel_size)
 
         if args.auto_multiscale:
             return json.dumps({
@@ -998,6 +1033,7 @@ def submit_job(
                 "output": output_path,
                 "format": args.output_format,
                 "project": project,
+                **({"warnings": notes} if notes else {}),
                 "message": (
                     f"Conversion job {job_id} submitted. "
                     + (f"Pyramid coordinator job {coordinator_id} will start after conversion completes. "
@@ -1014,6 +1050,7 @@ def submit_job(
             "output": output_path,
             "format": args.output_format,
             "project": project,
+            **({"warnings": notes} if notes else {}),
             "message": f"Job {job_id} submitted. Use check_job_status to monitor.",
         }, indent=2)
 

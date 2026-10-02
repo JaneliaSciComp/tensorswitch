@@ -1381,6 +1381,29 @@ def _warn_if_axis_voxel_mismatch(args, axes_order) -> None:
     )
 
 
+def _warn_if_inferred_channel_axis(args, reader, axes) -> None:
+    """Warn when a source without axis names (HDF5) has its first axis read as a channel.
+
+    HDF5 stores no axis names, so they are guessed from the shape and a first dimension of
+    10 or less becomes ``c``. A short z-stack then gets axes ``c,y,x`` and no z axis (the
+    voxel size for z is silently dropped). A 3-D file labelled ``c,y,x`` is almost always
+    that, so say so and name the fix. Skipped once the user relabels the axis.
+    """
+    from .readers.hdf5 import HDF5Reader
+
+    if not isinstance(reader, HDF5Reader) or not axes or list(axes) != ['c', 'y', 'x']:
+        return
+    if any(spec.lower().replace(' ', '').startswith('c=') for spec in (getattr(args, 'relabel_axis', None) or [])):
+        return
+    import warnings
+    warnings.warn(
+        "HDF5 files have no axis names. This 3-D dataset's first axis has 10 or fewer entries, so it was "
+        "labelled as a channel (axes c,y,x) and the output has no z axis. If it is a z-stack, pass "
+        "relabel_axis='c=z' (command line: --relabel_axis c=z).",
+        UserWarning, stacklevel=2,
+    )
+
+
 def _get_input_metadata(args):
     """Read input shape, dtype, and axes for resource estimation.
 
@@ -1397,6 +1420,8 @@ def _get_input_metadata(args):
         if labels and all(labels):
             # Normalize 'channel' to 'c'
             axes_order = ['c' if l.lower() == 'channel' else l.lower() for l in labels]
+
+    _warn_if_inferred_channel_axis(args, reader, axes_order)
 
     # Apply explicit --relabel_axis here too, so resource estimation (chunk/shard
     # sizing) and the mismatch warning below both see the corrected axis identity
@@ -1563,6 +1588,21 @@ def _require_voxel_metadata_before_submit(args):
     )
 
 
+def _warn_inferred_axes_before_submit(args):
+    """Run the HDF5 axis-guess warning at submit time, whatever resources were given."""
+    try:
+        from .readers.hdf5 import HDF5Reader
+
+        reader = create_reader(args)
+        if not isinstance(reader, HDF5Reader):
+            return
+        labels = reader.get_tensorstore().domain.labels
+        if labels and all(labels):
+            _warn_if_inferred_channel_axis(args, reader, [l.lower() for l in labels])
+    except Exception:
+        pass  # best effort; never block a submission
+
+
 def submit_job(args, return_job_id=False):
     """Submit a single LSF bsub job that re-invokes tensorswitch_v2.
 
@@ -1585,6 +1625,7 @@ def submit_job(args, return_job_id=False):
         )
 
     _require_voxel_metadata_before_submit(args)
+    _warn_inferred_axes_before_submit(args)
 
     # Auto-calculate resources from source data when not explicitly provided
     memory_gb = args.memory
@@ -2503,6 +2544,15 @@ def run_conversion(args):
                 _axes_for_warning = [
                     'c' if l.lower() == 'channel' else l.lower() for l in _labels
                 ]
+        _warn_if_inferred_channel_axis(args, reader, _axes_for_warning)
+        if _axes_for_warning and getattr(args, 'relabel_axis', None):
+            # the user already corrected an axis: warn about what is left, not about what they fixed
+            _mapping = {}
+            for _spec in args.relabel_axis:
+                if '=' in _spec:
+                    _old, _new = _spec.lower().split('=', 1)
+                    _mapping[_old.strip()] = _new.strip()
+            _axes_for_warning = [_mapping.get(a, a) for a in _axes_for_warning]
         _warn_if_axis_voxel_mismatch(args, _axes_for_warning)
     except Exception:
         pass  # warning is best-effort; never block conversion
