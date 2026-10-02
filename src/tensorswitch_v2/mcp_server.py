@@ -534,6 +534,8 @@ def convert(
         # Safe write: write to .tmp, rename on completion
         final_output = output_path
         _add_to_existing_parent = None  # Track subgroup parent for --add-to-existing
+        _add_to_existing_label = None
+        writer_image_key, writer_label_key = image_key, label_key
 
         if add_to_existing:
             # Subgroup-level safe write
@@ -543,10 +545,18 @@ def convert(
             if not subgroup:
                 return json.dumps({"error": "--add-to-existing requires data_type='labels' or 'image'"}, indent=2)
             _add_to_existing_parent = subgroup.split('/')[0]
-            tmp_subgroup = os.path.join(final_output, _add_to_existing_parent + '.tmp')
+            _add_to_existing_label = subgroup.split('/')[-1]
+            # Same layout as the CLI: a new label is written to labels/<name>.tmp and
+            # renamed within labels/; a replaced image goes to <image_key>.tmp.
+            if _add_to_existing_parent == 'labels':
+                tmp_subgroup = os.path.join(final_output, 'labels', _add_to_existing_label + '.tmp')
+                writer_label_key = _add_to_existing_label + '.tmp'
+            else:
+                tmp_subgroup = os.path.join(final_output, _add_to_existing_parent + '.tmp')
+                writer_image_key = _add_to_existing_parent + '.tmp'
             if os.path.exists(tmp_subgroup):
                 shutil.rmtree(tmp_subgroup)
-            labels_container = 'labels.tmp' if _add_to_existing_parent == 'labels' else 'labels'
+            labels_container = 'labels'
             tmp_output = None  # No container-level .tmp
         else:
             tmp_output = output_path.rstrip('/\\') + '.tmp'
@@ -564,8 +574,8 @@ def convert(
                 compression_level=compression_level,
                 data_type=resolved_data_type,
                 level_path=level_path,
-                image_key=image_key,
-                label_key=label_key,
+                image_key=writer_image_key,
+                label_key=writer_label_key,
                 include_omero=omero,
                 labels_container=labels_container,
             )
@@ -576,8 +586,8 @@ def convert(
                 compression_level=compression_level,
                 data_type=resolved_data_type,
                 level_path=level_path,
-                image_key=image_key,
-                label_key=label_key,
+                image_key=writer_image_key,
+                label_key=writer_label_key,
                 include_omero=omero,
                 labels_container=labels_container,
             )
@@ -651,9 +661,12 @@ def convert(
                 output_format, data_type, is_label, image_key, label_key,
             )
             if _add_to_existing_parent and pyramid_subgroup:
-                # Pyramid runs on .tmp subgroup before rename
-                parts = pyramid_subgroup.split('/', 1)
-                pyramid_subgroup = parts[0] + '.tmp' + ('/' + parts[1] if len(parts) > 1 else '')
+                # Pyramid runs on the .tmp subgroup before rename
+                if _add_to_existing_parent == 'labels':
+                    pyramid_subgroup = pyramid_subgroup + '.tmp'
+                else:
+                    parts = pyramid_subgroup.split('/', 1)
+                    pyramid_subgroup = parts[0] + '.tmp' + ('/' + parts[1] if len(parts) > 1 else '')
                 find_target = os.path.join(final_output, pyramid_subgroup)
             else:
                 find_target = (
@@ -694,13 +707,18 @@ def convert(
 
         # Safe write: rename .tmp → final path
         if _add_to_existing_parent:
-            from tensorswitch_v2.__main__ import _finalize_add_to_existing
+            from tensorswitch_v2.__main__ import (
+                _apply_group_to_added_label as apply_group_to_added_label,
+                _finalize_add_to_existing,
+            )
             _finalize_add_to_existing(
                 final_output=final_output,
                 subgroup_parent=_add_to_existing_parent,
+                label_name=_add_to_existing_label,
                 output_format=output_format,
                 verbose=False,
             )
+            apply_group_to_added_label(final_output, _add_to_existing_parent, _add_to_existing_label)
         elif tmp_output and os.path.exists(tmp_output):
             if os.path.exists(final_output):
                 shutil.rmtree(final_output)
