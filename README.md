@@ -1305,6 +1305,7 @@ TensorSwitch v2 includes an MCP (Model Context Protocol) server that allows Clau
 | `list_formats` | Lists all supported input/output formats by tier |
 | `estimate_resources` | Estimates memory, wall time, and cores needed for a conversion |
 | `submit_job` | Submits conversion to LSF cluster. With `auto_multiscale`: auto-detects whether to run pyramid-only or conversion + dependent pyramid coordinator. Supports `force_order`, `add_to_existing`. Checks the source's voxel size before queueing and returns a `validation_error` if it is missing (unless `voxel_size` is given), instead of failing later on the cluster node. |
+| `fetch_dataset` | Downloads a URL (http, https, ftp, s3), or one member of a remote zip with `"<zip url>::<path in zip>"` (range requests, the rest of the zip is never downloaded), into a folder you choose. 2 GB limit (larger requests return a `bsub` command that runs `python -m tensorswitch_v2.utils.fetch`), host allowlist (extend with `TENSORSWITCH_FETCH_HOSTS`), no writes outside the folder, CRC-checked. |
 | `check_job_status` | Checks LSF job status (supports multiple job IDs) |
 
 ### Setup (Claude Code)
