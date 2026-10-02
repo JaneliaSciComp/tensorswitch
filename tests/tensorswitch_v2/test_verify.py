@@ -241,3 +241,31 @@ class TestGroup:
 
     def test_unknown_group_is_unverified(self, container, data):
         assert status(verify(container, data, group="no_such_group_xyz"), "group") == "unverified"
+
+
+class TestMcpTool:
+    @pytest.fixture
+    def tool(self):
+        pytest.importorskip("mcp")
+        from tensorswitch_v2 import mcp_server
+
+        return lambda *a, **k: json.loads(mcp_server.verify_output(*a, **k))
+
+    def test_good_conversion_passes(self, tool, container, data):
+        report = tool(container, data["raw_path"], voxel_size=VOX, labels=f"seg={data['lab_path']}")
+        assert report["overall"] == "pass", report["checks"]
+
+    def test_damage_is_reported(self, tool, container, data):
+        wrong = tif(os.path.dirname(container), "w.tif", np.roll(data["raw"], 1, axis=0))
+        report = tool(container, wrong, voxel_size=VOX)
+        assert report["overall"] == "fail" and "identity:raw" in report["failures"]
+
+    def test_no_source_is_unverified_not_pass(self, tool, container):
+        assert tool(container, voxel_size=VOX)["overall"] == "unverified"
+
+    def test_bad_labels_argument(self, tool, container):
+        assert tool(container, labels="seg")["error"] == "validation_error"
+
+    def test_stdout_stays_clean(self, tool, container, data, capsys):
+        tool(container, data["raw_path"], voxel_size=VOX)
+        assert capsys.readouterr().out == ""

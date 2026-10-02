@@ -1441,6 +1441,75 @@ def plan_conversion_from_yaml(record: str, output_dir: str, project: str = "") -
 
 
 # ---------------------------------------------------------------------------
+# Tool: verify_output
+# ---------------------------------------------------------------------------
+@mcp.tool()
+def verify_output(
+    output_path: str,
+    source_path: str = "",
+    voxel_size: str = "",
+    labels: str = "",
+    bbox: str = "",
+    bbox_axes: str = "",
+    dataset_path: str = "",
+    output_dtype: str = "",
+    group: str = "",
+    image_key: str = "raw",
+    samples: int = 5,
+) -> str:
+    """Check a converted OME-Zarr container, above all against the data it came from.
+
+    Use after convert or after a submit_job chain has finished. Each check is pass, fail
+    or unverified (it could not run, with the reason). The overall result is fail if any
+    check failed, unverified if none failed but a check could not run, else pass; an
+    unverified result is NOT a pass. Nothing is deleted or changed except that a small
+    verification.json is written into the container.
+
+    Checks: structure (image and labels present, no .tmp leftovers), pyramid levels
+    (all exist, consistent shape and dtype), voxel size in nm vs what you expected,
+    data not constant, identity with the source (the whole array when it is 1 GB or
+    less, otherwise slices spread through it; catches transposed, shifted or dropped
+    data), and the Unix group of the files.
+
+    Args:
+        output_path: The converted .zarr container.
+        source_path: The file the image was converted from. Without it the identity check is unverified.
+        voxel_size: Expected voxel size "X,Y,Z" in nm.
+        labels: Label arrays to check, "name=source file;name2=source file2".
+        bbox: The bbox used for the conversion, so the right region of the source is compared.
+        bbox_axes: The bbox_axes used for the conversion.
+        dataset_path: Dataset inside an HDF5 source.
+        output_dtype: Set if the conversion cast the values (identity is then reported unverified).
+        group: Unix group the files should belong to.
+        image_key: Name of the image group (default "raw").
+        samples: Slices compared when the array is too big to compare whole.
+    """
+    import contextlib
+    import io
+
+    from tensorswitch_v2.utils.verify import verify_output as _verify
+
+    try:
+        label_map = {}
+        for item in filter(None, (t.strip() for t in labels.split(";"))):
+            name, _, path = item.partition("=")
+            if not path:
+                return json.dumps({"error": "validation_error",
+                                   "message": f"labels must look like 'name=source file;...', got {item!r}"}, indent=2)
+            label_map[name.strip()] = path.strip()
+        expected = {k: v for k, v in {
+            "voxel_size": voxel_size, "labels": label_map, "bbox": bbox, "bbox_axes": bbox_axes,
+            "dataset_path": dataset_path, "output_dtype": output_dtype, "group": group,
+            "image_key": image_key}.items() if v}
+        with contextlib.redirect_stdout(io.StringIO()):
+            report = _verify(output_path.strip(), source_path.strip() or None, expected, samples=samples)
+        return json.dumps(report, indent=2)
+    except Exception as e:
+        logger.error(f"verify_output failed: {e}\n{traceback.format_exc()}")
+        return json.dumps({"error": "verify_failed", "message": str(e)}, indent=2)
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
