@@ -314,6 +314,9 @@ def verify_output(output: str, source: Optional[str] = None, expected: Optional[
         to_compare = [(next(iter(stores), "output"), source, None)]
     for label, path, out_store in to_compare:
         name = f"identity:{label}"
+        dataset = expected.get("dataset_path") if label == image_key else None
+        if path and "::" in path:                    # "file.h5::volumes/labels/x": a dataset inside the file
+            path, dataset = path.split("::", 1)
         if not path:
             _check(checks, name, "unverified", "no source file was given, so the data could not be compared")
         elif out_store is None:
@@ -326,8 +329,8 @@ def verify_output(output: str, source: Optional[str] = None, expected: Optional[
             try:
                 from ..api import Readers
 
-                reader = (Readers.hdf5(path, dataset_path=expected["dataset_path"])
-                          if expected.get("dataset_path") and path.lower().endswith((".h5", ".hdf5", ".hdf", ".he5"))
+                reader = (Readers.hdf5(path, dataset_path=dataset)
+                          if dataset and path.lower().endswith((".h5", ".hdf5", ".hdf", ".he5"))
                           else Readers.auto_detect(path))
                 result = compare_with_source(out_store, reader.get_tensorstore(), bbox=bbox,
                                              bbox_axes=bbox_axes, samples=samples)

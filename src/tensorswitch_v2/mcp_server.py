@@ -1459,13 +1459,13 @@ def verify_output(
         output_path: The converted .zarr container.
         source_path: The file the image was converted from. Without it the identity check is unverified.
         voxel_size: Expected voxel size "X,Y,Z" in nm.
-        labels: Label arrays to check, "name=source file;name2=source file2".
+        labels: Label arrays to check, "name=source file;name2=source file2" (HDF5: "name=file.h5::dataset").
         bbox: The bbox used for the conversion, so the right region of the source is compared.
         bbox_axes: The bbox_axes used for the conversion.
         dataset_path: Dataset inside an HDF5 source.
         output_dtype: Set if the conversion cast the values (identity is then reported unverified).
         group: Unix group the files should belong to.
-        image_key: Name of the image group (default "raw").
+        image_key: Name of the image group (default "raw"); empty if the container holds labels only.
         samples: Slices compared when the array is too big to compare whole.
     """
     import contextlib
@@ -1483,8 +1483,8 @@ def verify_output(
             label_map[name.strip()] = path.strip()
         expected = {k: v for k, v in {
             "voxel_size": voxel_size, "labels": label_map, "bbox": bbox, "bbox_axes": bbox_axes,
-            "dataset_path": dataset_path, "output_dtype": output_dtype, "group": group,
-            "image_key": image_key}.items() if v}
+            "dataset_path": dataset_path, "output_dtype": output_dtype, "group": group}.items() if v}
+        expected["image_key"] = image_key.strip()        # empty: the container has labels only
         with contextlib.redirect_stdout(io.StringIO()):
             report = _verify(output_path.strip(), source_path.strip() or None, expected, samples=samples)
         return json.dumps(report, indent=2)

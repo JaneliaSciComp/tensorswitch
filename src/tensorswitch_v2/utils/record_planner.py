@@ -200,6 +200,14 @@ def _local_path(source_dir: str, spec: str) -> str:
     return os.path.join(source_dir, *name.replace("\\", "/").split("/"))
 
 
+def _label_source(args: Dict[str, Any]) -> str:
+    """Source of a label for verify_output: the file, plus '::dataset' inside an HDF5 file."""
+    path = args["input_path"]
+    if args.get("dataset_path") and path.lower().endswith(EXTENSIONS["hdf5"]):
+        return f"{path}::{args['dataset_path']}"
+    return path
+
+
 def _fmt_gb(n: Optional[int]) -> str:
     return "unknown size" if not n else f"{n / 1024 ** 3:.1f} GB"
 
@@ -361,6 +369,21 @@ def plan_record(record: Dict[str, Any], output_dir: str, project: Optional[str] 
         if use_cluster:
             args["project"] = project or "<LSF project>"
         plan["steps"].append({"tool": "submit_job" if use_cluster else "convert", "args": args})
+    for container in containers.values():
+        members = [a["convert_args"] for a in ordered if a["convert_args"]["output_path"] == container["path"]]
+        images = [a for a in members if not a.get("is_label")]
+        labels = [a for a in members if a.get("is_label")]
+
+        verify_args: Dict[str, Any] = {"output_path": container["path"],
+                                       "source_path": images[0]["input_path"] if images else "",
+                                       "image_key": "raw" if images else ""}
+        if images and images[0].get("dataset_path"):
+            verify_args["dataset_path"] = images[0]["dataset_path"]
+        if members and members[0].get("voxel_size"):
+            verify_args["voxel_size"] = members[0]["voxel_size"]
+        if labels:
+            verify_args["labels"] = ";".join(f"{a['label_key']}={_label_source(a)}" for a in labels)
+        plan["steps"].append({"tool": "verify_output", "args": verify_args})
     if any(a["format"] == "hdf5" and a["convert_args"].get("dataset_path") is None for a in ordered):
         warnings.append("some HDF5 steps have dataset_path=null: run inspect_dataset on the fetched file and fill it in")
     return plan

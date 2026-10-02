@@ -269,3 +269,44 @@ class TestMcpTool:
     def test_stdout_stays_clean(self, tool, container, data, capsys):
         tool(container, data["raw_path"], voxel_size=VOX)
         assert capsys.readouterr().out == ""
+
+
+class TestLabelSourceDataset:
+    def test_label_read_from_a_dataset_inside_an_hdf5_file(self, temp_dir):
+        import h5py
+
+        rng = np.random.default_rng(5)
+        # more than 10 slices: HDF5 has no axis names and a first dimension of 10 or less is read as a channel
+        raw = rng.integers(1, 200, (12, 16, 16), dtype=np.uint8)
+        lab = rng.integers(0, 4, (12, 16, 16), dtype=np.uint8)
+        path = os.path.join(temp_dir, "both.h5")
+        with h5py.File(path, "w") as f:
+            f.create_dataset("vol/raw", data=raw)
+            f.create_dataset("vol/lab", data=lab)
+        out = os.path.join(temp_dir, "both.zarr")
+        convert(path, out, "--dataset_path", "vol/raw")
+        convert(path, out, "--dataset_path", "vol/lab", "--add-to-existing", "--is_label", "--label-key", "seg")
+        report = v.verify_output(out, path, {"voxel_size": VOX, "dataset_path": "vol/raw",
+                                             "labels": {"seg": f"{path}::vol/lab"}})
+        assert report["overall"] == "pass", report["checks"]
+        wrong = v.verify_output(out, path, {"voxel_size": VOX, "dataset_path": "vol/raw",
+                                            "labels": {"seg": f"{path}::vol/raw"}})
+        assert status(wrong, "identity:labels/seg") == "fail"
+
+    def test_a_short_first_dimension_read_as_a_channel_is_caught(self, temp_dir):
+        """HDF5 with 8 slices is written with axes c,y,x (no z): the voxel size check reports it."""
+        import h5py
+
+        path = os.path.join(temp_dir, "short.h5")
+        with h5py.File(path, "w") as f:
+            f.create_dataset("vol/raw", data=np.random.default_rng(6).integers(1, 200, (8, 16, 16), dtype=np.uint8))
+        out = os.path.join(temp_dir, "short.zarr")
+        convert(path, out, "--dataset_path", "vol/raw")
+        report = v.verify_output(out, path, {"voxel_size": VOX, "dataset_path": "vol/raw"})
+        assert status(report, "voxel_size") == "fail" and report["overall"] == "fail"
+
+    def test_labels_only_container(self, temp_dir, data):
+        out = os.path.join(temp_dir, "lo.zarr")
+        convert(data["lab_path"], out, "--is_label", "--label-key", "seg")
+        report = v.verify_output(out, None, {"voxel_size": VOX, "image_key": "", "labels": {"seg": data["lab_path"]}})
+        assert status(report, "structure") == "pass" and status(report, "identity:labels/seg") == "pass"

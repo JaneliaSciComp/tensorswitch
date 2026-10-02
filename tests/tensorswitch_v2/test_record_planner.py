@@ -84,7 +84,7 @@ class TestRawAndLabel:
     def test_fetch_then_convert_for_each_array(self):
         plan = rp.plan_record(record(), OUT)
         assert plan["status"] == "ready"
-        assert [t for t, _ in tools(plan)] == ["fetch_dataset", "convert", "fetch_dataset", "convert"]
+        assert [t for t, _ in tools(plan)] == ["fetch_dataset", "convert", "fetch_dataset", "convert", "verify_output"]
 
     def test_raw_creates_the_container_and_label_is_added_to_it(self):
         steps = tools(rp.plan_record(record(), OUT))
@@ -190,7 +190,7 @@ class TestHdf5:
 
     def test_dataset_names_come_from_the_pattern_and_the_file_is_fetched_once(self):
         plan = self.hdf5("nuclei.zip::nuclei/*.h5 (volumes/raw)", "nuclei.zip::nuclei/*.h5 (volumes/labels/seg)")
-        assert [t for t, _ in tools(plan)] == ["fetch_dataset", "convert", "convert"]
+        assert [t for t, _ in tools(plan)] == ["fetch_dataset", "convert", "convert", "verify_output"]
         converts = [a for t, a in tools(plan) if t == "convert"]
         assert [c["dataset_path"] for c in converts] == ["volumes/raw", "volumes/labels/seg"]
         assert not any("dataset_path=null" in w for w in plan["warnings"])
@@ -230,7 +230,7 @@ class TestUnconvertible:
     def test_remote_zarr_is_read_in_place_without_fetching(self):
         url = "https://bucket.s3.amazonaws.com/vol.zarr"
         plan = self.one("zarr", pattern="vol.zarr", url=url)
-        assert [t for t, _ in tools(plan)] == ["convert"]
+        assert [t for t, _ in tools(plan)] == ["convert", "verify_output"]
         assert tools(plan)[0][1]["input_path"] == url
 
     def test_one_unconvertible_array_makes_the_plan_partial(self):
@@ -238,14 +238,66 @@ class TestUnconvertible:
         rec["technical"]["sample"]["urls"].append(f"{ZIP}::set/t.csv")
         rec["technical"]["arrays"].append({"role": "label", "format": "csv", "path_pattern": "data.zip::set/*.csv"})
         plan = rp.plan_record(rec, OUT)
-        assert plan["status"] == "partial" and len(tools(plan)) == 4
+        assert plan["status"] == "partial" and len(tools(plan)) == 5
+
+
+class TestVerifyStep:
+    def verify_steps(self, plan):
+        return [a for t, a in tools(plan) if t == "verify_output"]
+
+    def test_one_verify_step_per_container_comes_last(self):
+        plan = rp.plan_record(record(), OUT)
+        assert tools(plan)[-1][0] == "verify_output" and len(self.verify_steps(plan)) == 1
+
+    def test_verify_step_carries_what_was_asked_for(self):
+        args = self.verify_steps(rp.plan_record(record(), OUT))[0]
+        assert args["output_path"] == f"{OUT}/rec-1.zarr" and args["image_key"] == "raw"
+        assert args["source_path"] == f"{OUT}/source/set/images/a.tif"
+        assert args["voxel_size"] == "8,8,40"
+        assert args["labels"] == f"segmentation={OUT}/source/set/masks/a.tif"
+
+    def test_no_voxel_size_in_the_record_means_none_to_compare(self):
+        rec = record()
+        rec["imaging"]["voxel_size_nm"] = None
+        assert "voxel_size" not in self.verify_steps(rp.plan_record(rec, OUT))[0]
+
+    def test_hdf5_labels_carry_their_dataset(self):
+        rec = record()
+        rec["technical"]["sample"]["urls"] = ["https://zenodo.org/records/3/files/n.zip::nuclei/a.h5"]
+        rec["technical"]["arrays"] = [
+            {"role": "raw", "format": "hdf5", "path_pattern": "n.zip::nuclei/*.h5 (volumes/raw)"},
+            {"role": "label", "format": "hdf5", "path_pattern": "n.zip::nuclei/*.h5 (volumes/labels/seg)"}]
+        args = self.verify_steps(rp.plan_record(rec, OUT))[0]
+        assert args["dataset_path"] == "volumes/raw"
+        assert args["labels"] == f"segmentation={OUT}/source/nuclei/a.h5::volumes/labels/seg"
+
+    def test_labels_only_container_expects_no_image(self):
+        rec = record()
+        rec["technical"]["arrays"] = [rec["technical"]["arrays"][1]]
+        args = self.verify_steps(rp.plan_record(rec, OUT))[0]
+        assert args["image_key"] == "" and args["source_path"] == ""
+
+    def test_separate_containers_get_separate_verify_steps(self):
+        rec = record()
+        rec["technical"]["arrays"][1]["role"] = "target"
+        assert len(self.verify_steps(rp.plan_record(rec, OUT))) == 2
+
+    def test_verify_arguments_are_real_tool_parameters(self):
+        import inspect
+
+        pytest.importorskip("mcp")
+        from tensorswitch_v2 import mcp_server
+
+        params = inspect.signature(mcp_server.verify_output).parameters
+        assert set(self.verify_steps(rp.plan_record(record(), OUT))[0]) <= set(params)
 
 
 class TestSizeAndPaths:
     def test_large_sample_uses_submit_job_with_the_project(self):
         rec = record()
         rec["technical"]["sample"]["size_bytes"] = 5 * 1024 ** 3
-        converts = [(t, a) for t, a in tools(rp.plan_record(rec, OUT, project="miaai")) if t != "fetch_dataset"]
+        converts = [(t, a) for t, a in tools(rp.plan_record(rec, OUT, project="miaai"))
+                    if t not in ("fetch_dataset", "verify_output")]
         assert all(t == "submit_job" and a["project"] == "miaai" for t, a in converts)
 
     def test_large_sample_without_project_says_so(self):
@@ -334,7 +386,7 @@ class TestMcpTool:
         yaml.safe_dump(record(), open(path, "w"))
         plan = tool(path, OUT)
         assert plan["status"] == "ready" and plan["record"]["id"] == "rec-1"
-        assert [s["tool"] for s in plan["steps"]] == ["fetch_dataset", "convert", "fetch_dataset", "convert"]
+        assert [s["tool"] for s in plan["steps"]] == ["fetch_dataset", "convert", "fetch_dataset", "convert", "verify_output"]
 
     def test_bad_record_is_an_error_not_an_exception(self, tool):
         result = tool("definitely not a record!", OUT)
