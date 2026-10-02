@@ -1750,6 +1750,40 @@ def fetch_dataset(spec: str, dest_dir: str, max_gb: float = 2.0) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Tool: plan_conversion_from_yaml
+# ---------------------------------------------------------------------------
+@mcp.tool()
+def plan_conversion_from_yaml(record: str, output_dir: str, project: str = "") -> str:
+    """Plan the conversion of a dataset-catalog record (mia-agentic-search YAML).
+
+    Reads the record and returns the exact fetch_dataset / convert / submit_job
+    calls to run, in order, plus warnings for everything the record does not
+    settle (missing voxel size, unsupported format, no concrete file URL...).
+    Nothing is downloaded or converted: review the plan, then run the steps.
+
+    Only 3D and 3D+t records are planned. Each plan covers the record's sample
+    unit (technical.sample.urls), one raw plus its labels, not the whole dataset.
+
+    Args:
+        record: Path to a record .yaml, a GitHub URL of one, or a catalog record id.
+        output_dir: Folder for the converted containers. Downloads are staged in
+                    <output_dir>/source/ and can be deleted after checking the result.
+        project: LSF project, used in the plan when the sample is over 2 GB.
+    """
+    from tensorswitch_v2.utils import record_planner
+
+    try:
+        plan = record_planner.plan_record(record_planner.load_record(record.strip()),
+                                          output_dir.strip(), project.strip() or None)
+        return json.dumps(plan, indent=2)
+    except record_planner.RecordError as e:
+        return json.dumps({"error": "bad_record", "message": str(e)}, indent=2)
+    except Exception as e:
+        logger.error(f"plan_conversion_from_yaml failed: {e}\n{traceback.format_exc()}")
+        return json.dumps({"error": "plan_failed", "message": str(e)}, indent=2)
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":

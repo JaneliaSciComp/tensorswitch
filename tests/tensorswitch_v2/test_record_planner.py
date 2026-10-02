@@ -317,3 +317,39 @@ class TestLoadRecord:
         url = "https://github.com/AI-HHMI/mia-agentic-search/blob/main/datasets/3D/FIB-SEM/x.yaml"
         assert rp._github_raw(url) == \
             "https://raw.githubusercontent.com/AI-HHMI/mia-agentic-search/main/datasets/3D/FIB-SEM/x.yaml"
+
+
+class TestMcpTool:
+    @pytest.fixture
+    def tool(self):
+        pytest.importorskip("mcp")
+        from tensorswitch_v2 import mcp_server
+
+        return lambda *a, **k: json.loads(mcp_server.plan_conversion_from_yaml(*a, **k))
+
+    def test_returns_the_plan_for_a_local_record(self, tool, temp_dir):
+        import yaml
+
+        path = os.path.join(temp_dir, "r.yaml")
+        yaml.safe_dump(record(), open(path, "w"))
+        plan = tool(path, OUT)
+        assert plan["status"] == "ready" and plan["record"]["id"] == "rec-1"
+        assert [s["tool"] for s in plan["steps"]] == ["fetch_dataset", "convert", "fetch_dataset", "convert"]
+
+    def test_bad_record_is_an_error_not_an_exception(self, tool):
+        result = tool("definitely not a record!", OUT)
+        assert result["error"] == "bad_record"
+
+    def test_steps_are_runnable_with_the_real_tool_signatures(self, tool, temp_dir):
+        import inspect
+
+        import yaml
+        from tensorswitch_v2 import mcp_server
+
+        path = os.path.join(temp_dir, "r.yaml")
+        rec = record()
+        rec["technical"]["sample"]["size_bytes"] = 5 * 1024 ** 3
+        yaml.safe_dump(rec, open(path, "w"))
+        for step in tool(path, OUT, project="miaai")["steps"]:
+            params = inspect.signature(getattr(mcp_server, step["tool"])).parameters
+            assert set(step["args"]) <= set(params), (step["tool"], set(step["args"]) - set(params))
