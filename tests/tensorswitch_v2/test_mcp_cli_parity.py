@@ -130,3 +130,46 @@ def test_paths_with_spaces_stay_one_argument():
     argv = mcp_args.build_argv({"input_path": "/a b/c d.nd2", "output_path": "/o p/x.zarr"})
     assert argv[argv.index("-i") + 1] == "/a b/c d.nd2"
     assert parse_args(argv).output == "/o p/x.zarr"
+
+
+# ---- the tool signatures and docs follow mcp_args.SPEC --------------------------------
+
+CLUSTER_ONLY = {"project", "memory", "wall_time", "cores", "job_group", "log_dir"}
+SPEC_PARAMS = {name for name, *_ in mcp_args.SPEC} | set(mcp_args.SPECIAL)
+
+
+def _tools():
+    pytest.importorskip("mcp")
+    import inspect
+
+    from tensorswitch_v2 import mcp_server
+
+    return {name: (inspect.signature(getattr(mcp_server, name)).parameters, inspect.getdoc(getattr(mcp_server, name)))
+            for name in ("convert", "submit_job")}
+
+
+def test_submit_job_has_every_spec_parameter():
+    params, _ = _tools()["submit_job"]
+    assert not (SPEC_PARAMS - set(params))
+
+
+def test_convert_has_every_spec_parameter_except_cluster_ones():
+    params, _ = _tools()["convert"]
+    assert not (SPEC_PARAMS - CLUSTER_ONLY - set(params))
+    assert not (CLUSTER_ONLY & set(params)), "convert runs locally, it must not take cluster options"
+
+
+@pytest.mark.parametrize("tool", ["convert", "submit_job"])
+def test_every_parameter_is_documented(tool):
+    params, doc = _tools()[tool]
+    undocumented = [name for name in params if f"{name}:" not in doc]
+    assert not undocumented, f"{tool}: parameters missing from the docstring: {undocumented}"
+
+
+@pytest.mark.parametrize("tool", ["convert", "submit_job"])
+def test_parameter_defaults_agree_with_the_cli_for_shared_options(tool):
+    params, _ = _tools()[tool]
+    cli_defaults = {"output_format": "zarr3", "level_path": "s0", "compression": "zstd", "compression_level": 5,
+                    "data_type": "auto", "image_key": "raw", "label_key": "segmentation"}
+    for name, value in cli_defaults.items():
+        assert params[name].default == value, (tool, name)

@@ -1,6 +1,9 @@
 """
 TensorSwitch MCP Server — exposes TensorSwitch v2 as tools for Claude and other LLM agents.
 
+convert and submit_job build a command line from their parameters and run the real CLI
+parser and code (see mcp_args.py), so they cannot drift from the command line.
+
 Usage:
     # Run directly
     pixi run python -m tensorswitch_v2.mcp_server
@@ -360,14 +363,18 @@ def convert(
     output_offset: str = "",
     target_shape: str = "",
 ) -> str:
-    """Convert a microscopy dataset between formats.
+    """Convert a microscopy dataset between formats, in-process (datasets up to 2 GB).
 
-    Supported inputs: HDF5, TIFF, ND2, IMS, CZI, Zarr2, Zarr3, N5,
-    Neuroglancer precomputed, and 150+ formats via Bio-Formats.
-    Supported outputs: zarr3 (with sharding), zarr2, n5.
+    Runs the same code as the command line (`python -m tensorswitch_v2`), so every
+    CLI option and default applies. See list_formats for supported inputs (Zarr2/3,
+    N5, Precomputed, TIFF, ND2, IMS, HDF5, CZI, NIfTI, MRC, PNG stacks, BioIO and
+    Bio-Formats plugins) and outputs (zarr3 with sharding, zarr2, n5).
 
-    For datasets larger than 2 GB, use submit_job instead to run on the
-    LSF cluster asynchronously.
+    The source must state a voxel size for every spatial axis, or you must pass
+    voxel_size (X,Y,Z); otherwise the conversion is refused.
+
+    For datasets larger than 2 GB use submit_job to run on the LSF cluster. Data that
+    only exists at a URL (zip members, FTP) must be downloaded first with fetch_dataset.
 
     Args:
         input_path: Path to source dataset.
@@ -640,44 +647,65 @@ def generate_pyramid(
 # ---------------------------------------------------------------------------
 @mcp.tool()
 def list_formats() -> str:
-    """List all supported input and output formats for TensorSwitch.
+    """List the input and output formats TensorSwitch supports, and how to get data that is only at a URL.
 
-    Returns format names, extensions, and reader tiers (Tier 1 = native
-    TensorStore for maximum performance, Tier 4 = Bio-Formats for broadest
-    compatibility).
+    Input formats are grouped by reader tier (Tier 1 = native TensorStore, fastest;
+    Tier 2 = dedicated readers; Tier 3 = BioIO plugins actually installed here;
+    Tier 4 = Bio-Formats, optional and Java-backed). Each file format names the
+    reader that auto-detection picks from the extension.
     """
+    from importlib.metadata import entry_points
+
+    try:
+        bioio_plugins = sorted({ep.name for ep in entry_points(group="bioio.readers")})
+    except Exception:
+        bioio_plugins = []
     formats = {
         "input_formats": {
             "tier_1_native_tensorstore": [
-                {"name": "Zarr3", "extensions": [".zarr"], "notes": "With sharding support"},
-                {"name": "Zarr2", "extensions": [".zarr"], "notes": "Legacy format"},
-                {"name": "N5", "extensions": [".n5"], "notes": "Java/BigDataViewer format"},
-                {"name": "Neuroglancer Precomputed", "extensions": [], "notes": "Local or remote (GCS/S3/HTTP)"},
+                {"name": "Zarr3", "extensions": [".zarr"], "reader": "Zarr3Reader", "notes": "With sharding support"},
+                {"name": "Zarr2", "extensions": [".zarr"], "reader": "Zarr2Reader", "notes": "Legacy format"},
+                {"name": "N5", "extensions": [".n5"], "reader": "N5Reader", "notes": "Java/BigDataViewer format"},
+                {"name": "Neuroglancer Precomputed", "extensions": [], "reader": "PrecomputedReader",
+                 "notes": "Local or remote (GCS/S3/HTTP)"},
             ],
-            "tier_2_custom_optimized": [
-                {"name": "TIFF", "extensions": [".tif", ".tiff"], "notes": "Single or stack, OME-TIFF supported"},
-                {"name": "ND2", "extensions": [".nd2"], "notes": "Nikon NIS-Elements"},
-                {"name": "IMS", "extensions": [".ims"], "notes": "Imaris/Bitplane HDF5-based"},
-                {"name": "HDF5", "extensions": [".h5", ".hdf5", ".hdf", ".he5"], "notes": "Generic HDF5 containers"},
-                {"name": "CZI", "extensions": [".czi"], "notes": "Zeiss multi-view"},
+            "tier_2_dedicated_readers": [
+                {"name": "TIFF", "extensions": [".tif", ".tiff"], "reader": "TiffReader",
+                 "notes": "Single file or a folder of 2D slices; OME-TIFF and ImageJ metadata"},
+                {"name": "ND2", "extensions": [".nd2"], "reader": "ND2Reader", "notes": "Nikon NIS-Elements"},
+                {"name": "IMS", "extensions": [".ims"], "reader": "IMSReader", "notes": "Imaris (HDF5-based)"},
+                {"name": "HDF5", "extensions": [".h5", ".hdf5"], "reader": "HDF5Reader",
+                 "notes": "Needs dataset_path; voxel size read from dataset attributes"},
+                {"name": "CZI", "extensions": [".czi"], "reader": "CZIReader", "notes": "Zeiss, multi-view"},
+                {"name": "NIfTI", "extensions": [".nii", ".nii.gz"], "reader": "NIfTIReader",
+                 "notes": "Header voxel size is often wrong or missing; pass voxel_size"},
+                {"name": "MRC / CCP4", "extensions": [".mrc", ".mrcs", ".rec", ".ali", ".st"], "reader": "MRCReader",
+                 "notes": "Cryo-ET and EM volumes; header voxel size is angstroms and only trusted when it looks calibrated"},
+                {"name": "PNG", "extensions": [".png"], "reader": "PngReader",
+                 "notes": "A folder or .zip of 2D slices becomes one volume; PNG has no voxel size, pass voxel_size"},
             ],
-            "tier_3_bioio": [
-                {"name": "BIOIO Adapter", "extensions": ["various"], "notes": "20+ formats via aicsimageio/bioio"},
-            ],
-            "tier_4_bioformats": [
-                {"name": "Bio-Formats", "extensions": ["various"], "notes": "150+ formats via Java Bio-Formats (requires scyjava)"},
-            ],
+            "tier_3_bioio": {
+                "installed_plugins": bioio_plugins,
+                "notes": "Used for formats without a dedicated reader when a plugin is installed",
+            },
+            "tier_4_bioformats": {
+                "notes": "Optional, Java-backed (needs the bioformats extra / scyjava); enable with use_bioformats=True",
+            },
         },
         "output_formats": [
             {"name": "Zarr3", "notes": "Default. OME-NGFF v0.5, sharding, zstd compression"},
             {"name": "Zarr2", "notes": "Legacy. OME-NGFF v0.4, for tools that don't support Zarr3"},
             {"name": "N5", "notes": "For Java tools (BigDataViewer, BigStitcher)"},
         ],
+        "presets": ["webknossos", "paintera", "mia_lmvd"],
         "remote_sources": [
-            "gs:// (Google Cloud Storage)",
-            "s3:// (Amazon S3)",
-            "https:// (HTTP/HTTPS)",
+            "gs:// (Google Cloud Storage), s3:// (Amazon S3), https:// (HTTP/HTTPS): zarr, N5 and precomputed are read in place",
+            "any other file or a member of a remote zip: download it first with fetch_dataset, then convert it",
         ],
+        "voxel_size_rule": (
+            "Every spatial axis needs a real voxel size from the file or from the voxel_size parameter; "
+            "conversion is refused otherwise instead of defaulting to 1."
+        ),
     }
     return json.dumps(formats, indent=2)
 
