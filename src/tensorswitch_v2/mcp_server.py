@@ -41,32 +41,6 @@ mcp = FastMCP("tensorswitch")
 MCP_CONVERT_MAX_GB = 2
 
 
-def _resolve_conversion_subgroup(
-    output_format: str,
-    data_type: str,
-    is_label: bool,
-    image_key: str = "raw",
-    label_key: str = "segmentation",
-):
-    """Return the OME-NGFF subgroup the conversion writes to, or None.
-
-    Mirrors __main__._resolve_conversion_subgroup() but takes explicit params
-    instead of an argparse Namespace.
-
-    Returns:
-        "labels/<label_key>" for label output, "<image_key>" for image output,
-        or None when the subgroup cannot be determined (N5, or data_type 'auto'
-        without is_label).
-    """
-    if output_format not in ("zarr2", "zarr3"):
-        return None
-    if is_label or data_type == "labels":
-        return f"labels/{label_key}"
-    if data_type == "image":
-        return image_key
-    return None
-
-
 # ---------------------------------------------------------------------------
 # Tool 1: inspect_dataset
 # ---------------------------------------------------------------------------
@@ -343,38 +317,6 @@ def discover_datasets(
 
 
 # ---------------------------------------------------------------------------
-# Helper: create reader based on parameters
-# ---------------------------------------------------------------------------
-def _create_reader(input_path: str, dataset_path: str = "",
-                   use_bioio: bool = False, use_bioformats: bool = False,
-                   view_index: int = -1):
-    """Create the appropriate reader based on parameters."""
-    from tensorswitch_v2.api import Readers
-
-    if use_bioformats:
-        return Readers.bioformats(input_path)
-    if use_bioio:
-        return Readers.bioio(input_path)
-
-    if dataset_path:
-        ext = Path(input_path).suffix.lower()
-        if ext in (".h5", ".hdf5", ".hdf", ".he5"):
-            return Readers.hdf5(input_path, dataset_path=dataset_path)
-        elif ext in (".n5",) or (not is_remote_path(input_path) and os.path.isfile(
-            os.path.join(input_path, "attributes.json")
-        )):
-            return Readers.n5(input_path, dataset_path=dataset_path)
-
-    reader = Readers.auto_detect(input_path)
-
-    # Handle CZI view_index
-    if view_index >= 0 and hasattr(reader, 'set_view_index'):
-        reader.set_view_index(view_index)
-
-    return reader
-
-
-# ---------------------------------------------------------------------------
 # Tool 3: convert
 # ---------------------------------------------------------------------------
 @mcp.tool()
@@ -412,6 +354,11 @@ def convert(
     no_translation: bool = False,
     output_dtype: str = "",
     add_to_existing: bool = False,
+    bbox_axes: str = "",
+    squeeze_singleton_axes: bool = False,
+    relabel_axis: str = "",
+    output_offset: str = "",
+    target_shape: str = "",
 ) -> str:
     """Convert a microscopy dataset between formats.
 
@@ -442,7 +389,8 @@ def convert(
         force_order: Force output memory order — "c" for C-order (row-major),
                      "f" for F-order (column-major), or "" for auto-detection.
         expand_to_5d: Force 5D TCZYX expansion.
-        bbox: Bounding box for subvolume extraction: "origin_z,origin_y,origin_x,size_z,size_y,size_x".
+        bbox: Bounding box for subvolume extraction: origin then size, one pair per source axis in source order
+            ("origin_z,origin_y,origin_x,size_z,size_y,size_x" for ZYX; any number of axes, see bbox_axes).
         view_index: CZI view index (-1 = all views as 5D VCZYX).
         data_type: Data type for output structure — "auto", "image", or "labels".
         image_key: Name for image group in output (default: "raw").
@@ -459,62 +407,67 @@ def convert(
         output_dtype: Output dtype override (e.g., "uint8", "int16", "uint16"). Empty = preserve source dtype.
         add_to_existing: Add data to existing container without destroying it.
             Safe write applies to the subgroup (e.g., labels/) not the container root.
+        bbox_axes: Which source axes bbox refers to, comma-separated indices (e.g. "2,3,4" for z,y,x of a 5D t,c,z,y,x source).
+        squeeze_singleton_axes: Drop length-1 axes (e.g. t, c) from the output. Needs known axis identity.
+        relabel_axis: Correct a mis-detected source axis, "OLD=NEW" (e.g. "t=z"); several separated by ";".
+        output_offset: Sparse label ingest: voxel position of the label inside the existing container,
+            comma-separated (e.g. "0,0,128,64,64"). Use with add_to_existing and data_type="labels".
+        target_shape: Shape of the target container for output_offset, comma-separated (read from the container if empty).
     """
+    params = dict(locals())
     try:
         import contextlib
         import io
 
         import numpy as np
-        from tensorswitch_v2.api import Readers, Writers
-        from tensorswitch_v2.core.converter import DistributedConverter
+        from tensorswitch_v2.__main__ import (
+            _apply_preset,
+            create_reader,
+            parse_args,
+            parse_bbox,
+            parse_bbox_axes,
+            run_conversion,
+        )
+        from tensorswitch_v2.mcp_args import build_argv
         from tensorswitch_v2.utils import get_dtype_name
 
-        input_path = input_path.strip()
-        output_path = output_path.strip()
+        input_path = params["input_path"] = input_path.strip()
+        output_path = params["output_path"] = output_path.strip()
 
-        # Apply preset
-        if preset == "webknossos":
-            if not chunk_shape:
-                chunk_shape = "32,32,32"
-            if not shard_shape:
-                shard_shape = "1024,1024,1024"
-        elif preset == "paintera":
-            if output_format == "zarr3":
-                output_format = "n5"
-            if not chunk_shape:
-                chunk_shape = "64,64,64"
-            if compression == "zstd":
-                compression = "gzip"
-            if not axes_order:
-                axes_order = "xyz" if output_format == "n5" else "zyx"
+        # Same path as the CLI: build argv -> real parser -> preset -> run_conversion.
+        parse_errors = io.StringIO()
+        try:
+            with contextlib.redirect_stderr(parse_errors):
+                args = parse_args(build_argv(params))
+        except SystemExit:
+            detail = [l for l in parse_errors.getvalue().strip().splitlines() if l.strip()]
+            return json.dumps({"error": "validation_error",
+                               "message": detail[-1] if detail else "invalid arguments"}, indent=2)
+        _apply_preset(args)
 
-        # Create reader (suppress stdout — MCP uses stdio transport)
+        # Size guard: refuse large datasets (the bbox volume counts when one is given)
         with contextlib.redirect_stdout(io.StringIO()):
-            reader = _create_reader(input_path, dataset_path, use_bioio, use_bioformats, view_index)
-
-        # Size guard — refuse large datasets (use bbox size if specified)
-        store = reader.get_tensorstore()
-        shape = tuple(store.shape)
+            reader = create_reader(args)
+            store = reader.get_tensorstore()
+        shape = [int(n) for n in store.shape]
         dtype_str = get_dtype_name(store.dtype)
-
-        # If bbox is provided, use bbox volume for size check
-        if bbox:
-            bbox_parts = [int(x) for x in bbox.split(",")]
-            if len(bbox_parts) == 6:
-                effective_shape = tuple(bbox_parts[3:])  # size_z, size_y, size_x
-            else:
-                effective_shape = shape
-        else:
-            effective_shape = shape
-        effective_dtype_str = output_dtype if output_dtype else dtype_str
-        dataset_size_gb = (np.prod(effective_shape) * np.dtype(effective_dtype_str).itemsize) / (1024**3)
+        elements = int(np.prod(shape))
+        if args.bbox:
+            _, bbox_size = parse_bbox(args.bbox)
+            covered = (list(parse_bbox_axes(args.bbox_axes)) if args.bbox_axes
+                       else list(range(len(shape) - len(bbox_size), len(shape))))
+            if len(covered) == len(bbox_size) and all(0 <= i < len(shape) for i in covered):
+                elements = int(np.prod([n for i, n in enumerate(shape) if i not in covered])
+                               * np.prod(bbox_size))
+        effective_dtype = args.dtype or dtype_str
+        dataset_size_gb = (elements * np.dtype(effective_dtype).itemsize) / (1024**3)
 
         if dataset_size_gb > MCP_CONVERT_MAX_GB:
             return json.dumps({
                 "error": "dataset_too_large",
                 "dataset_size_gb": round(dataset_size_gb, 2),
                 "threshold_gb": MCP_CONVERT_MAX_GB,
-                "shape": list(shape),
+                "shape": shape,
                 "dtype": dtype_str,
                 "recommendation": (
                     f"Dataset is {dataset_size_gb:.1f} GB, exceeding the "
@@ -525,207 +478,34 @@ def convert(
                 ),
             }, indent=2)
 
-        # Resolve data_type
-        if data_type == "auto":
-            resolved_data_type = "labels" if is_label else "image"
-        else:
-            resolved_data_type = data_type
-
-        # Safe write: write to .tmp, rename on completion
-        final_output = output_path
-        _add_to_existing_parent = None  # Track subgroup parent for --add-to-existing
-        _add_to_existing_label = None
-        writer_image_key, writer_label_key = image_key, label_key
-
-        if add_to_existing:
-            # Subgroup-level safe write
-            if not os.path.exists(final_output):
-                return json.dumps({"error": f"--add-to-existing: container does not exist: {final_output}"}, indent=2)
-            subgroup = _resolve_conversion_subgroup(output_format, data_type, is_label, image_key, label_key)
-            if not subgroup:
-                return json.dumps({"error": "--add-to-existing requires data_type='labels' or 'image'"}, indent=2)
-            _add_to_existing_parent = subgroup.split('/')[0]
-            _add_to_existing_label = subgroup.split('/')[-1]
-            # Same layout as the CLI: a new label is written to labels/<name>.tmp and
-            # renamed within labels/; a replaced image goes to <image_key>.tmp.
-            if _add_to_existing_parent == 'labels':
-                tmp_subgroup = os.path.join(final_output, 'labels', _add_to_existing_label + '.tmp')
-                writer_label_key = _add_to_existing_label + '.tmp'
-            else:
-                tmp_subgroup = os.path.join(final_output, _add_to_existing_parent + '.tmp')
-                writer_image_key = _add_to_existing_parent + '.tmp'
-            if os.path.exists(tmp_subgroup):
-                shutil.rmtree(tmp_subgroup)
-            labels_container = 'labels'
-            tmp_output = None  # No container-level .tmp
-        else:
-            tmp_output = output_path.rstrip('/\\') + '.tmp'
-            if os.path.exists(tmp_output):
-                shutil.rmtree(tmp_output)
-            output_path = tmp_output
-            labels_container = 'labels'
-
-        # Create writer
-        if output_format == "zarr3":
-            writer = Writers.zarr3(
-                output_path,
-                use_sharding=not no_sharding,
-                compression=compression,
-                compression_level=compression_level,
-                data_type=resolved_data_type,
-                level_path=level_path,
-                image_key=writer_image_key,
-                label_key=writer_label_key,
-                include_omero=omero,
-                labels_container=labels_container,
-            )
-        elif output_format == "zarr2":
-            writer = Writers.zarr2(
-                output_path,
-                compression=compression,
-                compression_level=compression_level,
-                data_type=resolved_data_type,
-                level_path=level_path,
-                image_key=writer_image_key,
-                label_key=writer_label_key,
-                include_omero=omero,
-                labels_container=labels_container,
-            )
-        elif output_format == "n5":
-            writer = Writers.n5(
-                output_path,
-                compression=compression,
-                compression_level=compression_level,
-            )
-        else:
-            return f"Error: unsupported output format '{output_format}'. Use zarr3, zarr2, or n5."
-
-        # Parse optional shapes
-        cs = tuple(int(x) for x in chunk_shape.split(",")) if chunk_shape else None
-        ss = tuple(int(x) for x in shard_shape.split(",")) if shard_shape else None
-
-        # Parse voxel size override
-        voxel_override = None
-        if voxel_size:
-            parts = [float(x) for x in voxel_size.split(",")]
-            if len(parts) == 3:
-                voxel_override = {"x": parts[0], "y": parts[1], "z": parts[2]}
-
-        # Parse bbox
-        bbox_parsed = None
-        if bbox:
-            parts = [int(x) for x in bbox.split(",")]
-            if len(parts) == 6:
-                bbox_parsed = (tuple(parts[:3]), tuple(parts[3:]))
-
-        # Parse axes_order
-        axes_order_list = list(axes_order) if axes_order else None
-
-        # Run conversion (suppress stdout — MCP uses stdio transport)
-        converter = DistributedConverter(reader, writer)
-        with contextlib.redirect_stdout(io.StringIO()):
-            result = converter.convert(
-                chunk_shape=cs,
-                shard_shape=ss,
-                voxel_size_override=voxel_override,
-                voxel_unit=voxel_unit if voxel_size else None,
-                is_label=is_label,
-                expand_to_5d=expand_to_5d,
-                bbox=bbox_parsed,
-                axes_order_override=axes_order_list,
-                force_order=force_order if force_order else None,
-                no_ome_meta_export=no_ome_meta_export,
-                no_ome_xml_attr=no_ome_xml_attr,
-                output_dtype=output_dtype if output_dtype else None,
-            )
+        # Suppress stdout - MCP uses stdio transport (stdout = JSON-RPC)
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                info = run_conversion(args) or {}
+        except (FileNotFoundError, ValueError) as e:
+            if str(e).startswith("--add-to-existing"):
+                return json.dumps({"error": str(e)}, indent=2)
+            raise
 
         response = {
             "status": "success",
             "input": input_path,
             "output": output_path,
-            "format": output_format,
+            "format": args.output_format,
             "dataset_size_gb": round(dataset_size_gb, 2),
-            "chunks_processed": result.get("chunks_processed", "unknown"),
-            "time_seconds": round(result.get("elapsed_time", 0), 1),
+            "chunks_processed": info.get("chunks_processed", "unknown"),
+            "time_seconds": round(info.get("elapsed_seconds") or 0, 1),
         }
-
-        # Auto-multiscale: generate pyramid after conversion
-        if auto_multiscale:
-            from tensorswitch_v2.__main__ import find_base_level, run_local_pyramid
-            from tensorswitch_v2.utils.pyramid_utils import resolve_downsample_method
-
-            # Resolve the subgroup the converter just wrote to (e.g. 'raw'
-            # or 'labels/segmentation') so find_base_level targets the right
-            # levels instead of a stale subgroup from a prior stage.
-            pyramid_subgroup = _resolve_conversion_subgroup(
-                output_format, data_type, is_label, image_key, label_key,
-            )
-            if _add_to_existing_parent and pyramid_subgroup:
-                # Pyramid runs on the .tmp subgroup before rename
-                if _add_to_existing_parent == 'labels':
-                    pyramid_subgroup = pyramid_subgroup + '.tmp'
-                else:
-                    parts = pyramid_subgroup.split('/', 1)
-                    pyramid_subgroup = parts[0] + '.tmp' + ('/' + parts[1] if len(parts) > 1 else '')
-                find_target = os.path.join(final_output, pyramid_subgroup)
-            else:
-                find_target = (
-                    os.path.join(output_path, pyramid_subgroup) if pyramid_subgroup else output_path
-                )
-            s0_path, _ = find_base_level(find_target)
-            root_path = os.path.dirname(s0_path)
-
-            resolved_method = resolve_downsample_method(downsample_method, s0_path)
-
-            custom_factors = None
-            if per_level_factors:
-                custom_factors = [
-                    [int(x) for x in level.split(",")]
-                    for level in per_level_factors.split(";")
-                ]
-
-            with contextlib.redirect_stdout(io.StringIO()):
-                plan = run_local_pyramid(
-                    s0_path, root_path,
-                    downsample_method=resolved_method,
-                    custom_per_level_factors=custom_factors,
-                    include_translation=not no_translation,
-                    verbose=False,
-                )
+        if args.auto_multiscale:
+            plan = info.get("pyramid_plan")
             response["auto_multiscale"] = True
-            response["pyramid_s0"] = s0_path
+            response["pyramid_s0"] = info.get("pyramid_s0")
             if plan and isinstance(plan, dict):
                 response["pyramid_levels"] = plan.get("num_levels", 0)
                 response["pyramid_info"] = [
-                    {
-                        "level": f"s{lv['level']}",
-                        "factors": lv["cumulative_factor"],
-                        "shape": lv["predicted_shape"],
-                    }
+                    {"level": f"s{lv['level']}", "factors": lv["cumulative_factor"], "shape": lv["predicted_shape"]}
                     for lv in plan.get("levels", [])
                 ]
-
-        # Safe write: rename .tmp → final path
-        if _add_to_existing_parent:
-            from tensorswitch_v2.__main__ import (
-                _apply_group_to_added_label as apply_group_to_added_label,
-                _finalize_add_to_existing,
-            )
-            _finalize_add_to_existing(
-                final_output=final_output,
-                subgroup_parent=_add_to_existing_parent,
-                label_name=_add_to_existing_label,
-                output_format=output_format,
-                verbose=False,
-            )
-            apply_group_to_added_label(final_output, _add_to_existing_parent, _add_to_existing_label)
-        elif tmp_output and os.path.exists(tmp_output):
-            if os.path.exists(final_output):
-                shutil.rmtree(final_output)
-            os.rename(tmp_output, final_output)
-            apply_parent_group(final_output)
-        response["output"] = final_output
-
         return json.dumps(response, indent=2)
     except Exception as e:
         logger.error(f"convert failed: {e}\n{traceback.format_exc()}")

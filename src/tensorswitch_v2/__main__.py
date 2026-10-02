@@ -2343,7 +2343,12 @@ def run_conversion(args):
     (new label or replaced image inside an existing container), sparse label ingest
     (--output-offset), --show_spec, --auto_multiscale, and the output group.
     Called by main() and by the MCP convert tool, so both behave the same.
+
+    Returns a dict with whatever was measured: ``chunks_processed`` and
+    ``elapsed_time`` of the conversion, and for --auto_multiscale ``pyramid_s0``
+    and ``pyramid_plan``. The CLI ignores it.
     """
+    info = {}
     chunk_shape = parse_shape(args.chunk_shape, "chunk_shape") if args.chunk_shape else None
     shard_shape = parse_shape(args.shard_shape, "shard_shape") if args.shard_shape else None
     verbose = not args.quiet
@@ -2483,7 +2488,7 @@ def run_conversion(args):
                 include_translation=not args.no_translation,
                 verbose=verbose,
             )
-        return
+        return info
 
     reader = create_reader(args)
 
@@ -2545,7 +2550,7 @@ def run_conversion(args):
     # Handle --show_spec: print specs and exit without converting
     if args.show_spec:
         show_conversion_spec(reader, writer, args, chunk_shape, shard_shape)
-        return
+        return info
 
     from .core.converter import DistributedConverter
 
@@ -2608,6 +2613,7 @@ def run_conversion(args):
     no_ome_meta_export = getattr(args, 'no_ome_meta_export', False)
     no_ome_xml_attr = getattr(args, 'no_ome_xml_attr', False)
 
+    conversion = {}
     if args.start_idx is not None:
         # Manual chunk-range mode (for bsub workers)
         converter.convert(
@@ -2634,7 +2640,7 @@ def run_conversion(args):
         )
     else:
         # Full single-process conversion
-        converter.convert(
+        conversion = converter.convert(
             chunk_shape=chunk_shape,
             shard_shape=shard_shape,
             write_metadata=True,
@@ -2653,6 +2659,9 @@ def run_conversion(args):
             no_ome_xml_attr=no_ome_xml_attr,
             output_dtype=getattr(args, 'dtype', None),
         )
+
+    if isinstance(conversion, dict):
+        info.update(chunks_processed=conversion.get("chunks_processed"), elapsed_seconds=conversion.get("elapsed_seconds"))
 
     # Write source provenance metadata when --bbox is used
     if bbox:
@@ -2695,7 +2704,7 @@ def run_conversion(args):
         if args.per_level_factors:
             custom_per_level_factors = parse_per_level_factors(args.per_level_factors)
 
-        run_local_pyramid(
+        pyramid_plan = run_local_pyramid(
             s0_path=s0_path,
             root_path=root_path,
             downsample_method=resolved_method,
@@ -2704,6 +2713,7 @@ def run_conversion(args):
             include_translation=not args.no_translation,
             verbose=verbose,
         )
+        info.update(pyramid_s0=s0_path, pyramid_plan=pyramid_plan)
 
     # --- Safe write: rename .tmp → final path ---
     if add_to_existing:
@@ -2717,6 +2727,7 @@ def run_conversion(args):
         _apply_group_to_added_label(final_output, subgroup_parent, subgroup.split('/')[-1])
     else:
         _finalize_tmp_path(tmp_output, final_output, verbose=verbose)
+    return info
 
 
 def main(argv=None):
