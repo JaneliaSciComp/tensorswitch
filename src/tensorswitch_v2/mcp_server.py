@@ -1047,6 +1047,11 @@ def submit_job(
     no_translation: bool = False,
     output_dtype: str = "",
     add_to_existing: bool = False,
+    bbox_axes: str = "",
+    squeeze_singleton_axes: bool = False,
+    relabel_axis: str = "",
+    output_offset: str = "",
+    target_shape: str = "",
 ) -> str:
     """Submit a conversion job to the LSF cluster (bsub).
 
@@ -1097,14 +1102,31 @@ def submit_job(
         output_dtype: Output dtype override (e.g., "uint8", "int16", "uint16"). Empty = preserve source dtype.
         add_to_existing: Add data to existing container without destroying it.
             Safe write applies to the subgroup (e.g., labels/) not the container root.
+        bbox_axes: Which source axes --bbox refers to, as comma-separated indices
+            (e.g. "2,3,4" for z,y,x of a 5D t,c,z,y,x source). Needed for N-D bbox.
+        squeeze_singleton_axes: Drop length-1 axes (e.g. t, c) from the output. Needs known axis identity.
+        relabel_axis: Correct a mis-detected source axis, "OLD=NEW" (e.g. "t=z"); several separated by ";".
+        output_offset: Sparse label ingest: voxel position where the label is placed in the existing
+            container, comma-separated (e.g. "0,0,128,64,64"). Use with add_to_existing and data_type="labels".
+        target_shape: Shape of the target container for output_offset, comma-separated (read from the container if empty).
     """
+    params = dict(locals())
     try:
-        import argparse
         import contextlib
         import io
 
-        input_path = input_path.strip()
-        output_path = output_path.strip()
+        from tensorswitch_v2.__main__ import (
+            _apply_preset,
+            _resolve_conversion_subgroup as _cli_subgroup,
+            _submit_dependent_pyramid,
+            find_base_level,
+            parse_args,
+        )
+        from tensorswitch_v2.__main__ import submit_job as _cli_submit_job
+        from tensorswitch_v2.mcp_args import build_argv
+
+        input_path = params["input_path"] = input_path.strip()
+        output_path = params["output_path"] = output_path.strip()
 
         # Validate paths are on shared storage (LSF nodes can't see /tmp)
         for label, p in [("input_path", input_path), ("output_path", output_path)]:
@@ -1120,130 +1142,44 @@ def submit_job(
                     ),
                 }, indent=2)
 
-        # Apply preset
-        if preset == "webknossos":
-            if not chunk_shape:
-                chunk_shape = "32,32,32"
-            if not shard_shape:
-                shard_shape = "1024,1024,1024"
-        elif preset == "paintera":
-            if output_format == "zarr3":
-                output_format = "n5"
-            if not chunk_shape:
-                chunk_shape = "64,64,64"
-            if compression == "zstd":
-                compression = "gzip"
-            if not axes_order:
-                axes_order = "xyz" if output_format == "n5" else "zyx"
+        # Same path as the CLI: build argv -> real parser -> preset -> CLI submit.
+        # Every CLI option, default and validation therefore applies here too.
+        parse_errors = io.StringIO()
+        try:
+            with contextlib.redirect_stderr(parse_errors):
+                args = parse_args(build_argv(params) + ["--submit"])
+        except SystemExit:
+            detail = [l for l in parse_errors.getvalue().strip().splitlines() if l.strip()]
+            return json.dumps({"error": "validation_error",
+                               "message": detail[-1] if detail else "invalid arguments"}, indent=2)
+        _apply_preset(args)
 
-        # Handle auto_multiscale mode
-        if auto_multiscale:
-            from tensorswitch_v2.__main__ import find_base_level
-
-            # Detect whether input is an existing dataset (pyramid-only)
-            # or a raw source file (conversion + dependent pyramid).
-            # Only use pyramid-only shortcut when input and output resolve to
-            # the same directory — otherwise the user wants format conversion
-            # first, then pyramid on the *output*.
+        # auto_multiscale on an existing dataset (same input and output): pyramid only.
+        if args.auto_multiscale:
             is_existing_dataset = False
             try:
                 find_base_level(input_path)
                 is_existing_dataset = True
             except (ValueError, OSError):
                 pass
-
-            same_path = os.path.abspath(input_path) == os.path.abspath(output_path)
-            if is_existing_dataset and same_path:
-                # Pyramid-only: input already has s0, no conversion needed
-                subgroup = _resolve_conversion_subgroup(
-                    output_format, data_type, is_label, image_key, label_key,
-                )
+            if is_existing_dataset and os.path.abspath(input_path) == os.path.abspath(output_path):
                 return _submit_pyramid_job(
                     input_path, output_path, project,
-                    downsample_method=downsample_method,
-                    per_level_factors=per_level_factors,
-                    memory=memory, wall_time=wall_time, cores=cores,
-                    log_dir=log_dir,
-                    include_translation=not no_translation,
-                    subgroup=subgroup,
+                    downsample_method=args.downsample_method,
+                    per_level_factors=args.per_level_factors or "",
+                    memory=args.memory or 0, wall_time=args.wall_time or "", cores=args.cores or 0,
+                    log_dir=args.log_dir or "",
+                    include_translation=not args.no_translation,
+                    subgroup=_cli_subgroup(args),
                 )
-            # else: fall through to conversion submission, then chain pyramid
 
-        # Build argparse.Namespace matching what __main__.submit_job() reads
-        # Reference: __main__.py lines 836-1057
-        args = argparse.Namespace(
-            input=input_path,
-            output=output_path,
-            output_format=output_format,
-            project=project,
-            memory=memory if memory > 0 else None,
-            wall_time=wall_time if wall_time else None,
-            cores=cores if cores > 0 else None,
-            dataset_path=dataset_path if dataset_path else "",
-            level_path=level_path,
-            chunk_shape=chunk_shape if chunk_shape else None,
-            shard_shape=shard_shape if shard_shape else None,
-            no_sharding=no_sharding,
-            compression=compression,
-            compression_level=compression_level,
-            start_idx=None,
-            stop_idx=None,
-            write_metadata=False,
-            view_index=view_index if view_index >= 0 else None,
-            quiet=True,
-            use_bioio=use_bioio,
-            use_bioformats=use_bioformats,
-            force_c_order=(force_order.lower() == "c") if force_order else False,
-            force_f_order=(force_order.lower() == "f") if force_order else False,
-            voxel_size=voxel_size if voxel_size else None,
-            voxel_unit=voxel_unit if voxel_size else None,
-            is_label=is_label,
-            expand_to_5d=expand_to_5d,
-            data_type=data_type,
-            label_key=label_key,
-            image_key=image_key,
-            use_nested_structure=True,
-            bbox=bbox if bbox else None,
-            axes_order=axes_order if axes_order else None,
-            log_dir=log_dir if log_dir else None,
-            no_ome_meta_export=no_ome_meta_export,
-            no_ome_xml_attr=no_ome_xml_attr,
-            job_group=job_group if job_group else None,
-            omero=omero,
-            no_omero=not omero,
-            no_translation=no_translation,
-            dtype=output_dtype if output_dtype else None,
-            add_to_existing=add_to_existing,
-        )
-
-        # Import and call the CLI submit_job function
-        from tensorswitch_v2.__main__ import submit_job as _cli_submit_job
-
-        # Suppress stdout — MCP uses stdio transport (stdout = JSON-RPC)
+        # Suppress stdout - MCP uses stdio transport (stdout = JSON-RPC)
         with contextlib.redirect_stdout(io.StringIO()):
             job_id = _cli_submit_job(args, return_job_id=True)
+            coordinator_id = (_submit_dependent_pyramid(args, conversion_job_id=str(job_id))
+                              if args.auto_multiscale and job_id else None)
 
-        # If auto_multiscale was requested for a raw source file, chain a
-        # dependent pyramid coordinator job after the conversion finishes.
-        if auto_multiscale:
-            coordinator_id = _submit_dependent_pyramid_mcp(
-                conversion_job_id=str(job_id),
-                output_path=output_path,
-                project=project,
-                output_format=output_format,
-                data_type=data_type,
-                is_label=is_label,
-                image_key=image_key,
-                label_key=label_key,
-                downsample_method=downsample_method,
-                per_level_factors=per_level_factors,
-                no_translation=no_translation,
-                log_dir=log_dir,
-                memory=memory,
-                wall_time=wall_time,
-                cores=cores,
-                job_group=job_group,
-            )
+        if args.auto_multiscale:
             return json.dumps({
                 "status": "submitted",
                 "mode": "convert_and_pyramid",
@@ -1251,12 +1187,14 @@ def submit_job(
                 "coordinator_job_id": coordinator_id,
                 "input": input_path,
                 "output": output_path,
-                "format": output_format,
+                "format": args.output_format,
                 "project": project,
                 "message": (
                     f"Conversion job {job_id} submitted. "
-                    f"Pyramid coordinator job {coordinator_id} will start after "
-                    f"conversion completes. Use check_job_status to monitor."
+                    + (f"Pyramid coordinator job {coordinator_id} will start after conversion completes. "
+                       if coordinator_id else
+                       "The pyramid coordinator could not be submitted; run auto_multiscale on the output afterwards. ")
+                    + "Use check_job_status to monitor."
                 ),
             }, indent=2)
 
@@ -1265,7 +1203,7 @@ def submit_job(
             "job_id": job_id,
             "input": input_path,
             "output": output_path,
-            "format": output_format,
+            "format": args.output_format,
             "project": project,
             "message": f"Job {job_id} submitted. Use check_job_status to monitor.",
         }, indent=2)
@@ -1288,95 +1226,6 @@ def submit_job(
     except Exception as e:
         logger.error(f"submit_job failed: {e}\n{traceback.format_exc()}")
         return f"Error submitting job: {e}"
-
-
-def _submit_dependent_pyramid_mcp(
-    conversion_job_id: str,
-    output_path: str,
-    project: str,
-    output_format: str = "zarr3",
-    data_type: str = "auto",
-    is_label: bool = False,
-    image_key: str = "raw",
-    label_key: str = "segmentation",
-    downsample_method: str = "auto",
-    per_level_factors: str = "",
-    no_translation: bool = False,
-    log_dir: str = "",
-    memory: int = 0,
-    wall_time: str = "",
-    cores: int = 0,
-    job_group: str = "",
-):
-    """Submit a dependent pyramid coordinator that waits for conversion to finish.
-
-    Mirrors __main__._submit_dependent_pyramid() but standalone for MCP.
-    Returns the coordinator LSF job ID, or "unknown" on failure.
-    """
-    import re
-    import shlex
-    import subprocess
-
-    output_abs = os.path.abspath(output_path)
-    subgroup = _resolve_conversion_subgroup(
-        output_format, data_type, is_label, image_key, label_key,
-    )
-    pyramid_input = os.path.join(output_abs, subgroup) if subgroup else output_abs
-
-    reinvoke = [
-        sys.executable, "-m", "tensorswitch_v2",
-        "--input", pyramid_input,
-        "--auto_multiscale",
-        "--submit",
-        "-P", project,
-    ]
-    if downsample_method and downsample_method != "auto":
-        reinvoke += ["--downsample_method", downsample_method]
-    if per_level_factors:
-        reinvoke += ["--per_level_factors", per_level_factors]
-    if no_translation:
-        reinvoke.append("--no_translation")
-    if log_dir:
-        reinvoke += ["--log_dir", log_dir]
-    if memory and memory > 0:
-        reinvoke += ["--memory", str(memory)]
-    if wall_time:
-        reinvoke += ["--wall_time", wall_time]
-    if cores and cores > 0:
-        reinvoke += ["--cores", str(cores)]
-
-    reinvoke_str = shlex.join(reinvoke)
-
-    output_parent = os.path.dirname(output_abs)
-    effective_log_dir = log_dir or os.path.join(output_parent, "output")
-    os.makedirs(effective_log_dir, exist_ok=True)
-
-    job_name = f"tsv2_pyramid_coordinator_{os.path.basename(output_path)}"
-    job_name = job_name.replace(" ", "_")[:128]
-
-    command = [
-        "bsub",
-        "-J", job_name,
-        "-n", "1",
-        "-W", "0:30",
-        "-M", "15GB",
-        "-R", "rusage[mem=15360]",
-        "-P", project,
-        "-w", f"done({conversion_job_id})",
-        "-o", os.path.join(effective_log_dir, f"output__{job_name}_%J.log"),
-        "-e", os.path.join(effective_log_dir, f"error__{job_name}_%J.log"),
-    ]
-    if job_group:
-        command += ["-g", job_group]
-    command += wrap_for_project(project, ["/bin/bash", "-c", reinvoke_str])
-
-    result = subprocess.run(command, capture_output=True, text=True)
-    if result.returncode == 0:
-        match = re.search(r'Job <(\d+)>', result.stdout)
-        return match.group(1) if match else "unknown"
-
-    logger.error(f"Pyramid coordinator submission failed: {result.stderr.strip()}")
-    return "unknown"
 
 
 def _submit_pyramid_job(
