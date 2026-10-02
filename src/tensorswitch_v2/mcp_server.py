@@ -1682,6 +1682,54 @@ def check_job_status(job_id: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Tool: fetch_dataset
+# ---------------------------------------------------------------------------
+@mcp.tool()
+def fetch_dataset(spec: str, dest_dir: str, max_gb: float = 2.0) -> str:
+    """Download a file (or one member of a remote zip) so it can be converted.
+
+    Use this for data that only exists at a URL, e.g. a Zenodo or EBI link from a
+    dataset catalog record. Then pass the returned path to inspect_dataset/convert.
+
+    Args:
+        spec: A URL (http, https, ftp, s3), or "<zip url>::<path inside zip>" to
+              pull one member out of a remote zip without downloading the whole zip.
+        dest_dir: Folder to save into (created if needed). Use shared storage
+                  (e.g. /groups/...), not /tmp, if a cluster job will read it.
+        max_gb: Refuse anything larger than this. Default 2 GB, the in-process
+                limit; for bigger files use the command returned in the error.
+    """
+    from tensorswitch_v2.utils import fetch as _fetch
+
+    try:
+        spec, dest_dir = spec.strip(), dest_dir.strip()
+        url, member = _fetch.parse_spec(spec)
+        _fetch.check_host(url)
+        if max_gb > MCP_CONVERT_MAX_GB:
+            return json.dumps({
+                "error": "too_large_for_mcp",
+                "message": (
+                    f"max_gb={max_gb} exceeds the {MCP_CONVERT_MAX_GB} GB in-process limit. "
+                    f"Run the download as a cluster job instead:"
+                ),
+                "command": (
+                    f"bsub -P <project> -n 1 -W 4:00 pixi run python -m tensorswitch_v2.utils.fetch "
+                    f"'{spec}' '{dest_dir}' --max-gb {max_gb:g}"
+                ),
+            }, indent=2)
+        result = _fetch.fetch(spec, dest_dir, int(max_gb * 1024 ** 3))
+        result["status"] = "success"
+        if os.path.realpath(result["path"]).startswith(("/tmp", "/var/tmp")):
+            result["warning"] = "saved under /tmp, which LSF cluster nodes cannot see"
+        return json.dumps(result, indent=2)
+    except _fetch.FetchError as e:
+        return json.dumps({"error": "fetch_refused", "message": str(e)}, indent=2)
+    except Exception as e:
+        logger.error(f"fetch_dataset failed: {e}\n{traceback.format_exc()}")
+        return json.dumps({"error": "fetch_failed", "message": str(e)}, indent=2)
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":

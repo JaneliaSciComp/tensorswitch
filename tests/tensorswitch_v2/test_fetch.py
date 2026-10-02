@@ -200,3 +200,68 @@ class TestZipMembers:
     def test_ftp_zip_members_are_refused(self):
         with pytest.raises(FetchError, match="FTP"):
             list_zip("ftp://host/a.zip")
+
+
+class TestAllowlistAndCli:
+    def test_default_host_is_allowed(self):
+        from tensorswitch_v2.utils.fetch import check_host
+
+        check_host("https://zenodo.org/records/1/files/a.zip")
+        check_host("https://janelia-cosem-datasets.s3.amazonaws.com/x")
+        check_host("s3://allencell/aics/x")  # becomes allencell.s3.amazonaws.com
+
+    @pytest.mark.parametrize("url", [
+        "http://169.254.169.254/latest/meta-data", "http://localhost:8000/x",
+        "https://evil.example.com/a.tif", "https://zenodo.org.evil.com/a.tif",
+    ])
+    def test_other_hosts_are_refused(self, url):
+        from tensorswitch_v2.utils.fetch import check_host
+
+        with pytest.raises(FetchError, match="allowlist"):
+            check_host(url)
+
+    def test_env_var_extends_allowlist(self, monkeypatch):
+        from tensorswitch_v2.utils.fetch import check_host
+
+        monkeypatch.setenv("TENSORSWITCH_FETCH_HOSTS", "data.mylab.org")
+        check_host("https://data.mylab.org/a.tif")
+
+    def test_cli_downloads_and_reports_errors(self, server, dest, capsys):
+        from tensorswitch_v2.utils.fetch import main
+
+        root, base = server
+        open(os.path.join(root, "a.bin"), "wb").write(b"z" * 10)
+        assert main([f"{base}/a.bin", dest]) == 0
+        assert "saved" in capsys.readouterr().out
+        assert main([f"{base}/missing.bin", dest]) == 1
+
+
+class TestMcpFetchTool:
+    @pytest.fixture
+    def tool(self, monkeypatch):
+        pytest.importorskip("mcp")
+        from tensorswitch_v2 import mcp_server
+
+        monkeypatch.setenv("TENSORSWITCH_FETCH_HOSTS", "127.0.0.1")
+        return lambda *a, **k: __import__("json").loads(mcp_server.fetch_dataset(*a, **k))
+
+    def test_downloads_a_zip_member(self, tool, server, dest):
+        root, base = server
+        _make_zip(root)
+        result = tool(f"{base}/data.zip::set/readme.txt", dest)
+        assert result["status"] == "success" and open(result["path"], "rb").read() == b"hello"
+
+    def test_refuses_unlisted_host(self, tool, dest):
+        result = tool("https://evil.example.com/a.tif", dest)
+        assert result["error"] == "fetch_refused" and "allowlist" in result["message"]
+
+    def test_large_request_returns_cluster_command(self, tool, dest):
+        result = tool("https://zenodo.org/records/1/files/big.zip", dest, max_gb=50)
+        assert result["error"] == "too_large_for_mcp"
+        assert "bsub" in result["command"] and "tensorswitch_v2.utils.fetch" in result["command"]
+
+    def test_size_cap_error_is_reported(self, tool, server, dest):
+        root, base = server
+        open(os.path.join(root, "b.bin"), "wb").write(b"x" * 5000)
+        result = tool(f"{base}/b.bin", dest, max_gb=0.000001)
+        assert result["error"] == "fetch_refused" and "limit" in result["message"]

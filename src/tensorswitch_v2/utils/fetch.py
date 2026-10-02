@@ -279,3 +279,55 @@ def fetch(spec: str, dest_dir: str, max_bytes: int = DEFAULT_MAX_BYTES) -> Dict:
     """Fetch a spec (``url`` or ``zip url::member``) into dest_dir."""
     url, member = parse_spec(spec)
     return fetch_zip_member(url, member, dest_dir, max_bytes) if member else fetch_file(url, dest_dir, max_bytes)
+
+
+DEFAULT_ALLOWED_HOSTS = (
+    "zenodo.org", "ftp.ebi.ac.uk", "www.ebi.ac.uk", "data.broadinstitute.org",
+    "data.celltrackingchallenge.net", "ndownloader.figshare.com", "figshare.com",
+    "huggingface.co", "github.com", "raw.githubusercontent.com", "s3.amazonaws.com",
+    "datasets.gryf.fi.muni.cz", "rgw.cscs.ch", "files.cryoetdataportal.cziscience.com",
+    "dataverse.harvard.edu", "data.mendeley.com", "datadryad.org", "osf.io",
+    "bossdb-open-data.s3.amazonaws.com", "janelia-cosem-datasets.s3.amazonaws.com",
+)
+
+
+def allowed_hosts() -> Tuple[str, ...]:
+    """Hosts agents may fetch from: defaults plus TENSORSWITCH_FETCH_HOSTS (comma separated)."""
+    extra = tuple(h.strip().lower() for h in os.environ.get("TENSORSWITCH_FETCH_HOSTS", "").split(",") if h.strip())
+    return DEFAULT_ALLOWED_HOSTS + extra
+
+
+def check_host(url: str) -> None:
+    """Raise FetchError unless the URL's host (or a parent domain) is allowed.
+
+    Only the first host is checked; servers may redirect elsewhere (Zenodo does).
+    """
+    host = (urlsplit(normalize_url(url)).hostname or "").lower()
+    if not any(host == h or host.endswith("." + h) for h in allowed_hosts()):
+        raise FetchError(
+            f"host {host!r} is not on the fetch allowlist. Download it yourself, or set "
+            f"TENSORSWITCH_FETCH_HOSTS={host} to allow it."
+        )
+
+
+def main(argv=None) -> int:
+    """``python -m tensorswitch_v2.utils.fetch <spec> <dest_dir> [--max-gb N]``"""
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Download a URL or a zip member (<zip url>::<member>).")
+    parser.add_argument("spec")
+    parser.add_argument("dest_dir")
+    parser.add_argument("--max-gb", type=float, default=DEFAULT_MAX_BYTES / 1024 ** 3,
+                        help="refuse anything larger (default: %(default).0f GB)")
+    args = parser.parse_args(argv)
+    try:
+        result = fetch(args.spec, args.dest_dir, int(args.max_gb * 1024 ** 3))
+    except FetchError as err:
+        print(f"error: {err}")
+        return 1
+    print(f"saved {result['path']} ({_human(result['bytes'])})")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
