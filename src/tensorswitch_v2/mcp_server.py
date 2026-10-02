@@ -18,6 +18,7 @@ import json
 import logging
 import os
 import shutil
+import subprocess
 import sys
 import traceback
 from pathlib import Path
@@ -1301,58 +1302,41 @@ def upsample_to_isotropic(
 # Tool 9: check_job_status
 # ---------------------------------------------------------------------------
 @mcp.tool()
-def check_job_status(job_id: str) -> str:
-    """Check the status of one or more LSF cluster jobs.
+def check_job_status(job_id: str, follow_dependents: bool = True, log_lines: int = 15) -> str:
+    """Report on LSF jobs: status, exit code, resources, log tails, and whether it looks right.
 
-    Returns the current status of jobs submitted via submit_job.
-    Supports checking multiple jobs by passing comma-separated IDs.
+    "DONE" only means the command exited 0. A job that never started the program is DONE
+    too, so each job also gets flags (for example "suspicious: reported DONE but used only
+    21 MB and 0.1 s of CPU") and the tail of its stdout and stderr logs.
+
+    Jobs that wait for it are included: the pyramid coordinator of a conversion and the
+    level jobs after it. `chain.state` is "running" while any of them is queued or running,
+    then "failed", "suspicious" or "done". A chain is only finished when the state is no
+    longer "running". Verify the output with verify_output once it is.
 
     Args:
-        job_id: LSF job ID (e.g., "12345") or comma-separated IDs (e.g., "12345,12346").
+        job_id: LSF job ID (e.g., "12345") or several separated by commas or spaces.
+        follow_dependents: Also report the jobs that depend on it (default True).
+        log_lines: How many lines of each log to return (default 15).
     """
+    import re
+
     try:
-        import subprocess
+        from tensorswitch_v2.utils.job_status import job_report
 
-        job_ids = [j.strip() for j in job_id.split(",") if j.strip()]
-        results = []
-
-        for jid in job_ids:
-            try:
-                result = subprocess.run(
-                    ["bjobs", "-noheader", "-o", "stat job_name", jid],
-                    capture_output=True, text=True, timeout=30,
-                )
-                if result.returncode == 0 and result.stdout.strip():
-                    parts = result.stdout.strip().split()
-                    status = parts[0] if parts else "UNKNOWN"
-                    job_name = parts[1] if len(parts) > 1 else "unknown"
-                    results.append({
-                        "job_id": jid,
-                        "status": status,
-                        "job_name": job_name,
-                    })
-                else:
-                    results.append({
-                        "job_id": jid,
-                        "status": "NOT_FOUND",
-                        "message": result.stderr.strip() or "Job not found in LSF",
-                    })
-            except subprocess.TimeoutExpired:
-                results.append({
-                    "job_id": jid,
-                    "status": "TIMEOUT",
-                    "message": "bjobs timed out after 30 seconds",
-                })
-
-        if len(results) == 1:
-            return json.dumps(results[0], indent=2)
-        return json.dumps({"jobs": results}, indent=2)
-
+        ids = [j for j in re.split(r"[,\s]+", job_id.strip()) if j]
+        if not ids:
+            return json.dumps({"error": "validation_error", "message": "no job id given"}, indent=2)
+        report = job_report(ids, follow_dependents=follow_dependents, log_lines=log_lines)
+        jobs = report["jobs"]
+        return json.dumps(jobs[0] if len(jobs) == 1 else report, indent=2)
     except FileNotFoundError:
         return json.dumps({
             "error": "bjobs_not_found",
             "message": "bjobs command not found. Requires LSF cluster environment.",
         }, indent=2)
+    except subprocess.TimeoutExpired:
+        return json.dumps({"error": "timeout", "message": "bjobs timed out after 60 seconds"}, indent=2)
     except Exception as e:
         logger.error(f"check_job_status failed: {e}\n{traceback.format_exc()}")
         return f"Error checking job status: {e}"
