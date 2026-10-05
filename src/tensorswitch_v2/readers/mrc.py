@@ -1,5 +1,5 @@
 """
-MRC / CCP4 (.mrc, .mrcs, .rec, .ali, .st) reader wrapping mrcfile.
+MRC / CCP4 (.mrc, .mrcs, .rec, .ali, .st, .map, .rec.nad) reader wrapping mrcfile.
 
 Tier 2 reader - same DaskReader pattern as the TIFF/NIfTI readers.
 

@@ -94,7 +94,7 @@ class TestMRCVoxelSize:
 
 
 class TestMRCAutoDetect:
-    @pytest.mark.parametrize("name", ["a.mrc", "a.rec", "a.mrcs", "a.ali", "a.st", "A.MRC"])
+    @pytest.mark.parametrize("name", ["a.mrc", "a.rec", "a.mrcs", "a.ali", "a.st", "a.map", "a.rec.nad", "A.MRC"])
     def test_extensions_route_to_mrc_reader(self, temp_dir, volume, name):
         path = _write_mrc(os.path.join(temp_dir, name), volume, (10.0, 10.0, 10.0))
         assert isinstance(Readers.auto_detect(path), MRCReader)

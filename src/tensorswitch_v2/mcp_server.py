@@ -718,7 +718,7 @@ def list_formats() -> str:
                 {"name": "CZI", "extensions": [".czi"], "reader": "CZIReader", "notes": "Zeiss, multi-view"},
                 {"name": "NIfTI", "extensions": [".nii", ".nii.gz"], "reader": "NIfTIReader",
                  "notes": "Header voxel size is often wrong or missing; pass voxel_size"},
-                {"name": "MRC / CCP4", "extensions": [".mrc", ".mrcs", ".rec", ".ali", ".st"], "reader": "MRCReader",
+                {"name": "MRC / CCP4", "extensions": [".mrc", ".mrcs", ".rec", ".ali", ".st", ".map", ".rec.nad"], "reader": "MRCReader",
                  "notes": "Cryo-ET and EM volumes; header voxel size is angstroms and only trusted when it looks calibrated"},
                 {"name": "PNG", "extensions": [".png"], "reader": "PngReader",
                  "notes": "A folder or .zip of 2D slices becomes one volume; PNG has no voxel size, pass voxel_size"},

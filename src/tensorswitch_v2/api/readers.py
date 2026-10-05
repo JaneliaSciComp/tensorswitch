@@ -86,7 +86,7 @@ class Readers:
             - .nd2 → ND2Reader
             - .ims → IMSReader
             - .nii, .nii.gz → NIfTIReader
-            - .mrc, .mrcs, .rec, .ali, .st → MRCReader
+            - .mrc, .mrcs, .rec, .ali, .st, .map, .rec.nad → MRCReader
             - .h5, .hdf5 → HDF5Reader
 
             Tier 3 (Broad Compatibility):
@@ -144,7 +144,7 @@ class Readers:
             return Readers.ims(path)
         elif path_lower.endswith(('.nii', '.nii.gz')):
             return Readers.nifti(path)
-        elif path_lower.endswith(('.mrc', '.mrcs', '.rec', '.ali', '.st')):
+        elif path_lower.endswith(('.mrc', '.mrcs', '.rec', '.ali', '.st', '.map', '.rec.nad')):
             return Readers.mrc(path)
         elif path_lower.endswith('.png'):
             return Readers.png(path)

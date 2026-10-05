@@ -652,7 +652,7 @@ print(f"Completed: {result.completed}/{result.total}")
 | ND2 (Nikon) | `.nd2` | 2 | ND2Reader |
 | IMS (Imaris) | `.ims` | 2 | IMSReader |
 | NIfTI | `.nii`, `.nii.gz` | 2 | NIfTIReader |
-| MRC / CCP4 | `.mrc`, `.mrcs`, `.rec`, `.ali`, `.st` | 2 | MRCReader |
+| MRC / CCP4 | `.mrc`, `.mrcs`, `.rec`, `.ali`, `.st`, `.map`, `.rec.nad` | 2 | MRCReader |
 | PNG Z-stack | directory, `.zip`, `.png` | 2 | PngReader |
 | CZI (Zeiss) | `.czi` | 2 | CZIReader |
 | HDF5 | `.h5`, `.hdf5` | 2 | HDF5Reader |
@@ -684,7 +684,7 @@ pixi run python -m tensorswitch_v2 -i vol.nii.gz -o out.zarr \
 
 Reading goes through nibabel's lazy `dataobj` proxy, which preserves the on-disk dtype — unlike `get_fdata()`, which would upcast everything to float64.
 
-### MRC notes (`.mrc`, `.mrcs`, `.rec`, `.ali`, `.st`)
+### MRC notes (`.mrc`, `.mrcs`, `.rec`, `.ali`, `.st`, `.map`, `.rec.nad`)
 
 MRC/CCP4 files (cryo-ET tomograms, many EM volumes) are read via `mrcfile`, memory-mapped and lazy. The data block is already `(z, y, x)`, 2D images and 3D volumes/stacks are supported, and the on-disk dtype is kept (including signed `int8`). 4D volume stacks and complex-valued data are rejected rather than guessed at.
 

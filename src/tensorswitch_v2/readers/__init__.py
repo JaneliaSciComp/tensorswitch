@@ -29,7 +29,7 @@ Public API:
     - HDF5Reader: Generic HDF5 reader
     - CZIReader: Zeiss CZI reader using load_czi_stack() (multi-view support)
     - NIfTIReader: NIfTI-1/2 reader using load_nifti_stack() (.nii, .nii.gz)
-    - MRCReader: MRC/CCP4 reader using mrcfile (.mrc, .mrcs, .rec, .ali, .st)
+    - MRCReader: MRC/CCP4 reader using mrcfile (.mrc, .mrcs, .rec, .ali, .st, .map, .rec.nad)
     - PngReader: PNG Z-stack reader using load_png_stack() (directory, .zip, or single .png)
 
     Tier 3 (BIOIO Adapter):

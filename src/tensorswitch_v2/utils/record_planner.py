@@ -33,7 +33,7 @@ NEEDS_SLICE_FOLDER = {"png", "jpeg"}      # one file per slice: needs the whole 
 TABLE_FORMATS = {"csv", "json"}           # annotations stored as tables, not arrays
 EXTENSIONS = {
     "tiff": (".tif", ".tiff"), "ome-tiff": (".tif", ".tiff"), "hdf5": (".h5", ".hdf5", ".hdf", ".he5"),
-    "mrc": (".mrc", ".mrcs", ".rec", ".ali", ".st"), "nifti": (".nii", ".nii.gz"), "czi": (".czi",),
+    "mrc": (".mrc", ".mrcs", ".rec", ".ali", ".st", ".map", ".rec.nad"), "nifti": (".nii", ".nii.gz"), "czi": (".czi",),
     "nd2": (".nd2",), "png": (".png",), "jpeg": (".jpg", ".jpeg"), "csv": (".csv",), "json": (".json",),
     "zarr": (".zarr",), "ome-zarr": (".zarr",), "n5": (".n5",),
 }
