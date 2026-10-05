@@ -1588,6 +1588,28 @@ def _require_voxel_metadata_before_submit(args):
     )
 
 
+def _require_voxel_metadata_for_batch(args, files, limit=10):
+    """Check every discovered file before a batch is queued, so one bad file does not fail on the node."""
+    if getattr(args, 'voxel_size', None):
+        return
+    original, bad = args.input, []
+    try:
+        for item in files:
+            args.input = item.input_path
+            try:
+                _require_voxel_metadata_before_submit(args)
+            except ValueError as error:
+                bad.append(f"  {item.input_path}: {str(error).split('. ')[0]}")
+    finally:
+        args.input = original
+    if bad:
+        shown = "\n".join(bad[:limit]) + (f"\n  ... and {len(bad) - limit} more" if len(bad) > limit else "")
+        raise ValueError(
+            f"{len(bad)} of {len(files)} files have no usable voxel size, so the batch was not submitted:\n{shown}\n"
+            "Provide --voxel_size X,Y,Z (and optionally --voxel_unit) or fix those files."
+        )
+
+
 def _warn_inferred_axes_before_submit(args):
     """Run the HDF5 axis-guess warning at submit time, whatever resources were given."""
     try:
@@ -2974,6 +2996,8 @@ def main(argv=None):
                 # Submit as LSF job array
                 if not args.project:
                     raise ValueError("--project is required with --submit")
+
+                _require_voxel_metadata_for_batch(args, files)
 
                 # Auto-calculate resources from first discovered file when not overridden
                 memory_gb = args.memory

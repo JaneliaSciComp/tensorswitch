@@ -16,7 +16,7 @@ import numpy as np
 import pytest
 import tifffile
 
-from tensorswitch_v2.__main__ import _require_voxel_metadata_before_submit
+from tensorswitch_v2.__main__ import _require_voxel_metadata_before_submit, _require_voxel_metadata_for_batch
 
 
 def _h5(path, attrs=None):
@@ -111,3 +111,25 @@ def test_submit_with_all_resources_explicit_does_not_crash():
         assert cmd[cmd.index("-M") + 1] == "30GB"
     finally:
         shutil.rmtree(work, ignore_errors=True)
+
+
+class TestBatchCheck:
+    def _files(self, *paths):
+        return [Namespace(input_path=p) for p in paths]
+
+    def test_names_every_bad_file_and_restores_the_input(self, temp_dir):
+        good = _h5(os.path.join(temp_dir, "good.h5"), FULL)
+        bad = _h5(os.path.join(temp_dir, "bad.h5"))
+        args = _args(temp_dir)
+        with pytest.raises(ValueError, match=r"(?s)1 of 2 files.*bad\.h5") as err:
+            _require_voxel_metadata_for_batch(args, self._files(good, bad))
+        assert "good.h5" not in str(err.value) and args.input == temp_dir
+
+    def test_all_good_passes(self, temp_dir):
+        good = [_h5(os.path.join(temp_dir, f"g{i}.h5"), FULL) for i in range(2)]
+        _require_voxel_metadata_for_batch(_args(temp_dir), self._files(*good))
+
+    def test_explicit_voxel_size_skips_the_check(self, temp_dir):
+        args = _args(temp_dir)
+        args.voxel_size = "1,1,1"
+        _require_voxel_metadata_for_batch(args, self._files(_h5(os.path.join(temp_dir, "bare.h5"))))
