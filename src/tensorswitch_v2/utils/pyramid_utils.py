@@ -204,6 +204,18 @@ def calculate_num_multiscale_levels(shape, axes_names, voxel_sizes, chunk_shape=
     return level
 
 
+def _n5_voxel_sizes_in_array_order(resolution, axes_names):
+    """N5 pixelResolution is [x, y, z]; return it in the order of the array axes (e.g. z, y, x).
+
+    Axes that are not spatial (channel, time) get 1.0. Without axis names, a 3-value
+    resolution is reversed to z, y, x.
+    """
+    if not axes_names:
+        return list(resolution)[::-1] if len(resolution) == 3 else list(resolution)
+    by_name = dict(zip(("x", "y", "z"), resolution))
+    return [by_name.get(str(name).lower(), 1.0) for name in axes_names]
+
+
 def calculate_pyramid_plan(s0_path, min_array_nbytes=None, min_array_shape=None):
     """
     Pre-calculate entire multiscale pyramid plan before submitting cluster jobs.
@@ -319,7 +331,7 @@ def calculate_pyramid_plan(s0_path, min_array_nbytes=None, min_array_shape=None)
             axes_names = root_attrs.get('axes')
             pixel_res = root_attrs.get('pixelResolution', {})
             if 'dimensions' in pixel_res:
-                voxel_sizes = pixel_res['dimensions']
+                voxel_sizes = _n5_voxel_sizes_in_array_order(pixel_res['dimensions'], axes_names)
 
     else:  # zarr2
         with open(zarr2_metadata_path, 'r') as f:
