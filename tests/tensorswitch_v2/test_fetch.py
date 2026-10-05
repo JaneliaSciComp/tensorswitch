@@ -255,10 +255,10 @@ class TestMcpFetchTool:
         result = tool("https://evil.example.com/a.tif", dest)
         assert result["error"] == "fetch_refused" and "allowlist" in result["message"]
 
-    def test_large_request_returns_cluster_command(self, tool, dest):
+    def test_large_request_points_to_background_mode(self, tool, dest):
         result = tool("https://zenodo.org/records/1/files/big.zip", dest, max_gb=50)
-        assert result["error"] == "too_large_for_mcp"
-        assert "bsub" in result["command"] and "tensorswitch_v2.utils.fetch" in result["command"]
+        assert result["error"] == "too_large_for_mcp" and "background=True" in result["message"]
+        assert "tensorswitch_v2.utils.fetch" in result["command"] and "bsub" not in result["command"]
 
     def test_size_cap_error_is_reported(self, tool, server, dest):
         root, base = server

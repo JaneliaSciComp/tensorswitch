@@ -1387,19 +1387,26 @@ def check_job_status(job_id: str, follow_dependents: bool = True, log_lines: int
 # Tool: fetch_dataset
 # ---------------------------------------------------------------------------
 @mcp.tool()
-def fetch_dataset(spec: str, dest_dir: str, max_gb: float = 2.0) -> str:
+def fetch_dataset(spec: str, dest_dir: str, max_gb: float = 2.0, background: bool = False) -> str:
     """Download a file (or one member of a remote zip) so it can be converted.
 
     Use this for data that only exists at a URL, e.g. a Zenodo or EBI link from a
     dataset catalog record. Then pass the returned path to inspect_dataset/convert.
 
+    A download that is cut off is retried and continues from the bytes already saved
+    (when the server supports it). For large files or slow servers use background=True.
+
     Args:
         spec: A URL (http, https, ftp, s3), or "<zip url>::<path inside zip>" to
               pull one member out of a remote zip without downloading the whole zip.
-        dest_dir: Folder to save into (created if needed). Use shared storage
-                  (e.g. /groups/...), not /tmp, if a cluster job will read it.
+        dest_dir: Folder to save into (created if needed). It must be visible to
+                  whatever will read it next (e.g. a batch job), so avoid /tmp then.
         max_gb: Refuse anything larger than this. Default 2 GB, the in-process
-                limit; for bigger files use the command returned in the error.
+                limit; larger values need background=True.
+        background: Download in a detached process instead of waiting. The call
+                    returns at once with status "started"; call it again with the same
+                    arguments to see progress ("downloading"), the result ("success")
+                    or the error ("failed"; the next call tries again and resumes).
     """
     from tensorswitch_v2.utils import fetch as _fetch
 
@@ -1407,22 +1414,25 @@ def fetch_dataset(spec: str, dest_dir: str, max_gb: float = 2.0) -> str:
         spec, dest_dir = spec.strip(), dest_dir.strip()
         url, member = _fetch.parse_spec(spec)
         _fetch.check_host(url)
+        if background:
+            state = _fetch.background_fetch(spec, dest_dir, int(max_gb * 1024 ** 3))
+            state["status"] = {"done": "success"}.get(state["state"], state["state"])
+            del state["state"]
+            return json.dumps(state, indent=2)
         if max_gb > MCP_CONVERT_MAX_GB:
             return json.dumps({
                 "error": "too_large_for_mcp",
                 "message": (
-                    f"max_gb={max_gb} exceeds the {MCP_CONVERT_MAX_GB} GB in-process limit. "
-                    f"Run the download as a cluster job instead:"
+                    f"max_gb={max_gb} exceeds the {MCP_CONVERT_MAX_GB} GB in-process limit. Call again with "
+                    f"background=True (the download continues in a detached process and resumes if interrupted), "
+                    f"or run it yourself:"
                 ),
-                "command": (
-                    f"bsub -P <project> -n 1 -W 4:00 pixi run python -m tensorswitch_v2.utils.fetch "
-                    f"'{spec}' '{dest_dir}' --max-gb {max_gb:g}"
-                ),
+                "command": f"python -m tensorswitch_v2.utils.fetch '{spec}' '{dest_dir}' --max-gb {max_gb:g}",
             }, indent=2)
         result = _fetch.fetch(spec, dest_dir, int(max_gb * 1024 ** 3))
         result["status"] = "success"
         if os.path.realpath(result["path"]).startswith(("/tmp", "/var/tmp")):
-            result["warning"] = "saved under /tmp, which LSF cluster nodes cannot see"
+            result["warning"] = "saved under /tmp, which batch or cluster nodes usually cannot see"
         return json.dumps(result, indent=2)
     except _fetch.FetchError as e:
         return json.dumps({"error": "fetch_refused", "message": str(e)}, indent=2)

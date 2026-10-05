@@ -20,6 +20,7 @@ CATALOG_REPO = "AI-HHMI/mia-agentic-search"
 IN_SCOPE_DIMENSIONS = ("3D", "3D+t")
 MCP_LIMIT_BYTES = 2 * 1024 ** 3
 CLUSTER_LIMIT_BYTES = 50 * 1024 ** 3
+BACKGROUND_FETCH_BYTES = 200 * 1024 ** 2   # slow servers deliver a few hundred MB in more than a tool call allows
 # Formats whose header does not give a size TensorSwitch can trust (HDF5 has none, BioSR-style MRC files
 # store micrometers in the angstrom field, NIfTI units are unreliable). Without a voxel size in the record
 # the converter refuses these, so the planner does not plan them.
@@ -385,6 +386,9 @@ def plan_record(record: Dict[str, Any], output_dir: str, project: Optional[str] 
     use_cluster = bool(sample_size and sample_size > MCP_LIMIT_BYTES)
     if use_cluster and not project:
         warnings.append("sample is over 2 GB: pass an LSF project so the plan can use submit_job")
+    if sample_size and sample_size > BACKGROUND_FETCH_BYTES:
+        warnings.append(f"sample is {_fmt_gb(sample_size)}: run fetch_dataset with background=True and call it again "
+                        f"until it reports success, before the convert steps")
     fetched: List[Dict[str, Any]] = []
     for entry in ordered:
         if entry["fetch"] and entry["fetch"] not in fetched:

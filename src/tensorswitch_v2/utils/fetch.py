@@ -422,6 +422,86 @@ def check_host(url: str) -> None:
         )
 
 
+# ----------------------------------------------------------------------------- background
+
+_CHILDREN: Dict[int, "object"] = {}     # processes started here, so finished ones can be reaped
+
+
+def _pid_running(pid: int) -> bool:
+    child = _CHILDREN.get(pid)
+    if child is not None:
+        return child.poll() is None
+    try:
+        with open(f"/proc/{pid}/stat") as handle:
+            if handle.read().rsplit(")", 1)[-1].split()[0] == "Z":
+                return False
+        with open(f"/proc/{pid}/cmdline", "rb") as handle:
+            return b"tensorswitch_v2.utils.fetch" in handle.read()
+    except FileNotFoundError:
+        return False
+    except OSError:
+        try:
+            os.kill(pid, 0)
+            return True
+        except OSError:
+            return False
+
+
+def _last_line(path: str) -> str:
+    try:
+        with open(path, "rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            handle.seek(max(0, handle.tell() - 4096))
+            lines = [l.strip() for l in handle.read().decode("utf-8", "replace").splitlines() if l.strip()]
+        return lines[-1] if lines else ""
+    except OSError:
+        return ""
+
+
+def background_fetch(spec: str, dest_dir: str, max_bytes: int = DEFAULT_MAX_BYTES) -> Dict:
+    """Start the download in a detached process, or report on the one already started.
+
+    Safe to call again with the same arguments: it returns the finished file, the progress
+    of a running download, the error of a failed one (the next call tries again), or starts
+    a new process that continues from any saved ``.part`` file.
+    Returns a dict with ``state`` in done / downloading / started / failed.
+    """
+    import json
+    import subprocess
+    import sys
+
+    dest = expected_path(spec, dest_dir)
+    if os.path.isfile(dest):
+        return {"state": "done", "path": dest, "bytes": os.path.getsize(dest)}
+    folder, name = os.path.dirname(dest), os.path.basename(dest)
+    os.makedirs(folder, exist_ok=True)
+    log, marker = os.path.join(folder, f".{name}.fetch.log"), os.path.join(folder, f".{name}.fetch.json")
+    saved = os.path.getsize(dest + ".part") if os.path.exists(dest + ".part") else 0
+
+    if os.path.exists(marker):
+        try:
+            with open(marker) as handle:
+                pid = json.load(handle)["pid"]
+        except (OSError, ValueError, KeyError):
+            pid = None
+        if pid and _pid_running(pid):
+            return {"state": "downloading", "path": dest, "pid": pid, "log": log,
+                    "bytes_saved": saved, "last_message": _last_line(log)}
+        os.remove(marker)
+        last = _last_line(log)
+        if last.startswith("error:"):
+            return {"state": "failed", "path": dest, "log": log, "bytes_saved": saved, "message": last[6:].strip()}
+
+    command = [sys.executable, "-m", "tensorswitch_v2.utils.fetch", spec, dest_dir, "--max-gb", f"{max_bytes / 1024 ** 3:g}"]
+    with open(log, "w") as handle:
+        child = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=handle, stderr=subprocess.STDOUT,
+                                 start_new_session=True)
+    _CHILDREN[child.pid] = child
+    with open(marker, "w") as handle:
+        json.dump({"pid": child.pid, "spec": spec}, handle)
+    return {"state": "started", "path": dest, "pid": child.pid, "log": log, "bytes_saved": saved}
+
+
 def main(argv=None) -> int:
     """``python -m tensorswitch_v2.utils.fetch <spec> <dest_dir> [--max-gb N]``"""
     import argparse

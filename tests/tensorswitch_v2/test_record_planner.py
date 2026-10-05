@@ -250,6 +250,13 @@ class TestHdf5:
         assert not any("described as 2D" in n for n in notes)
 
 
+    def test_large_sample_suggests_background_fetch(self):
+        rec = record()
+        rec["technical"]["sample"]["size_bytes"] = 500 * 1024 ** 2
+        assert any("background=True" in w for w in rp.plan_record(rec, OUT, "proj")["warnings"])
+        assert not any("background=True" in w for w in rp.plan_record(record(), OUT)["warnings"])
+
+
 class TestUnconvertible:
     def one(self, fmt, role="raw", pattern="data.zip::set/images/*.tif", url=f"{ZIP}::set/images/a.tif"):
         rec = record()
