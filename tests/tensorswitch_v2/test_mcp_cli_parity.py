@@ -79,6 +79,7 @@ SAMPLES = {
     "view_index": (2, "view_index", 2), "auto_multiscale": (True, "auto_multiscale", True),
     "per_level_factors": ("1,2,2;1,2,2", "per_level_factors", "1,2,2;1,2,2"),
     "downsample_method": ("mode", "downsample_method", "mode"), "no_translation": (True, "no_translation", True),
+    "expansion_factor": (4.0, "expansion_factor", 4.0), "extra_attributes": ("{\"a\": 1}", "extra_attributes", "{\"a\": 1}"),
     "bbox": ("0,0,0,4,4,4", "bbox", "0,0,0,4,4,4"), "bbox_axes": ("2,3,4", "bbox_axes", "2,3,4"),
     "squeeze_singleton_axes": (True, "squeeze_singleton_axes", True),
     "relabel_axis": ("t=z;c=y", "relabel_axis", ["t=z", "c=y"]),

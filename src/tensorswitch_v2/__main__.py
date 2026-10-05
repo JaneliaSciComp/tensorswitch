@@ -26,6 +26,7 @@ Usage:
 import os
 import sys
 import subprocess
+import json
 import shlex
 import math
 import argparse
@@ -354,6 +355,18 @@ Supported output formats:
              "'miaai' (alias 'mia_lmvd'): zarr3, chunk 128x128x128, shard 512x512x512, "
              "zstd-5, C-order; axis order and dtype preserved from source; "
              "voxel size preserved from source.",
+    )
+
+    parser.add_argument(
+        "--expansion_factor", type=float, default=None,
+        help="Expansion microscopy factor (e.g. 4). With --preset miaai the outer "
+             "coordinateTransformations of the OME metadata become 1/factor on the spatial axes.",
+    )
+    parser.add_argument(
+        "--extra_attributes", default=None,
+        help="JSON file, or inline JSON object, of extra attributes to add to the zarr.json of the "
+             "group this conversion writes (raw/ or labels/<name>/). 'ome', '_software' and "
+             "'tensorswitch' cannot be set this way.",
     )
 
     # Dataset paths
@@ -1802,6 +1815,12 @@ def submit_job(args, return_job_id=False):
     if getattr(args, 'relabel_axis', None):
         for spec in args.relabel_axis:
             reinvoke += ["--relabel_axis", spec]
+    if getattr(args, 'preset', None) in ('miaai', 'mia_lmvd'):
+        reinvoke += ["--preset", args.preset]
+    if getattr(args, 'expansion_factor', None):
+        reinvoke += ["--expansion_factor", str(args.expansion_factor)]
+    if getattr(args, 'extra_attributes', None):
+        reinvoke += ["--extra_attributes", _extra_attributes_file_for_job(args)]
     if args.log_dir:
         reinvoke += ["--log_dir", args.log_dir]
     if getattr(args, 'no_ome_meta_export', False):
@@ -2799,7 +2818,42 @@ def run_conversion(args):
         _apply_group_to_added_label(final_output, subgroup_parent, subgroup.split('/')[-1])
     else:
         _finalize_tmp_path(tmp_output, final_output, verbose=verbose)
+    written_group = subgroup if add_to_existing else _resolve_conversion_subgroup(args)
+    if not written_group and getattr(args, 'use_nested_structure', True) and not getattr(args, 'is_label', False):
+        written_group = getattr(args, 'image_key', 'raw')      # plain image conversion: --data-type auto
+    _apply_post_conversion_metadata(args, final_output, written_group)
     return info
+
+
+def _extra_attributes_file_for_job(args) -> str:
+    """A file path for --extra_attributes. Inline JSON is written to a file first: its double quotes would
+    otherwise be mangled by the shell and the scheduler when the job's command line is rebuilt."""
+    import hashlib
+    from .utils import miaai_metadata as mm
+
+    value = args.extra_attributes.strip()
+    if os.path.isfile(value):
+        return os.path.abspath(value)
+    data = mm.load_extra_attributes(value)
+    folder = args.log_dir or os.path.join(os.path.dirname(os.path.abspath(args.output)), "output")
+    os.makedirs(folder, exist_ok=True)
+    digest = hashlib.sha1(json.dumps(data, sort_keys=True).encode()).hexdigest()[:10]
+    path = os.path.join(folder, f"extra_attributes_{digest}.json")
+    with open(path, "w") as handle:
+        json.dump(data, handle, indent=2)
+    return path
+
+
+def _apply_post_conversion_metadata(args, final_output, group):
+    """--extra_attributes, and the miaai preset's metadata conventions, once the data is in place."""
+    from .utils import miaai_metadata as mm
+
+    if getattr(args, 'extra_attributes', None) and group and args.output_format == 'zarr3':
+        group_dir = os.path.join(final_output, *[part.removesuffix('.tmp') for part in group.split('/')])
+        mm.merge_extra_attributes(group_dir, mm.load_extra_attributes(args.extra_attributes))
+    if getattr(args, 'preset', None) in ('miaai', 'mia_lmvd') and args.output_format == 'zarr3':
+        mm.mark_container(final_output, 'miaai', getattr(args, 'expansion_factor', None))
+        mm.finalize_container(final_output, getattr(args, 'expansion_factor', None))
 
 
 def main(argv=None):

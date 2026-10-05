@@ -44,6 +44,8 @@ SPEC = [
     ("per_level_factors", "--per_level_factors", "value", ("", None)),
     ("downsample_method", "--downsample_method", "value", ("", None, "auto")),
     ("no_translation", "--no-translation", "flag", (False, None)),
+    ("expansion_factor", "--expansion_factor", "value", (None, 0, 0.0)),
+    ("extra_attributes", "--extra_attributes", "value", ("", None)),
     ("bbox", "--bbox", "value", ("", None)),
     ("bbox_axes", "--bbox_axes", "value", ("", None)),
     ("squeeze_singleton_axes", "--squeeze_singleton_axes", "flag", (False, None)),

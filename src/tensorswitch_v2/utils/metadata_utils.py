@@ -1113,6 +1113,12 @@ def update_ome_metadata_if_needed(output_path, use_ome_structure, include_transl
                 except Exception as e:
                     print(f"Warning: Failed to update parent zarr3 metadata: {e}")
 
+            try:
+                from .miaai_metadata import apply_marker_if_any
+                apply_marker_if_any(output_path)
+            except Exception as e:
+                print(f"Warning: Failed to apply preset metadata conventions: {e}")
+
         elif os.path.exists(zarr2_metadata):
             print(f"Updating zarr2 OME metadata for {output_path} with levels {level0_name}-{max_level_name}")
             update_ome_multiscale_metadata_zarr2(output_path, max_level=max_level, prefix=prefix, include_translation=include_translation, downsample_method=downsample_method)

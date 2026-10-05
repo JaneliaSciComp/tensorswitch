@@ -109,6 +109,20 @@ class TestPresets:
         argv = reinvoke(cmds[0])
         assert flag_value(argv, "--chunk_shape") == ["128,128,128"] and "--force_c_order" in argv
 
+    def test_miaai_options_reach_the_job(self, src, work):
+        _, cmds = submit(src, work, preset="miaai", expansion_factor=4.0, extra_attributes='{"source_path": "/a/b.tif"}')
+        argv = reinvoke(cmds[0])
+        assert flag_value(argv, "--preset") == ["miaai"] and flag_value(argv, "--expansion_factor") == ["4.0"]
+        path = flag_value(argv, "--extra_attributes")[0]
+        assert os.path.isfile(path) and json.load(open(path)) == {"source_path": "/a/b.tif"}
+        assert '"' not in path and "'" not in path          # no quotes for the scheduler to mangle
+
+    def test_extra_attributes_file_is_passed_as_it_is(self, src, work):
+        extra = os.path.join(work, "extra.json")
+        json.dump({"a": 1}, open(extra, "w"))
+        _, cmds = submit(src, work, extra_attributes=extra)
+        assert flag_value(reinvoke(cmds[0]), "--extra_attributes") == [extra]
+
     def test_paintera_preset(self, src, work):
         result, cmds = submit(src, work, preset="paintera")
         argv = reinvoke(cmds[0])

@@ -390,6 +390,8 @@ def convert(
     per_level_factors: str = "",
     omero: bool = True,
     no_translation: bool = False,
+    expansion_factor: float = 0.0,
+    extra_attributes: str = "",
     output_dtype: str = "",
     add_to_existing: bool = False,
     bbox_axes: str = "",
@@ -447,6 +449,10 @@ def convert(
         per_level_factors: Custom per-level factors, semicolon-separated (e.g., "1,2,2;1,2,2"). Used with auto_multiscale.
         omero: Include structured omero channel metadata for visualization tools (default: True).
         no_translation: Disable translation transforms in OME-NGFF multiscale metadata.
+        expansion_factor: Expansion microscopy factor (e.g. 4). With preset "miaai" the outer
+                          coordinateTransformations become 1/factor on the spatial axes. 0 = not expansion data.
+        extra_attributes: JSON file path, or inline JSON object, of extra attributes to add to the zarr.json of
+                          the group this call writes (raw/ or labels/<name>/). "ome" and "_software" cannot be set.
         output_dtype: Output dtype override (e.g., "uint8", "int16", "uint16"). Empty = preserve source dtype.
         add_to_existing: Add data to existing container without destroying it.
             Safe write applies to the subgroup (e.g., labels/) not the container root.
@@ -893,6 +899,8 @@ def submit_job(
     preset: str = "",
     omero: bool = True,
     no_translation: bool = False,
+    expansion_factor: float = 0.0,
+    extra_attributes: str = "",
     output_dtype: str = "",
     add_to_existing: bool = False,
     bbox_axes: str = "",
@@ -948,6 +956,10 @@ def submit_job(
                           "miaai" (alias "mia_lmvd"; zarr3, chunk 128^3, shard 512^3, zstd-5, C-order).
         omero: Include structured omero channel metadata for visualization tools.
         no_translation: Disable translation transforms in OME-NGFF multiscale metadata.
+        expansion_factor: Expansion microscopy factor (e.g. 4). With preset "miaai" the outer
+                          coordinateTransformations become 1/factor on the spatial axes. 0 = not expansion data.
+        extra_attributes: JSON file path, or inline JSON object, of extra attributes to add to the zarr.json of
+                          the group this call writes (raw/ or labels/<name>/). "ome" and "_software" cannot be set.
         output_dtype: Output dtype override (e.g., "uint8", "int16", "uint16"). Empty = preserve source dtype.
         add_to_existing: Add data to existing container without destroying it.
             Safe write applies to the subgroup (e.g., labels/) not the container root.
