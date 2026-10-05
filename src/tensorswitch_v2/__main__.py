@@ -346,13 +346,13 @@ Supported output formats:
     # Presets for common use cases
     parser.add_argument(
         "--preset", default=None,
-        choices=["webknossos", "paintera", "mia_lmvd", ""],
+        choices=["webknossos", "paintera", "miaai", "mia_lmvd", ""],
         help="Use preset configuration. "
              "'webknossos': zarr3, chunk 32x32x32, shard 1024x1024x1024, zstd. "
              "'paintera': n5, xyz axis order, gzip, chunk 64x64x64 "
              "(or zarr2 with zyx if --output_format zarr2). "
-             "'mia_lmvd': zarr3, chunk 128x128x128, shard 512x512x512, zstd-5, "
-             "C-order; axis order and dtype preserved from source; "
+             "'miaai' (alias 'mia_lmvd'): zarr3, chunk 128x128x128, shard 512x512x512, "
+             "zstd-5, C-order; axis order and dtype preserved from source; "
              "voxel size preserved from source.",
     )
 
@@ -2384,8 +2384,8 @@ def _apply_preset(args):
         if not args.quiet:
             print(f"Using Paintera preset: output={args.output_format}, "
                   f"axes={args.axes_order}, chunk=64x64x64, compression=gzip")
-    elif args.preset == "mia_lmvd":
-        # MIA LMVD preset: zarr3, 128^3 inner chunks / 512^3 shards, zstd-5, C-order.
+    elif args.preset in ("miaai", "mia_lmvd"):
+        # MIAAI preset ('mia_lmvd' is the older name for it): zarr3, 128^3 inner chunks / 512^3 shards, zstd-5, C-order.
         # Axis order: preserve source (RFC-3 canonical: t,c,z,y,x or z,y,x if 3D).
         # Dtype and voxel size: preserve from source (no overrides).
         if not args.chunk_shape:
@@ -2395,7 +2395,7 @@ def _apply_preset(args):
         if not args.force_c_order and not args.force_f_order:
             args.force_c_order = True
         if not args.quiet:
-            print("Using mia_lmvd preset: zarr3, chunk=128³, shard=512³, "
+            print(f"Using {args.preset} preset: zarr3, chunk=128³, shard=512³, "
                   "zstd-5, C-order. Axis order, dtype, and voxel size preserved from source.")
 
 

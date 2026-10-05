@@ -59,6 +59,7 @@ CASES = {
     "n5": [("raw", ["--output_format", "n5"], {"output_format": "n5"})],
     "webknossos": [("raw", ["--preset", "webknossos"], {"preset": "webknossos"})],
     "mia_lmvd": [("raw", ["--preset", "mia_lmvd"], {"preset": "mia_lmvd"})],
+    "miaai": [("raw", ["--preset", "miaai"], {"preset": "miaai"})],
     "is_label": [("lab", ["--is_label"], {"is_label": True})],
     "bbox": [("raw", ["--bbox", "0,0,0,4,8,8"], {"bbox": "0,0,0,4,8,8"})],
     "bbox_nd_axes": [("raw", ["--bbox", "0,0,2,4,4,4", "--bbox_axes", "0,1,2"],

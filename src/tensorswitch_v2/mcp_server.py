@@ -441,6 +441,7 @@ def convert(
         no_ome_xml_attr: Do not embed OME/CZI XML in zarr.json/.zattrs.
         preset: Preset configuration — "webknossos" (chunk 32x32x32, shard 1024x1024x1024).
                           "paintera" (n5, xyz axis order, gzip, chunk 64x64x64; or zarr2 with zyx).
+                          "miaai" (alias "mia_lmvd"; zarr3, chunk 128^3, shard 512^3, zstd-5, C-order).
         auto_multiscale: Generate full multiscale pyramid after conversion. Default: False.
         downsample_method: Downsampling method for pyramid — "auto", "mean", "mode", etc. Used with auto_multiscale.
         per_level_factors: Custom per-level factors, semicolon-separated (e.g., "1,2,2;1,2,2"). Used with auto_multiscale.
@@ -736,7 +737,7 @@ def list_formats() -> str:
             {"name": "Zarr2", "notes": "Legacy. OME-NGFF v0.4, for tools that don't support Zarr3"},
             {"name": "N5", "notes": "For Java tools (BigDataViewer, BigStitcher)"},
         ],
-        "presets": ["webknossos", "paintera", "mia_lmvd"],
+        "presets": ["webknossos", "paintera", "miaai", "mia_lmvd"],
         "remote_sources": [
             "gs:// (Google Cloud Storage), s3:// (Amazon S3), https:// (HTTP/HTTPS): zarr, N5 and precomputed are read in place",
             "any other file or a member of a remote zip: download it first with fetch_dataset, then convert it",
@@ -944,6 +945,7 @@ def submit_job(
         per_level_factors: Custom per-level factors, semicolon-separated (e.g., "1,2,2;1,2,2").
         preset: Preset configuration — "webknossos" (chunk 32, shard 1024).
                           "paintera" (n5, xyz axis order, gzip, chunk 64x64x64; or zarr2 with zyx).
+                          "miaai" (alias "mia_lmvd"; zarr3, chunk 128^3, shard 512^3, zstd-5, C-order).
         omero: Include structured omero channel metadata for visualization tools.
         no_translation: Disable translation transforms in OME-NGFF multiscale metadata.
         output_dtype: Output dtype override (e.g., "uint8", "int16", "uint16"). Empty = preserve source dtype.

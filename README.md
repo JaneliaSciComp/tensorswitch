@@ -241,7 +241,7 @@ pixi run python -m tensorswitch_v2 -i input.tif -o output.zarr \
 |----------|-------------|
 | `--preset webknossos` | WebKnossos-optimized settings: zarr3, chunk 32x32x32, shard 1024x1024x1024, zstd |
 | `--preset paintera` | Paintera-ready settings: n5, xyz axis order, gzip, chunk 64x64x64. Use with `--output_format zarr2` for zyx Zarr2 output. Output is consumed by [paintera-conversion-helper](https://github.com/saalfeldlab/paintera-conversion-helper) to produce Paintera-native format. |
-| `--preset mia_lmvd` | MIA Large Microscopy Volume Dataset settings: zarr3, chunk 128x128x128, shard 512x512x512, zstd-5, C-order. Axis order preserved from source (RFC-3: t,c,z,y,x or z,y,x for 3D). Dtype and voxel size preserved from source unless explicitly overridden with `--dtype` or `--voxel_size`. |
+| `--preset miaai` (alias `mia_lmvd`) | MIAAI Large Microscopy Volume Dataset settings: zarr3, chunk 128x128x128, shard 512x512x512, zstd-5, C-order. Axis order preserved from source (RFC-3: t,c,z,y,x or z,y,x for 3D). Dtype and voxel size preserved from source unless explicitly overridden with `--dtype` or `--voxel_size`. |
 
 ```bash
 # Example: Convert for WebKnossos viewing
@@ -254,7 +254,7 @@ pixi run python -m tensorswitch_v2 -i input.tif -o output.n5 --preset paintera
 pixi run python -m tensorswitch_v2 -i input.zarr -o output.zarr --preset paintera --output_format zarr2
 
 # Example: Convert for MIA LMVD (Janelia internal)
-pixi run python -m tensorswitch_v2 -i input.zarr -o output.zarr --preset mia_lmvd
+pixi run python -m tensorswitch_v2 -i input.zarr -o output.zarr --preset miaai
 ```
 
 ### Chunk/Shard Configuration
@@ -1299,7 +1299,7 @@ TensorSwitch v2 includes an MCP (Model Context Protocol) server that allows Clau
 |------|-------------|
 | `inspect_dataset` | Returns shape, dtype, voxel sizes, axes, pyramid levels, OME metadata. Supports remote S3/HTTP URLs with auto-discovery: groups with OME-NGFF multiscales auto-resolve; S3 containers use bounded directory listing (BFS, max 4 levels) to find arrays automatically; non-S3 URLs require full array path. |
 | `discover_datasets` | Scans a directory for image/segmentation layers. Supports `pattern` (e.g., `"*.tif"`) and `recursive` for finding proprietary files (TIFF, ND2, CZI, IMS, HDF5) in subdirectories. |
-| `convert` | Converts a dataset in-process (up to 2 GB; larger ones are redirected to `submit_job`). Runs the CLI's own parser and conversion code, so every CLI option applies: presets (`webknossos`, `paintera`, `mia_lmvd`), `auto_multiscale` (one-step convert + pyramid), N-D `bbox` with `bbox_axes`, `squeeze_singleton_axes`, `relabel_axis`, `add_to_existing` (new label or replaced image), sparse label ingest with `output_offset` / `target_shape`, `omero` channel metadata (default ON), `force_order`, `no_translation`. Sources without a voxel size for every spatial axis are refused unless `voxel_size` is given. The response includes a `warnings` list when the conversion raised any (for example an HDF5 volume with 10 or fewer slices whose first axis was read as a channel: the fix is `relabel_axis="c=z"`). |
+| `convert` | Converts a dataset in-process (up to 2 GB; larger ones are redirected to `submit_job`). Runs the CLI's own parser and conversion code, so every CLI option applies: presets (`webknossos`, `paintera`, `miaai`, alias `mia_lmvd`), `auto_multiscale` (one-step convert + pyramid), N-D `bbox` with `bbox_axes`, `squeeze_singleton_axes`, `relabel_axis`, `add_to_existing` (new label or replaced image), sparse label ingest with `output_offset` / `target_shape`, `omero` channel metadata (default ON), `force_order`, `no_translation`. Sources without a voxel size for every spatial axis are refused unless `voxel_size` is given. The response includes a `warnings` list when the conversion raised any (for example an HDF5 volume with 10 or fewer slices whose first axis was read as a channel: the fix is `relabel_axis="c=z"`). |
 | `upsample_to_isotropic` | Resamples anisotropic data to isotropic resolution using `scipy.ndimage.zoom`. Supports zarr2, zarr3, zarr3+sharding output via TensorStore backend. Safe write, auto-pyramid, size guard. |
 | `generate_pyramid` | Creates multiscale pyramid locally with chained downsampling, anisotropic handling, optional `no_translation`, and custom `per_level_factors` |
 | `list_formats` | Lists input formats by reader tier (with the reader each extension selects and the BioIO plugins actually installed), output formats, presets, remote sources, and the voxel-size rule |

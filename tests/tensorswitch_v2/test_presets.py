@@ -34,6 +34,12 @@ def test_mia_lmvd():
     assert (args.chunk_shape, args.shard_shape, args.force_c_order) == ("128,128,128", "512,512,512", True)
 
 
+def test_miaai_is_the_same_preset_as_mia_lmvd():
+    new, old = apply("--preset", "miaai"), apply("--preset", "mia_lmvd")
+    assert (new.chunk_shape, new.shard_shape, new.force_c_order, new.output_format) == \
+           (old.chunk_shape, old.shard_shape, old.force_c_order, old.output_format) == ("128,128,128", "512,512,512", True, "zarr3")
+
+
 def test_explicit_settings_win_over_the_preset():
     args = apply("--preset", "mia_lmvd", "--chunk_shape", "64,64,64", "--force_f_order")
     assert args.chunk_shape == "64,64,64" and not args.force_c_order and args.force_f_order

@@ -104,6 +104,11 @@ class TestPresets:
         assert flag_value(argv, "--shard_shape") == ["512,512,512"]
         assert "--force_c_order" in argv
 
+    def test_miaai_preset_is_applied(self, src, work):
+        _, cmds = submit(src, work, preset="miaai")
+        argv = reinvoke(cmds[0])
+        assert flag_value(argv, "--chunk_shape") == ["128,128,128"] and "--force_c_order" in argv
+
     def test_paintera_preset(self, src, work):
         result, cmds = submit(src, work, preset="paintera")
         argv = reinvoke(cmds[0])
