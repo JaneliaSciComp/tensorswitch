@@ -334,7 +334,7 @@ class N5Reader(BaseReader):
         Notes:
             - Returns None if the metadata doesn't contain voxel sizes
             - Detects unit from metadata and converts to nanometers
-            - N5 convention: dimensions = [z, y, x] (reverse of XYZ)
+            - N5 convention: pixelResolution/resolution are [x, y, z], like the dataset 'dimensions'
         """
         metadata = self.get_metadata()
 
@@ -348,9 +348,9 @@ class N5Reader(BaseReader):
                 dimensions = voxel_data['dimensions']
                 unit = voxel_data.get('unit', 'um')
 
-                # N5 convention: dimensions are [z, y, x]
+                # N5 convention: same order as the dataset 'dimensions', i.e. [x, y, z]
                 if len(dimensions) >= 3:
-                    z, y, x = dimensions[0], dimensions[1], dimensions[2]
+                    x, y, z = dimensions[0], dimensions[1], dimensions[2]
 
                     # Convert to nanometers using helper
                     return {
@@ -363,7 +363,7 @@ class N5Reader(BaseReader):
         elif 'resolution' in metadata:
             resolution = metadata['resolution']
             if isinstance(resolution, list) and len(resolution) >= 3:
-                z, y, x = resolution[0], resolution[1], resolution[2]
+                x, y, z = resolution[0], resolution[1], resolution[2]
                 # No unit specified, assume already nanometers
                 return {'x': float(x), 'y': float(y), 'z': float(z)}
 

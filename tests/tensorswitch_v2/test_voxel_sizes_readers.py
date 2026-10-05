@@ -146,3 +146,37 @@ class TestZarrVoxelSizes:
         reader = Readers.auto_detect(os.path.join(out, "raw", "s0"))
         assert reader.has_voxel_metadata() is True
 
+
+
+class TestN5AxisOrder:
+    """N5 pixelResolution is [x, y, z], the same order the writer emits."""
+
+    def test_reader_takes_pixel_resolution_as_xyz(self, tmp_path):
+        import json
+        import os
+        from tensorswitch_v2.readers import N5Reader
+        root = tmp_path / "v.n5"
+        os.makedirs(root)
+        (root / "attributes.json").write_text(json.dumps(
+            {"n5": "2.5.0", "pixelResolution": {"dimensions": [8.0, 8.0, 40.0], "unit": "nm"}}))
+        assert dict(N5Reader(str(root))._read_voxel_sizes()) == {"x": 8.0, "y": 8.0, "z": 40.0}
+
+    def test_resolution_key_is_xyz(self, tmp_path):
+        import json
+        import os
+        from tensorswitch_v2.readers import N5Reader
+        root = tmp_path / "v.n5"
+        os.makedirs(root)
+        (root / "attributes.json").write_text(json.dumps({"resolution": [8.0, 8.0, 40.0]}))
+        assert dict(N5Reader(str(root))._read_voxel_sizes()) == {"x": 8.0, "y": 8.0, "z": 40.0}
+
+    def test_writer_attributes_read_back_unchanged(self, tmp_path):
+        import json
+        import os
+        from tensorswitch_v2.readers import N5Reader
+        from tensorswitch_v2.writers.n5 import N5Writer
+        attrs = N5Writer._build_root_attributes(object.__new__(N5Writer), "s0", {"x": 8.0, "y": 8.0, "z": 40.0}, ["z", "y", "x"])
+        root = tmp_path / "w.n5"
+        os.makedirs(root)
+        (root / "attributes.json").write_text(json.dumps(attrs))
+        assert dict(N5Reader(str(root))._read_voxel_sizes()) == {"x": 8.0, "y": 8.0, "z": 40.0}
