@@ -16,6 +16,7 @@ Safety rules enforced here, so every caller (CLI, MCP) gets them:
 import os
 import re
 import struct
+import time
 import zlib
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
@@ -28,6 +29,7 @@ DEFAULT_MAX_BYTES = 2 * 1024 ** 3
 USER_AGENT = "tensorswitch-fetch"
 _ZIP_TAIL = 128 * 1024
 _TIMEOUT = 120
+DEFAULT_ATTEMPTS = 5     # a dropped connection is retried, continuing from the bytes already saved
 
 
 class FetchError(Exception):
@@ -195,7 +197,39 @@ def _http_chunks(url: str, headers: Optional[Dict[str, str]] = None, expect_stat
         resp.close()
 
 
-def _ftp_chunks(url: str):
+def _http_stream(url: str, offset: int):
+    """Open url from byte `offset`. Returns (start, chunks, expected_total); start is 0 if the server ignores Range."""
+    headers = {"Range": f"bytes={offset}-"} if offset else None
+    resp = requests.get(url, headers=_headers(headers), timeout=_TIMEOUT, stream=True, allow_redirects=True)
+    try:
+        if offset and resp.status_code == 416:       # asked past the end: the saved part is complete or stale
+            if remote_size(url) == offset:
+                resp.close()
+                return offset, iter(()), offset
+            offset = 0
+            resp.close()
+            return _http_stream(url, 0)
+        if resp.status_code == 206 and offset:
+            start = offset
+        elif resp.status_code == 200:
+            start = 0
+        else:
+            raise FetchError(f"HTTP {resp.status_code} for {url}")
+        length = resp.headers.get("Content-Length")
+        expected = start + int(length) if length and not resp.headers.get("Content-Encoding") else None
+    except BaseException:
+        resp.close()
+        raise
+
+    def chunks():
+        try:
+            yield from resp.iter_content(1 << 20)
+        finally:
+            resp.close()
+    return start, chunks(), expected
+
+
+def _ftp_stream(url: str, offset: int):
     import ftplib
 
     parts = urlsplit(url)
@@ -203,23 +237,91 @@ def _ftp_chunks(url: str):
     try:
         ftp.login(parts.username or "anonymous", parts.password or "anonymous@")
         ftp.voidcmd("TYPE I")
-        with ftp.transfercmd(f"RETR {unquote(parts.path)}") as conn:
-            while True:
-                data = conn.recv(1 << 20)
-                if not data:
-                    break
-                yield data
-        ftp.voidresp()
-    finally:
         try:
-            ftp.quit()
+            expected = ftp.size(unquote(parts.path))
+        except ftplib.all_errors:
+            expected = None
+        start = offset
+        try:
+            conn = ftp.transfercmd(f"RETR {unquote(parts.path)}", rest=offset or None)
+        except ftplib.error_perm:
+            if not offset:
+                raise
+            start = 0                                 # server cannot restart mid-file
+            conn = ftp.transfercmd(f"RETR {unquote(parts.path)}")
+    except BaseException:
+        try:
+            ftp.close()
         except Exception:
             pass
+        raise
+
+    def chunks():
+        try:
+            with conn:
+                while True:
+                    data = conn.recv(1 << 20)
+                    if not data:
+                        break
+                    yield data
+            ftp.voidresp()
+        finally:
+            try:
+                ftp.quit()
+            except Exception:
+                pass
+    return start, chunks(), expected
+
+
+def _transient_errors():
+    import ftplib
+
+    return (requests.RequestException, OSError, EOFError, ftplib.error_temp, ftplib.error_reply)
+
+
+def _download_resumable(open_stream, dest: str, max_bytes: int, what: str,
+                        attempts: int = DEFAULT_ATTEMPTS, progress=None) -> int:
+    """Download to ``dest + '.part'``, continuing from the saved bytes after a dropped connection."""
+    os.makedirs(os.path.dirname(dest), exist_ok=True)
+    part = dest + ".part"
+    transient = _transient_errors()
+    for attempt in range(1, attempts + 1):
+        have = os.path.getsize(part) if os.path.exists(part) else 0
+        try:
+            start, chunks, expected = open_stream(have)
+            written = start if start == have else 0
+            with open(part, "ab" if start == have and have else "wb") as handle:
+                for chunk in chunks:
+                    written += len(chunk)
+                    if written > max_bytes:
+                        raise FetchError(f"{what} is larger than the {_human(max_bytes)} limit; aborted")
+                    handle.write(chunk)
+                    if progress:
+                        progress(written, expected)
+            if expected is not None and written != expected:
+                raise ConnectionError(f"connection closed after {written} of {expected} bytes")
+            os.replace(part, dest)
+            return written
+        except FetchError:
+            if os.path.exists(part):
+                os.remove(part)
+            raise
+        except transient as err:
+            if attempt == attempts:
+                saved = os.path.getsize(part) if os.path.exists(part) else 0
+                raise FetchError(f"download of {what} interrupted ({err}); {_human(saved)} saved in {part}. "
+                                 f"Run it again to continue from there.") from err
+            time.sleep(min(2 ** attempt, 30))
+    raise AssertionError("unreachable")
 
 
 def fetch_file(url: str, dest_dir: str, max_bytes: int = DEFAULT_MAX_BYTES,
-               filename: Optional[str] = None) -> Dict:
-    """Download one whole file into dest_dir. Returns {'path', 'bytes', 'source'}."""
+               filename: Optional[str] = None, attempts: int = DEFAULT_ATTEMPTS, progress=None) -> Dict:
+    """Download one whole file into dest_dir. Returns {'path', 'bytes', 'source'}.
+
+    A download that is cut off keeps its ``.part`` file; running the same call again
+    (or the automatic retries) continues from there when the server allows it.
+    """
     url = normalize_url(url)
     scheme = urlsplit(url).scheme
     name = filename or unquote(os.path.basename(urlsplit(url).path))
@@ -228,8 +330,16 @@ def fetch_file(url: str, dest_dir: str, max_bytes: int = DEFAULT_MAX_BYTES,
         size = remote_size(url)
         if size and size > max_bytes:
             raise FetchError(f"{name} is {_human(size)}, over the {_human(max_bytes)} limit")
-    chunks = _ftp_chunks(url) if scheme == "ftp" else _http_chunks(url)
-    return {"path": dest, "bytes": _write_atomically(dest, chunks, max_bytes, name), "source": url}
+    stream = _ftp_stream if scheme == "ftp" else _http_stream
+    written = _download_resumable(lambda offset: stream(url, offset), dest, max_bytes, name, attempts, progress)
+    return {"path": dest, "bytes": written, "source": url}
+
+
+def expected_path(spec: str, dest_dir: str) -> str:
+    """Where fetch() will put a spec inside dest_dir."""
+    url, member = parse_spec(spec)
+    name = member if member else unquote(os.path.basename(urlsplit(normalize_url(url)).path))
+    return safe_destination(dest_dir, name)
 
 
 def fetch_zip_member(url: str, member: str, dest_dir: str, max_bytes: int = DEFAULT_MAX_BYTES) -> Dict:
@@ -275,10 +385,12 @@ def fetch_zip_member(url: str, member: str, dest_dir: str, max_bytes: int = DEFA
     return {"path": dest, "bytes": written, "source": f"{url}::{member}"}
 
 
-def fetch(spec: str, dest_dir: str, max_bytes: int = DEFAULT_MAX_BYTES) -> Dict:
+def fetch(spec: str, dest_dir: str, max_bytes: int = DEFAULT_MAX_BYTES, progress=None) -> Dict:
     """Fetch a spec (``url`` or ``zip url::member``) into dest_dir."""
     url, member = parse_spec(spec)
-    return fetch_zip_member(url, member, dest_dir, max_bytes) if member else fetch_file(url, dest_dir, max_bytes)
+    if member:
+        return fetch_zip_member(url, member, dest_dir, max_bytes)
+    return fetch_file(url, dest_dir, max_bytes, progress=progress)
 
 
 DEFAULT_ALLOWED_HOSTS = (
@@ -320,8 +432,16 @@ def main(argv=None) -> int:
     parser.add_argument("--max-gb", type=float, default=DEFAULT_MAX_BYTES / 1024 ** 3,
                         help="refuse anything larger (default: %(default).0f GB)")
     args = parser.parse_args(argv)
+    last = [0.0]
+
+    def progress(written, total):
+        now = time.monotonic()
+        if now - last[0] >= 10:
+            last[0] = now
+            print(f"downloaded {_human(written)}" + (f" of {_human(total)}" if total else ""), flush=True)
+
     try:
-        result = fetch(args.spec, args.dest_dir, int(args.max_gb * 1024 ** 3))
+        result = fetch(args.spec, args.dest_dir, int(args.max_gb * 1024 ** 3), progress=progress)
     except FetchError as err:
         print(f"error: {err}")
         return 1
