@@ -133,6 +133,33 @@ class TestVoxelSize:
         assert all("voxel_size" not in a for t, a in tools(plan) if t == "convert")
         assert any("no voxel size" in w for w in plan["warnings"])
 
+    @pytest.mark.parametrize("fmt,ext", [("nifti", "nii.gz"), ("mrc", "mrc"), ("hdf5", "h5")])
+    def test_untrusted_header_without_record_voxel_size_is_not_planned(self, fmt, ext):
+        rec = record()
+        rec["imaging"]["voxel_size_nm"] = None
+        rec["technical"]["sample"]["urls"] = [f"{ZIP}::set/images/a.{ext}"]
+        rec["technical"]["arrays"] = [{"role": "raw", "format": fmt, "axes": "zyx", "path_pattern": f"data.zip::set/images/*.{ext}"}]
+        plan = rp.plan_record(rec, OUT)
+        assert plan["status"] == "blocked" and not plan["steps"] and plan["needs"] == ["voxel_size"]
+        assert any("imaging.voxel_size_nm" in n for n in plan["arrays"][0]["notes"])
+        assert any("voxel_size" in w for w in plan["warnings"])
+
+    def test_untrusted_header_with_record_voxel_size_is_planned(self):
+        rec = record()
+        rec["technical"]["sample"]["urls"] = [f"{ZIP}::set/images/a.nii.gz"]
+        rec["technical"]["arrays"] = [{"role": "raw", "format": "nifti", "axes": "zyx", "path_pattern": "data.zip::set/images/*.nii.gz"}]
+        plan = rp.plan_record(rec, OUT)
+        assert "needs" not in plan and plan["steps"][1][ "args"]["voxel_size"] == "8,8,40"
+
+    def test_trusted_header_without_record_voxel_size_is_still_planned_beside_blocked_one(self):
+        rec = record()
+        rec["imaging"]["voxel_size_nm"] = None
+        rec["technical"]["sample"]["urls"].append(f"{ZIP}::set/more/a.nii.gz")
+        rec["technical"]["arrays"].append({"role": "label", "format": "nifti", "path_pattern": "data.zip::set/more/*.nii.gz"})
+        plan = rp.plan_record(rec, OUT)
+        assert plan["status"] == "partial" and plan["needs"] == ["voxel_size"]
+        assert len([1 for t, _ in tools(plan) if t == "convert"]) == 2
+
     def test_missing_z_is_called_out(self):
         rec = record()
         rec["imaging"]["voxel_size_nm"] = {"x": 8.0, "y": 8.0, "z": None}

@@ -20,6 +20,10 @@ CATALOG_REPO = "AI-HHMI/mia-agentic-search"
 IN_SCOPE_DIMENSIONS = ("3D", "3D+t")
 MCP_LIMIT_BYTES = 2 * 1024 ** 3
 CLUSTER_LIMIT_BYTES = 50 * 1024 ** 3
+# Formats whose header does not give a size TensorSwitch can trust (HDF5 has none, BioSR-style MRC files
+# store micrometers in the angstrom field, NIfTI units are unreliable). Without a voxel size in the record
+# the converter refuses these, so the planner does not plan them.
+HEADER_NOT_TRUSTED = {"hdf5", "mrc", "nifti"}
 SHORT_FIRST_AXIS = 10     # TensorSwitch guesses axis names for HDF5; a first dimension this short becomes 'c'
 
 # record array format -> how TensorSwitch can read it
@@ -313,6 +317,11 @@ def plan_record(record: Dict[str, Any], output_dir: str, project: Optional[str] 
         if array.get("alignment") in ("scaled", "offset", "cropped", "transform-provided"):
             notes.append(f"alignment with the raw data is {array['alignment']!r}; the record's voxel size may not "
                          f"apply to this array")
+        if not voxel and fmt in HEADER_NOT_TRUSTED:
+            notes.append(f"the record has no complete voxel size and {fmt} headers are not reliable, so the "
+                         f"converter would refuse; not planned until imaging.voxel_size_nm is filled in")
+            entry["needs"] = "voxel_size"
+            continue
         dataset_path = _split_dataset(array.get("path_pattern") or "", fmt)[1]
         if fmt == "hdf5" and not dataset_path:
             notes.append("HDF5 dataset name is not in the record; inspect the file after fetching and set dataset_path")
@@ -355,9 +364,12 @@ def plan_record(record: Dict[str, Any], output_dir: str, project: Optional[str] 
         entry["fetch"] = None if remote_store else {"spec": spec, "dest_dir": source_dir}
 
     convertible = [a for a in plan["arrays"] if a["convertible"]]
+    needs = sorted({a["needs"] for a in plan["arrays"] if a.get("needs")})
+    if needs:
+        plan["needs"] = needs
     if not convertible:
         plan["status"] = "blocked"
-        warnings.append("no array could be planned")
+        warnings.append("no array could be planned" + (f" (the record must provide: {', '.join(needs)})" if needs else ""))
         return plan
     if len(convertible) < len(plan["arrays"]):
         plan["status"] = "partial"
