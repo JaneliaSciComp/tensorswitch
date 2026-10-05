@@ -10,6 +10,7 @@ file URL or an unsupported format becomes a warning, not a default.
 (local path, GitHub URL or record id).
 """
 
+import copy
 import fnmatch
 import os
 import re
@@ -38,6 +39,9 @@ EXTENSIONS = {
     "nd2": (".nd2",), "png": (".png",), "jpeg": (".jpg", ".jpeg"), "csv": (".csv",), "json": (".json",),
     "zarr": (".zarr",), "ome-zarr": (".zarr",), "n5": (".n5",),
 }
+# words that name a file's role, not the sample it belongs to (dropped when pairing raw with labels)
+_ROLE_WORDS = {"image", "images", "img", "raw", "input", "inputs", "label", "labels", "mask", "masks", "seg",
+               "segmentation", "gt", "groundtruth", "target", "targets", "annotation", "annotations"}
 _GENERIC_TOKENS = {"data", "the", "and", "set", "tif", "tiff", "png", "h5", "hdf5", "mrc", "nii", "gz", "zip",
                    "file", "files", "nnn", "name", "stem", "uid", "id"}
 
@@ -420,4 +424,128 @@ def plan_record(record: Dict[str, Any], output_dir: str, project: Optional[str] 
     if any(n > 1 for n in unnamed.values()):
         warnings.append("several arrays use the same HDF5 file with dataset_path=null, so TensorSwitch would pick "
                         "the same dataset for each: run inspect_dataset on the fetched file and fill them in")
+    return plan
+
+
+# ----------------------------------------------------------------------------- whole dataset
+
+def _zip_url(record: Dict[str, Any]) -> Optional[str]:
+    for spec in (record.get("technical") or {}).get("sample", {}).get("urls") or []:
+        if "::" in spec:
+            return spec.split("::", 1)[0]
+    url = (record.get("data") or {}).get("download_url") or ""
+    return url if urlsplit(url).path.lower().endswith(".zip") else None
+
+
+def _stem_tokens(filename: str) -> Tuple[str, ...]:
+    stem = filename
+    for _ in range(2):
+        stem, ext = os.path.splitext(stem)
+        if ext.lower() not in (".gz", ".tif", ".tiff", ".nii", ".h5", ".hdf5", ".mrc", ".rec", ".zarr", ".n5"):
+            stem += ext
+            break
+    tokens = [t for t in re.split(r"[^a-z0-9]+", stem.lower()) if t]
+    if tokens and re.fullmatch(r"[a-z]\d+", tokens[0]):          # X02 / Y02 -> 02
+        tokens[0] = tokens[0][1:]
+    return tuple(t for t in tokens if t not in _ROLE_WORDS)
+
+
+def _pair_key(member: str) -> Tuple[Tuple[str, ...], Tuple[str, ...]]:
+    """Identity of the sample a file belongs to: its folders and file name without role words."""
+    *folders, filename = member.split("/")
+    kept = tuple(f.lower() for f in folders
+                 if not {t for t in re.split(r"[^a-z0-9]+", f.lower()) if t} <= _ROLE_WORDS)
+    return kept, _stem_tokens(filename)
+
+
+def _safe_name(text: str) -> str:
+    return re.sub(r"[^A-Za-z0-9._-]+", "_", text).strip("_")
+
+
+def plan_dataset(record: Dict[str, Any], output_dir: str, project: Optional[str] = None,
+                 lister=None) -> Dict[str, Any]:
+    """Plan the conversion of every file the record describes, one container per sample.
+
+    The files come from the central directory of the record's zip download. Raw and label
+    files are paired by their folders and file name once role words ("images", "masks",
+    "input", "labels") and a leading X/Y letter are removed; a file with no partner gets its
+    own container and is reported, never guessed. Datasets over 50 GB are skipped and listed.
+    Needs the network (zip listing); ``lister(url)`` can be injected for tests.
+    """
+    if lister is None:
+        from .fetch import list_zip as lister
+    technical = record.get("technical") or {}
+    arrays = technical.get("arrays") or []
+    base = plan_record(record, output_dir, project)
+    plan: Dict[str, Any] = {"record": base["record"], "scope": "dataset", "status": "ready", "samples": [],
+                            "unpaired": [], "skipped": [], "steps": [], "warnings": []}
+    warnings = plan["warnings"]
+    if base["status"] == "blocked" and not arrays:
+        plan["status"], plan["warnings"] = "blocked", base["warnings"]
+        return plan
+    zip_url = _zip_url(record)
+    if not zip_url:
+        plan["status"] = "blocked"
+        warnings.append("whole-dataset planning needs a zip download to list its files; this record has none "
+                        "(the sample-unit plan still works)")
+        return plan
+    try:
+        entries = lister(zip_url)
+    except Exception as err:
+        plan["status"] = "blocked"
+        warnings.append(f"could not list the files of {zip_url}: {err}")
+        return plan
+
+    by_array: Dict[int, Dict[Any, Tuple[str, int]]] = {i: {} for i in range(len(arrays))}
+    for entry in entries:
+        spec = f"{zip_url}::{entry.name}"
+        for index, array in enumerate(arrays):
+            if _match_score(spec, array) == 100:
+                key = _pair_key(entry.name)
+                if key in by_array[index]:
+                    plan["unpaired"].append(f"{entry.name}: same sample key as {by_array[index][key][0]}")
+                else:
+                    by_array[index][key] = (entry.name, entry.size)
+    total = sum(size for members in by_array.values() for _, size in members.values())
+    plan["files"] = {"matched": sum(len(m) for m in by_array.values()), "bytes_uncompressed": total}
+    if total > CLUSTER_LIMIT_BYTES:
+        plan["status"] = "skipped"
+        plan["skipped"].append({"record": record["id"], "bytes": total})
+        warnings.append(f"whole dataset is {_fmt_gb(total)} uncompressed, over 50 GB: skipped")
+        return plan
+    if not total:
+        plan["status"] = "blocked"
+        warnings.append("no file in the zip matches the record's path_pattern entries")
+        return plan
+
+    keys = sorted({k for members in by_array.values() for k in members})
+    shared = os.path.commonprefix([list(k[0]) for k in keys]) if keys else []
+    used = set()
+    for key in keys:
+        members = {i: by_array[i][key] for i in by_array if key in by_array[i]}
+        first = members[min(members)][0]
+        name = _safe_name("_".join(list(key[0][len(shared):]) + [os.path.splitext(os.path.basename(first))[0]]))
+        while name in used:
+            name += "_2"
+        used.add(name)
+        if len(members) < len(arrays):
+            missing = [arrays[i].get("role") for i in range(len(arrays)) if i not in members]
+            plan["unpaired"].append(f"{first}: no {'/'.join(map(str, missing))} partner found")
+        sample = copy.deepcopy(record)
+        sample["id"] = f"{record['id']}_{name}"
+        sample["technical"]["arrays"] = [{k: v for k, v in a.items() if k not in ("shape", "shape_varies")}
+                                         for a in arrays]
+        sample["technical"]["sample"] = {"urls": [f"{zip_url}::{m[0]}" for m in members.values()],
+                                         "size_bytes": sum(m[1] for m in members.values())}
+        sub = plan_record(sample, output_dir, project)
+        plan["samples"].append({"name": name, "files": [m[0] for m in members.values()], "status": sub["status"],
+                                "warnings": sub["warnings"], "container_id": sample["id"]})
+        plan["steps"].extend(sub["steps"])
+        if sub["status"] != "ready":
+            plan["status"] = "partial"
+    if plan["unpaired"]:
+        warnings.append(f"{len(plan['unpaired'])} files have no partner or a clashing key; see 'unpaired'")
+    plan["cleanup"] = os.path.join(output_dir, "source")
+    if not plan["steps"]:
+        plan["status"] = "blocked"
     return plan

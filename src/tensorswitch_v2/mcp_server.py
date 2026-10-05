@@ -1445,7 +1445,7 @@ def fetch_dataset(spec: str, dest_dir: str, max_gb: float = 2.0, background: boo
 # Tool: plan_conversion_from_yaml
 # ---------------------------------------------------------------------------
 @mcp.tool()
-def plan_conversion_from_yaml(record: str, output_dir: str, project: str = "") -> str:
+def plan_conversion_from_yaml(record: str, output_dir: str, project: str = "", whole_dataset: bool = False) -> str:
     """Plan the conversion of a dataset-catalog record (mia-agentic-search YAML).
 
     Reads the record and returns the exact fetch_dataset / convert / submit_job
@@ -1453,20 +1453,26 @@ def plan_conversion_from_yaml(record: str, output_dir: str, project: str = "") -
     settle (missing voxel size, unsupported format, no concrete file URL...).
     Nothing is downloaded or converted: review the plan, then run the steps.
 
-    Only 3D and 3D+t records are planned. Each plan covers the record's sample
-    unit (technical.sample.urls), one raw plus its labels, not the whole dataset.
+    Only 3D and 3D+t records are planned. By default a plan covers the record's
+    sample unit (technical.sample.urls), one raw plus its labels. With
+    whole_dataset=True it covers every file of the record's zip download (listed
+    over the network), one container per sample with raw and labels paired by
+    folder and file name; files without a partner are reported in "unpaired",
+    and datasets over 50 GB are skipped and listed.
 
     Args:
         record: Path to a record .yaml, a GitHub URL of one, or a catalog record id.
         output_dir: Folder for the converted containers. Downloads are staged in
                     <output_dir>/source/ and can be deleted after checking the result.
         project: LSF project, used in the plan when the sample is over 2 GB.
+        whole_dataset: Plan every file of the dataset instead of the sample unit.
     """
     from tensorswitch_v2.utils import record_planner
 
     try:
-        plan = record_planner.plan_record(record_planner.load_record(record.strip()),
-                                          output_dir.strip(), project.strip() or None)
+        loaded = record_planner.load_record(record.strip())
+        planner = record_planner.plan_dataset if whole_dataset else record_planner.plan_record
+        plan = planner(loaded, output_dir.strip(), project.strip() or None)
         return json.dumps(plan, indent=2)
     except record_planner.RecordError as e:
         return json.dumps({"error": "bad_record", "message": str(e)}, indent=2)
