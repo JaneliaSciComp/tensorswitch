@@ -239,6 +239,17 @@ class TestHdf5:
         assert plan["status"] == "ready" and not any("dataset_path=null" in w for w in plan["warnings"])
 
 
+    def test_2d_array_in_a_3d_record_gets_a_note(self):
+        rec = record()
+        rec["technical"]["arrays"][0]["axes"] = "yx"
+        notes = [n for a in rp.plan_record(rec, OUT)["arrays"] for n in a["notes"]]
+        assert any("described as 2D" in n for n in notes)
+
+    def test_3d_array_in_a_3d_record_has_no_dimension_note(self):
+        notes = [n for a in rp.plan_record(record(), OUT)["arrays"] for n in a["notes"]]
+        assert not any("described as 2D" in n for n in notes)
+
+
 class TestUnconvertible:
     def one(self, fmt, role="raw", pattern="data.zip::set/images/*.tif", url=f"{ZIP}::set/images/a.tif"):
         rec = record()

@@ -310,6 +310,10 @@ def plan_record(record: Dict[str, Any], output_dir: str, project: Optional[str] 
             continue
         if array.get("shape_varies"):
             notes.append("shape varies between files; only the sample file is planned")
+        axes, shape = array.get("axes"), array.get("shape")
+        if role in ("raw", "label", "target") and ((axes and "z" not in axes.lower()) or (shape and len(shape) == 2)):
+            notes.append(f"the record is {dimensionality} but this array is described as 2D "
+                         f"(axes {axes!r}, shape {shape}); the sample file is probably a single slice, not a volume")
         if array.get("axes") and array["axes"] not in ("zyx", "czyx", "tzyx", "tczyx"):
             notes.append(f"axes {array['axes']!r} are unusual; check the output axes after converting")
         if role == "label" and (array.get("dtype") or "").startswith("float"):
