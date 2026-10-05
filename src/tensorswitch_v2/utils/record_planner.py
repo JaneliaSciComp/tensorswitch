@@ -324,7 +324,8 @@ def plan_record(record: Dict[str, Any], output_dir: str, project: Optional[str] 
             continue
         dataset_path = _split_dataset(array.get("path_pattern") or "", fmt)[1]
         if fmt == "hdf5" and not dataset_path:
-            notes.append("HDF5 dataset name is not in the record; inspect the file after fetching and set dataset_path")
+            notes.append("HDF5 dataset name is not in the record; TensorSwitch picks the main dataset itself "
+                         "(a common name such as 'raw' or 'volume', else the largest)")
         entry["convertible"] = True
 
         # which container does this array go to?
@@ -404,6 +405,11 @@ def plan_record(record: Dict[str, Any], output_dir: str, project: Optional[str] 
         if labels:
             verify_args["labels"] = ";".join(f"{a['label_key']}={_label_source(a)}" for a in labels)
         plan["steps"].append({"tool": "verify_output", "args": verify_args})
-    if any(a["format"] == "hdf5" and a["convert_args"].get("dataset_path") is None for a in ordered):
-        warnings.append("some HDF5 steps have dataset_path=null: run inspect_dataset on the fetched file and fill it in")
+    unnamed: Dict[str, int] = {}
+    for a in ordered:
+        if a["format"] == "hdf5" and a["convert_args"].get("dataset_path") is None:
+            unnamed[a["convert_args"]["input_path"]] = unnamed.get(a["convert_args"]["input_path"], 0) + 1
+    if any(n > 1 for n in unnamed.values()):
+        warnings.append("several arrays use the same HDF5 file with dataset_path=null, so TensorSwitch would pick "
+                        "the same dataset for each: run inspect_dataset on the fetched file and fill them in")
     return plan

@@ -231,6 +231,14 @@ class TestHdf5:
         assert any("dataset_path=null" in w for w in plan["warnings"])
 
 
+    def test_single_array_without_dataset_name_does_not_warn(self):
+        rec = record()
+        rec["technical"]["sample"]["urls"] = ["https://zenodo.org/records/3/files/n.zip::n/a.h5"]
+        rec["technical"]["arrays"] = [{"role": "raw", "format": "hdf5", "path_pattern": "n.zip::n/*.h5"}]
+        plan = rp.plan_record(rec, OUT)
+        assert plan["status"] == "ready" and not any("dataset_path=null" in w for w in plan["warnings"])
+
+
 class TestUnconvertible:
     def one(self, fmt, role="raw", pattern="data.zip::set/images/*.tif", url=f"{ZIP}::set/images/a.tif"):
         rec = record()

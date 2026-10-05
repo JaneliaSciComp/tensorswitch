@@ -49,6 +49,10 @@ def _relevant(notes: list, voxel_size: str) -> list:
     return [n for n in notes if not (voxel_size and n.startswith(_PLACEHOLDER_VOXEL_NOTE))]
 
 
+# Messages from libraries that are harmless for a conversion and only distract the caller.
+_BENIGN_NOTES = ("Casting invalid PixelsID",)
+
+
 @contextlib.contextmanager
 def _quiet_capture():
     """Silence stdout (it carries the JSON-RPC stream) and collect what the code warns about.
@@ -67,7 +71,7 @@ def _quiet_capture():
         found = [str(w.message).strip() for w in caught if issubclass(w.category, UserWarning)]
         found += [line.strip() for line in err.getvalue().splitlines() if line.strip().startswith("WARNING")]
         for message in found:
-            if message and message not in notes:
+            if message and message not in notes and not any(b in message for b in _BENIGN_NOTES):
                 notes.append(message)
 
 
