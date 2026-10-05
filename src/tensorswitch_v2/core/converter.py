@@ -63,9 +63,12 @@ class DistributedConverter:
         import warnings
 
         try:
-            if not self.reader.has_voxel_metadata():
-                return
-            header_nm = self.reader.get_voxel_sizes()
+            # The caller gave a voxel size, so "the source has none" is not worth a warning here.
+            with warnings.catch_warnings():
+                warnings.filterwarnings("ignore", message="No voxel size found")
+                if not self.reader.has_voxel_metadata():
+                    return
+                header_nm = self.reader.get_voxel_sizes()
         except Exception:
             return
 

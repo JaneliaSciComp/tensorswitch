@@ -153,3 +153,21 @@ class TestConverterUsesContract:
             voxel_size_override={"x": 10.0, "y": 10.0, "z": 20.0}, voxel_unit="nanometer",
         )
         assert os.path.exists(out)
+
+
+def test_explicit_voxel_size_does_not_trigger_the_no_voxel_size_warning(tmp_path):
+    import contextlib
+    import io
+    import warnings
+
+    import numpy as np
+    import tifffile
+
+    from tensorswitch_v2.__main__ import main as cli_main
+
+    src = tmp_path / "bare.tif"
+    tifffile.imwrite(str(src), np.zeros((4, 16, 16), "uint8"), metadata={"axes": "ZYX"})
+    with warnings.catch_warnings(record=True) as caught, contextlib.redirect_stdout(io.StringIO()):
+        warnings.simplefilter("always")
+        cli_main(["-i", str(src), "-o", str(tmp_path / "o.zarr"), "--voxel_size", "8,8,40", "--quiet"])
+    assert not [w for w in caught if "No voxel size found" in str(w.message)]
