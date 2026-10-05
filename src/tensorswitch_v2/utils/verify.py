@@ -326,6 +326,7 @@ def verify_output(output: str, source: Optional[str] = None, expected: Optional[
         elif not os.path.exists(path):
             _check(checks, name, "unverified", f"source is no longer available: {path}")
         else:
+            reader = None
             try:
                 from ..api import Readers
 
@@ -337,6 +338,12 @@ def verify_output(output: str, source: Optional[str] = None, expected: Optional[
                 _check(checks, name, result["status"], result["detail"])
             except Exception as err:
                 _check(checks, name, "unverified", f"source could not be read ({type(err).__name__}: {str(err)[:80]})")
+            finally:
+                # readers keep the source file open until collected; a caller that deletes the
+                # source next (e.g. on NFS) would otherwise leave a hidden placeholder file behind
+                reader = result = None
+                import gc
+                gc.collect()
 
     # group ownership
     group = expected.get("group")

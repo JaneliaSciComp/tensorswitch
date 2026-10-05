@@ -57,6 +57,26 @@ def verify(container, data, **expected):
     return v.verify_output(container, data["raw_path"], expected)
 
 
+def _open_files(*paths):
+    wanted = {os.path.realpath(p) for p in paths}
+    fds = os.listdir("/proc/self/fd")
+    found = []
+    for fd in fds:
+        try:
+            target = os.path.realpath(os.readlink(f"/proc/self/fd/{fd}"))
+        except OSError:
+            continue
+        if target in wanted:
+            found.append(target)
+    return found
+
+
+@pytest.mark.skipif(not os.path.isdir("/proc/self/fd"), reason="needs /proc")
+def test_source_files_are_not_left_open(container, data):
+    verify(container, data)
+    assert _open_files(data["raw_path"], data["lab_path"]) == []
+
+
 class TestGoodConversion:
     def test_passes_and_every_check_ran(self, container, data):
         report = verify(container, data)
