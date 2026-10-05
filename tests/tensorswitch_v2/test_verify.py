@@ -77,6 +77,64 @@ def test_source_files_are_not_left_open(container, data):
     assert _open_files(data["raw_path"], data["lab_path"]) == []
 
 
+def _edit_json(path, change):
+    with open(path) as handle:
+        doc = json.load(handle)
+    change(doc)
+    with open(path, "w") as handle:
+        json.dump(doc, handle)
+
+
+class TestMetadataHygiene:
+    def test_clean_container_passes_both_checks(self, container, data):
+        report = verify(container, data)
+        assert status(report, "levels_listed") == "pass" and status(report, "no_zarr2_files") == "pass"
+
+    def test_level_on_disk_but_not_listed_fails(self, container, data):
+        shutil.copytree(os.path.join(container, "raw", "s0"), os.path.join(container, "raw", "s1"))
+        report = verify(container, data)
+        assert status(report, "levels_listed") == "fail"
+        detail = next(c["detail"] for c in report["checks"] if c["name"] == "levels_listed")
+        assert "raw: levels ['s1'] exist but are not listed" in detail
+
+    def test_stale_root_is_caught_even_when_the_group_is_right(self, container, data):
+        shutil.copytree(os.path.join(container, "raw", "s0"), os.path.join(container, "raw", "s1"))
+        _edit_json(os.path.join(container, "raw", "zarr.json"), lambda d: d["attributes"]["ome"]["multiscales"][0]
+                   ["datasets"].append({"path": "s1", "coordinateTransformations": [{"type": "scale", "scale": [80, 146, 146]}]}))
+        detail = next(c["detail"] for c in verify(container, data)["checks"] if c["name"] == "levels_listed")
+        assert "root zarr.json lists ['s0'] for 'raw' but the folder has ['s0', 's1']" in detail
+
+    def test_listed_level_missing_on_disk_fails(self, container, data):
+        _edit_json(os.path.join(container, "raw", "zarr.json"), lambda d: d["attributes"]["ome"]["multiscales"][0]
+                   ["datasets"].append({"path": "s1", "coordinateTransformations": [{"type": "scale", "scale": [80, 146, 146]}]}))
+        detail = next(c["detail"] for c in verify(container, data)["checks"] if c["name"] == "levels_listed")
+        assert "listed but missing on disk" in detail
+
+    @pytest.mark.parametrize("name", [".zgroup", ".zattrs"])
+    def test_zarr2_file_in_a_zarr3_container_fails(self, container, data, name):
+        open(os.path.join(container, "raw", name), "w").write("{}")
+        report = verify(container, data)
+        assert status(report, "no_zarr2_files") == "fail" and report["overall"] == "fail"
+
+
+    def test_root_listing_a_label_only_container_is_understood(self, tmp_path):
+        out = tmp_path / "labels_only.zarr"
+        (out / "labels" / "seg" / "s0").mkdir(parents=True)
+        (out / "labels" / "seg" / "s1").mkdir()
+        (out / "labels" / "seg" / "zarr.json").write_text(json.dumps({"attributes": {"ome": {"multiscales": [{"datasets": [
+            {"path": "s0"}, {"path": "s1"}]}]}}}))
+        (out / "zarr.json").write_text(json.dumps({"attributes": {"ome": {"multiscales": [{"datasets": [
+            {"path": "labels/seg/s0"}, {"path": "labels/seg/s1"}]}]}}}))
+        checks = []
+        v._check_listed_levels(checks, str(out), [("labels/seg", str(out / "labels" / "seg"))])
+        assert checks[0]["status"] == "pass", checks
+        (out / "labels" / "seg" / "s2").mkdir()
+        _edit_json(str(out / "labels" / "seg" / "zarr.json"), lambda d: d["attributes"]["ome"]["multiscales"][0]["datasets"].append({"path": "s2"}))
+        checks = []
+        v._check_listed_levels(checks, str(out), [("labels/seg", str(out / "labels" / "seg"))])
+        assert checks[0]["status"] == "fail" and "root zarr.json lists ['s0', 's1'] for 'labels/seg'" in checks[0]["detail"]
+
+
 class TestGoodConversion:
     def test_passes_and_every_check_ran(self, container, data):
         report = verify(container, data)

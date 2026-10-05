@@ -17,6 +17,7 @@ Nothing is ever deleted or modified, except writing ``verification.json`` into t
 import json
 import math
 import os
+import re
 import time
 from typing import Any, Dict, List, Optional
 
@@ -198,6 +199,54 @@ def _version() -> str:
         return "unknown"
 
 
+def _levels_on_disk(group_dir: str) -> set:
+    return {n for n in os.listdir(group_dir) if re.fullmatch(r"s\d+", n) and os.path.isdir(os.path.join(group_dir, n))}
+
+
+def _check_listed_levels(checks: list, output: str, groups: list):
+    """Every resolution level on disk is listed in its group's metadata, and in the root's for the image groups.
+
+    A pyramid can be written in full while the metadata still lists fewer levels (a viewer then shows only those),
+    most often in the root zarr.json when several pyramid jobs ran at the same time.
+    """
+    problems = []
+    for label, group in groups:
+        ms = _multiscale(group)
+        on_disk = _levels_on_disk(group)
+        listed = {ds["path"] for ds in ms["datasets"]}
+        if on_disk - listed:
+            problems.append(f"{label}: levels {sorted(on_disk - listed)} exist but are not listed in its zarr.json")
+        if listed - on_disk:
+            problems.append(f"{label}: levels {sorted(listed - on_disk)} are listed but missing on disk")
+    root = _multiscale(output)
+    if root:
+        by_group: Dict[str, set] = {}
+        for ds in root["datasets"]:
+            head, _, level = ds["path"].rpartition("/")
+            by_group.setdefault(head, set()).add(level)
+        for head, listed in by_group.items():
+            group = os.path.join(output, head) if head else output
+            if not os.path.isdir(group):
+                problems.append(f"root zarr.json lists '{head}', which does not exist")
+                continue
+            on_disk = _levels_on_disk(group)
+            if on_disk != listed:
+                problems.append(f"root zarr.json lists {sorted(listed)} for '{head or '.'}' but the folder has "
+                                f"{sorted(on_disk)}")
+    _check(checks, "levels_listed", "fail" if problems else "pass",
+           "; ".join(problems) if problems else "every level on disk is listed in its metadata and in the root")
+
+
+def _check_zarr2_leftovers(checks: list, output: str):
+    """A zarr3 container should not hold zarr2 metadata files (.zgroup, .zattrs, .zarray)."""
+    if not os.path.exists(os.path.join(output, "zarr.json")):
+        return
+    found = sorted(os.path.relpath(os.path.join(d, n), output)
+                   for d, dirs, files in os.walk(output) for n in files if n in (".zgroup", ".zattrs", ".zarray"))
+    _check(checks, "no_zarr2_files", "fail" if found else "pass",
+           f"zarr2 metadata inside a zarr3 container: {found[:3]}" if found else "no zarr2 metadata files")
+
+
 def verify_output(output: str, source: Optional[str] = None, expected: Optional[Dict[str, Any]] = None,
                   samples: int = 5, write_report: bool = True) -> Dict[str, Any]:
     """Verify a converted container. See the module docstring for the meaning of the results.
@@ -267,6 +316,9 @@ def verify_output(output: str, source: Optional[str] = None, expected: Optional[
                             issues.append(f"level {path} axis {axis}: shape {int(store.shape[d])}, expected about {want}")
         _check(checks, f"levels:{label}", "fail" if issues else "pass",
                "; ".join(issues) if issues else f"{len(ms['datasets'])} level(s), consistent")
+
+    _check_listed_levels(checks, output, all_groups)
+    _check_zarr2_leftovers(checks, output)
 
     # metadata
     want_voxel = _parse_voxel(expected.get("voxel_size"))
