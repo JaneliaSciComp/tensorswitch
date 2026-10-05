@@ -241,7 +241,9 @@ pixi run python -m tensorswitch_v2 -i input.tif -o output.zarr \
 |----------|-------------|
 | `--preset webknossos` | WebKnossos-optimized settings: zarr3, chunk 32x32x32, shard 1024x1024x1024, zstd |
 | `--preset paintera` | Paintera-ready settings: n5, xyz axis order, gzip, chunk 64x64x64. Use with `--output_format zarr2` for zyx Zarr2 output. Output is consumed by [paintera-conversion-helper](https://github.com/saalfeldlab/paintera-conversion-helper) to produce Paintera-native format. |
-| `--preset miaai` (alias `mia_lmvd`) | MIAAI Large Microscopy Volume Dataset settings: zarr3, chunk 128x128x128, shard 512x512x512, zstd-5, C-order. Axis order preserved from source (RFC-3: t,c,z,y,x or z,y,x for 3D). Dtype and voxel size preserved from source unless explicitly overridden with `--dtype` or `--voxel_size`. |
+| `--preset miaai` (alias `mia_lmvd`) | MIAAI Large Microscopy Volume Dataset settings: zarr3, chunk 128x128x128, shard 512x512x512, zstd-5, C-order. Axis order preserved from source (RFC-3: t,c,z,y,x or z,y,x for 3D). The preset also drops the TensorSwitch-generated `name` from every multiscales block and adds an outer `coordinateTransformations`, in the root, `raw/` and each label, and keeps them through pyramids (a marker `tensorswitch.preset` in the root `zarr.json` lets later pyramid jobs apply them). `python -m tensorswitch_v2.utils.miaai_metadata <container>` applies them to an existing zarr3 container. Dtype and voxel size preserved from source unless explicitly overridden with `--dtype` or `--voxel_size`. |
+| `--expansion_factor N` | Expansion microscopy factor. With `--preset miaai` the outer `coordinateTransformations` of every multiscales block become `1/N` on the spatial axes (otherwise identity). |
+| `--extra_attributes JSON` | A JSON file, or an inline JSON object, of extra attributes added to the `zarr.json` of the group this conversion writes (`raw/`, or `labels/<name>/` with `--add-to-existing`). `ome`, `_software` and `tensorswitch` cannot be set. Zarr3 only. Inline JSON is written to a file for cluster jobs. |
 
 ```bash
 # Example: Convert for WebKnossos viewing
