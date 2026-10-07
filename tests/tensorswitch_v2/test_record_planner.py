@@ -268,6 +268,15 @@ class TestTiffAxes:
         convert = [a for t, a in tools(self.one(axes="zyxc", shape=[5, 6, 7, 3])) if t == "convert"][0]
         assert convert["input_axes"] == "zyxc"
 
+    def test_verify_step_carries_the_same_axes(self):
+        rec = record()
+        rec["technical"]["sample"]["urls"] = [f"{ZIP}::set/images/a.tif", f"{ZIP}::set/masks/a.tif"]
+        rec["technical"]["arrays"] = [
+            {"role": "raw", "format": "tiff", "axes": "zyxc", "path_pattern": "data.zip::set/images/*.tif"},
+            {"role": "label", "format": "tiff", "axes": "yxz", "alignment": "same-grid", "path_pattern": "data.zip::set/masks/*.tif"}]
+        verify = [a for t, a in tools(rp.plan_record(rec, OUT)) if t == "verify_output"][0]
+        assert verify["input_axes"] == "zyxc" and verify["label_input_axes"] == "segmentation=yxz"
+
     def test_tiff_without_axes_is_held_back_and_says_why(self):
         plan = self.one()
         assert plan["status"] == "blocked" and plan["steps"] == [] and plan["needs"] == ["axes"]

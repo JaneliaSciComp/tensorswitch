@@ -110,12 +110,21 @@ def _slab_indices(n: int, samples: int) -> List[int]:
     return sorted(chosen)
 
 
+def _clean_names(labels) -> Optional[List[str]]:
+    """Axis names from a TensorStore domain, lowercased; None when any is missing or repeated."""
+    names = [str(n).lower().replace("channel", "c") for n in labels or []]
+    return names if names and all(names) and len(set(names)) == len(names) else None
+
+
 def compare_with_source(out_store, src_store, bbox=None, bbox_axes=None, samples: int = 5,
-                        full_bytes: int = FULL_COMPARE_BYTES) -> Dict[str, Any]:
+                        full_bytes: int = FULL_COMPARE_BYTES, src_names=None, out_names=None) -> Dict[str, Any]:
     """Is the written array identical to the source (optionally inside a bbox)?
 
     Returns {'status': 'pass'|'fail'|'unverified', 'detail': str, 'mode': 'full'|'sampled'}.
-    Only dimensions of length 1 may differ between the two (squeezed axes).
+    With ``src_names`` and ``out_names`` (axis names of the source and the output) the arrays are matched
+    axis by axis by name, so a source whose axes were renamed or reordered (non-spatial axes moved first)
+    can be compared; axes present on one side only must have length 1. Without names the axes are matched
+    by position and length, and only dimensions of length 1 may differ (squeezed axes).
     """
     src_shape, out_shape = [int(n) for n in src_store.shape], [int(n) for n in out_store.shape]
     origin = [0] * len(src_shape)
@@ -128,17 +137,33 @@ def compare_with_source(out_store, src_store, bbox=None, bbox_axes=None, samples
         for i, o, n in zip(covered, b_origin, b_size):
             origin[i], region[i] = int(o), int(n)
 
-    src_axes = [i for i, n in enumerate(region) if n != 1]
-    out_axes = [i for i, n in enumerate(out_shape) if n != 1]
-    if [region[i] for i in src_axes] != [out_shape[i] for i in out_axes]:
-        return {"status": "unverified", "mode": None,
-                "detail": f"cannot map the source region {tuple(region)} onto the output {tuple(out_shape)} "
-                          f"(axes reordered or resized?)"}
+    by_name = bool(src_names and out_names and len(src_names) == len(src_shape)
+                   and len(out_names) == len(out_shape)
+                   and len(set(src_names)) == len(src_names) and len(set(out_names)) == len(out_names))
+    if by_name:
+        common = [n for n in out_names if n in src_names]
+        extra = [(n, region[src_names.index(n)]) for n in src_names if n not in out_names] + \
+                [(n, out_shape[out_names.index(n)]) for n in out_names if n not in src_names]
+        bad_extra = [n for n, size in extra if size != 1]
+        if not common or bad_extra or any(region[src_names.index(n)] != out_shape[out_names.index(n)] for n in common):
+            return {"status": "unverified", "mode": None,
+                    "detail": f"cannot match the source axes {src_names} {tuple(region)} to the output axes "
+                              f"{out_names} {tuple(out_shape)} by name"}
+        slab_name = next((n for n in common if out_shape[out_names.index(n)] != 1), common[0])
+        s_ax, o_ax = src_names.index(slab_name), out_names.index(slab_name)
+    else:
+        src_axes = [i for i, n in enumerate(region) if n != 1]
+        out_axes = [i for i, n in enumerate(out_shape) if n != 1]
+        if [region[i] for i in src_axes] != [out_shape[i] for i in out_axes]:
+            return {"status": "unverified", "mode": None,
+                    "detail": f"cannot map the source region {tuple(region)} onto the output {tuple(out_shape)} "
+                              f"(axes reordered or resized?)"}
+        if not src_axes:                      # a single value
+            src_axes, out_axes = [0], [0]
+        s_ax, o_ax = src_axes[0], out_axes[0]
     if np.dtype(src_store.dtype.numpy_dtype) != np.dtype(out_store.dtype.numpy_dtype):
         return {"status": "fail", "mode": None,
                 "detail": f"dtype changed: source {src_store.dtype.numpy_dtype}, output {out_store.dtype.numpy_dtype}"}
-    if not src_axes:                      # a single value
-        src_axes, out_axes = [0], [0]
 
     def read(store, axis, lo, hi, base):
         index = []
@@ -149,9 +174,20 @@ def compare_with_source(out_store, src_store, bbox=None, bbox_axes=None, samples
                 index.append(slice(origin[d], origin[d] + region[d]))
             else:
                 index.append(slice(0, int(n)))
-        return np.squeeze(np.asarray(store[tuple(index)].read().result()))
+        return np.asarray(store[tuple(index)].read().result())
 
-    s_ax, o_ax = src_axes[0], out_axes[0]
+    def aligned(a, b):
+        """Source slab and output slab with the same axes in the same order (by name, or squeezed)."""
+        if by_name:
+            drop_a = tuple(i for i, n in enumerate(src_names) if n not in common)
+            drop_b = tuple(i for i, n in enumerate(out_names) if n not in common)
+            a = np.squeeze(a, axis=drop_a) if drop_a else a
+            b = np.squeeze(b, axis=drop_b) if drop_b else b
+            kept_src = [n for n in src_names if n in common]
+            kept_out = [n for n in out_names if n in common]
+            return np.transpose(a, [kept_src.index(n) for n in kept_out]), b
+        return np.squeeze(a), np.squeeze(b)
+
     n = region[s_ax]
     itemsize = np.dtype(out_store.dtype.numpy_dtype).itemsize
     total = int(np.prod(region)) * itemsize
@@ -164,18 +200,17 @@ def compare_with_source(out_store, src_store, bbox=None, bbox_axes=None, samples
 
     zero = [0] * len(out_shape)
     for lo, hi in spans:
-        a = read(src_store, s_ax, lo, hi, origin)   # source slab sits at the bbox origin
-        b = read(out_store, o_ax, lo, hi, zero)
+        a, b = aligned(read(src_store, s_ax, lo, hi, origin),     # source slab sits at the bbox origin
+                       read(out_store, o_ax, lo, hi, zero))
         if a.shape != b.shape or not np.array_equal(a, b):
             differing = np.argwhere(a != b)[:1].tolist() if a.shape == b.shape else "shape"
             return {"status": "fail", "mode": mode,
                     "detail": f"output differs from the source in slab {lo}:{hi} along axis {o_ax} "
                               f"(first differing position {differing})"}
     where = "the whole array" if mode == "full" else f"{len(spans)} slices ({', '.join(str(s[0]) for s in spans)})"
-    return {"status": "pass", "mode": mode, "detail": f"identical to the source in {where}"}
+    how = " (axes matched by name)" if by_name else ""
+    return {"status": "pass", "mode": mode, "detail": f"identical to the source in {where}{how}"}
 
-
-# ----------------------------------------------------------------------------- the report
 
 def _check(checks: list, name: str, status: str, detail: str):
     checks.append({"name": name, "status": status, "detail": detail})
@@ -258,7 +293,8 @@ def verify_output(output: str, source: Optional[str] = None, expected: Optional[
         expected: optional dict with ``voxel_size`` ("x,y,z" or {x,y,z} in nm), ``labels``
             ({name: source file}), ``bbox`` ("origin..,size.."), ``bbox_axes``, ``dataset_path``
             (HDF5 source), ``output_dtype`` (values intentionally cast), ``group`` (Unix group
-            the files should have), ``image_key``.
+            the files should have), ``image_key``, ``input_axes`` (axis names of the image source, one letter
+            per axis, as passed to the conversion) and ``label_input_axes`` ({label name: axes}).
         samples: slices compared when the array is too big to compare whole.
         write_report: write ``verification.json`` into the container.
     """
@@ -291,6 +327,7 @@ def verify_output(output: str, source: Optional[str] = None, expected: Optional[
     all_groups = [(n, os.path.join(output, n)) for n in layers["images"]] + \
                  [(f"labels/{n}", os.path.join(output, "labels", n)) for n in layers["labels"]]
     stores: Dict[str, Any] = {}
+    out_names: Dict[str, List[str]] = {}
     for label, group in all_groups:
         ms = _multiscale(group)
         issues, shapes = [], []
@@ -302,6 +339,7 @@ def verify_output(output: str, source: Optional[str] = None, expected: Optional[
                 issues.append(f"level {ds['path']} does not open ({type(err).__name__})")
         if shapes:
             stores[label] = shapes[0][1]
+            out_names[label] = [str(a["name"]).lower() for a in ms["axes"]]
             base = [int(n) for n in shapes[0][1].shape]
             base_scale = _voxel_nm(ms, 0)
             axes = [a["name"].lower() for a in ms["axes"]]
@@ -385,15 +423,31 @@ def verify_output(output: str, source: Optional[str] = None, expected: Optional[
                 reader = (Readers.hdf5(path, dataset_path=dataset)
                           if dataset and path.lower().endswith((".h5", ".hdf5", ".hdf", ".he5"))
                           else Readers.auto_detect(path))
-                result = compare_with_source(out_store, reader.get_tensorstore(), bbox=bbox,
-                                             bbox_axes=bbox_axes, samples=samples)
+                src_store = reader.get_tensorstore()
+                given = expected.get("input_axes") if label == image_key else \
+                    (expected.get("label_input_axes") or {}).get(label.split("/", 1)[-1])
+                src_names = _clean_names(src_store.domain.labels)
+                if given:
+                    given = str(given).strip().lower()
+                    if len(given) != len(src_store.shape):
+                        raise ValueError(f"input_axes {given!r} names {len(given)} axes but the source has "
+                                         f"{len(src_store.shape)}")
+                    src_names = list(given)
+                result = compare_with_source(out_store, src_store, bbox=bbox, bbox_axes=bbox_axes, samples=samples,
+                                             src_names=src_names, out_names=out_names.get(label))
+                if result["status"] == "unverified" and src_names:
+                    # names did not line up (for instance the output was relabeled and verify was not told):
+                    # try the old match by position and length before giving up
+                    plain = compare_with_source(out_store, src_store, bbox=bbox, bbox_axes=bbox_axes, samples=samples)
+                    if plain["status"] != "unverified":
+                        result = plain
                 _check(checks, name, result["status"], result["detail"])
             except Exception as err:
                 _check(checks, name, "unverified", f"source could not be read ({type(err).__name__}: {str(err)[:80]})")
             finally:
                 # readers keep the source file open until collected; a caller that deletes the
                 # source next (e.g. on NFS) would otherwise leave a hidden placeholder file behind
-                reader = result = None
+                reader = result = src_store = None
                 import gc
                 gc.collect()
 

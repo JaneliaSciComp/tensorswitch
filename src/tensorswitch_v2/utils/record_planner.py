@@ -442,8 +442,13 @@ def plan_record(record: Dict[str, Any], output_dir: str, project: Optional[str] 
             verify_args["dataset_path"] = images[0]["dataset_path"]
         if members and members[0].get("voxel_size"):
             verify_args["voxel_size"] = members[0]["voxel_size"]
+        if images and images[0].get("input_axes"):
+            verify_args["input_axes"] = images[0]["input_axes"]
         if labels:
             verify_args["labels"] = ";".join(f"{a['label_key']}={_label_source(a)}" for a in labels)
+            label_axes = ";".join(f"{a['label_key']}={a['input_axes']}" for a in labels if a.get("input_axes"))
+            if label_axes:
+                verify_args["label_input_axes"] = label_axes
         plan["steps"].append({"tool": "verify_output", "args": verify_args})
     unnamed: Dict[str, int] = {}
     for a in ordered:

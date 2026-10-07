@@ -1521,6 +1521,8 @@ def verify_output(
     group: str = "",
     image_key: str = "raw",
     samples: int = 5,
+    input_axes: str = "",
+    label_input_axes: str = "",
 ) -> str:
     """Check a converted OME-Zarr container, above all against the data it came from.
 
@@ -1548,6 +1550,9 @@ def verify_output(
         group: Unix group the files should belong to.
         image_key: Name of the image group (default "raw"); empty if the container holds labels only.
         samples: Slices compared when the array is too big to compare whole.
+        input_axes: The input_axes used for the image conversion (e.g. "zyxc"), so source and output axes are
+                    matched by name. Axes are matched by name anyway when the source states them.
+        label_input_axes: The same for labels, "name=axes;name2=axes2" (e.g. "segmentation=yxz").
     """
     import contextlib
     import io
@@ -1565,6 +1570,17 @@ def verify_output(
         expected = {k: v for k, v in {
             "voxel_size": voxel_size, "labels": label_map, "bbox": bbox, "bbox_axes": bbox_axes,
             "dataset_path": dataset_path, "output_dtype": output_dtype, "group": group}.items() if v}
+        label_axes = {}
+        for item in filter(None, (t.strip() for t in label_input_axes.split(";"))):
+            name, _, axes = item.partition("=")
+            if not axes:
+                return json.dumps({"error": "validation_error",
+                                   "message": f"label_input_axes must look like 'name=axes;...', got {item!r}"}, indent=2)
+            label_axes[name.strip()] = axes.strip()
+        if input_axes.strip():
+            expected["input_axes"] = input_axes.strip()
+        if label_axes:
+            expected["label_input_axes"] = label_axes
         expected["image_key"] = image_key.strip()        # empty: the container has labels only
         with contextlib.redirect_stdout(io.StringIO()):
             report = _verify(output_path.strip(), source_path.strip() or None, expected, samples=samples)

@@ -282,9 +282,56 @@ class TestMappings:
         convert(src, out, "--squeeze_singleton_axes")
         assert status(v.verify_output(out, src, {"voxel_size": VOX}), "identity:raw") == "pass"
 
-    def test_unmappable_shapes_are_unverified_not_failed(self, temp_dir, data):
+    def test_a_reordered_output_is_matched_by_axis_name(self, temp_dir, data):
         out = os.path.join(temp_dir, "ax.zarr")
         convert(data["raw_path"], out, "--axes_order", "xyz")
+        report = v.verify_output(out, data["raw_path"], {"voxel_size": VOX})
+        detail = next(c["detail"] for c in report["checks"] if c["name"] == "identity:raw")
+        assert status(report, "identity:raw") == "pass" and "matched by name" in detail
+
+    def test_changed_data_still_fails_when_matched_by_name(self, data):
+        import tensorstore as ts
+        from tensorswitch_v2.utils.verify import compare_with_source
+        src = ts.array(data["raw"])                                   # z,y,x
+        good = np.transpose(data["raw"], (2, 1, 0)).copy()            # the same data as x,y,z
+        assert compare_with_source(ts.array(good), src, src_names=["z", "y", "x"],
+                                   out_names=["x", "y", "z"])["status"] == "pass"
+        bad = good.copy()
+        bad[3, 4, 5] = bad[3, 4, 5] + 1
+        assert compare_with_source(ts.array(bad), src, src_names=["z", "y", "x"],
+                                   out_names=["x", "y", "z"])["status"] == "fail"
+
+    def test_names_that_do_not_match_are_unverified_not_guessed(self, data):
+        import tensorstore as ts
+        from tensorswitch_v2.utils.verify import compare_with_source
+        src = ts.array(data["raw"])
+        out = ts.array(data["raw"].copy())
+        result = compare_with_source(out, src, src_names=["z", "y", "x"], out_names=["a", "b", "c"])
+        assert result["status"] == "unverified" and "by name" in result["detail"]
+
+    def test_renamed_and_reordered_source_axes_with_input_axes(self, temp_dir):
+        arr = np.random.default_rng(8).integers(1, 250, (6, 16, 20, 3), dtype=np.uint8)
+        src = os.path.join(temp_dir, "pages.tif")
+        tifffile.imwrite(src, arr, photometric="rgb", shaped=False)         # the reader calls the axes i,y,x,s
+        out = os.path.join(temp_dir, "o.zarr")
+        convert(src, out, "--input_axes", "zyxc")                           # output is c,z,y,x
+        without = v.verify_output(out, src, {"voxel_size": VOX})
+        assert status(without, "identity:raw") == "unverified"             # names i,s vs z,c: cannot be matched
+        with_axes = v.verify_output(out, src, {"voxel_size": VOX, "input_axes": "zyxc"})
+        assert status(with_axes, "identity:raw") == "pass" and with_axes["overall"] == "pass"
+
+    def test_wrong_input_axes_length_is_unverified(self, temp_dir):
+        arr = np.random.default_rng(9).integers(1, 250, (6, 16, 20), dtype=np.uint8)
+        src = os.path.join(temp_dir, "v.tif")
+        tifffile.imwrite(src, arr)
+        out = os.path.join(temp_dir, "v.zarr")
+        convert(src, out)
+        report = v.verify_output(out, src, {"voxel_size": VOX, "input_axes": "zyxc"})
+        assert status(report, "identity:raw") == "unverified"
+
+    def test_unmappable_shapes_are_unverified_not_failed(self, temp_dir, data):
+        out = os.path.join(temp_dir, "crop.zarr")
+        convert(data["raw_path"], out, "--bbox", "0,0,0,4,8,8")
         report = v.verify_output(out, data["raw_path"], {"voxel_size": VOX})
         assert status(report, "identity:raw") == "unverified"
 
@@ -388,3 +435,28 @@ class TestLabelSourceDataset:
         convert(data["lab_path"], out, "--is_label", "--label-key", "seg")
         report = v.verify_output(out, None, {"voxel_size": VOX, "image_key": "", "labels": {"seg": data["lab_path"]}})
         assert status(report, "structure") == "pass" and status(report, "identity:labels/seg") == "pass"
+
+
+class TestMcpToolAxes:
+    def test_tool_passes_input_axes_and_label_axes(self, temp_dir):
+        pytest.importorskip("mcp")
+        from tensorswitch_v2 import mcp_server
+        arr = np.random.default_rng(10).integers(1, 250, (6, 16, 20, 3), dtype=np.uint8)
+        lab = np.random.default_rng(11).integers(0, 4, (16, 20, 6), dtype=np.uint16)
+        raw, mask = os.path.join(temp_dir, "r.tif"), os.path.join(temp_dir, "m.tif")
+        tifffile.imwrite(raw, arr, photometric="rgb", shaped=False)
+        tifffile.imwrite(mask, lab, photometric="minisblack", planarconfig="contig", shaped=False)
+        out = os.path.join(temp_dir, "c.zarr")
+        convert(raw, out, "--input_axes", "zyxc")
+        convert(mask, out, "--add-to-existing", "--is_label", "--label-key", "segmentation", "--input_axes", "yxz")
+        report = json.loads(mcp_server.verify_output(out, raw, voxel_size=VOX, labels=f"segmentation={mask}",
+                                                     input_axes="zyxc", label_input_axes="segmentation=yxz"))
+        assert report["overall"] == "pass", [c for c in report["checks"] if c["status"] != "pass"]
+        names = {c["name"]: c["status"] for c in report["checks"]}
+        assert names["identity:raw"] == names["identity:labels/segmentation"] == "pass"
+
+    def test_bad_label_axes_text_is_a_validation_error(self, temp_dir):
+        pytest.importorskip("mcp")
+        from tensorswitch_v2 import mcp_server
+        result = json.loads(mcp_server.verify_output(temp_dir, label_input_axes="segmentation"))
+        assert result["error"] == "validation_error"
