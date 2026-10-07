@@ -21,8 +21,9 @@ from typing import Dict, List, Optional, Tuple
 # Shared Constants
 # ============================================================================
 
-NON_SPATIAL_AXES = frozenset({'c', 't', 'v', 'channel'})
-"""Axis names that should never be downsampled (factor=1)."""
+NON_SPATIAL_AXES = frozenset({'c', 't', 'v', 'channel', 's'})
+"""Axis names that should never be downsampled (factor=1). 's' is the samples-per-pixel axis of a TIFF
+(as in BioIO's S dimension): its own non-spatial axis, never a channel and never spatial."""
 
 LABEL_KEYWORDS = ('label', 'mask', 'seg', 'annotation', 'binary', 'instance')
 """Path keywords that indicate segmentation/label data (use mode downsampling)."""
@@ -54,6 +55,8 @@ def get_axis_type(axis_name: str) -> str:
         return 'channel'
     if ax in ('t', 'v'):
         return 'time'
+    if ax == 's':
+        return 'custom'
     return 'space'
 
 
