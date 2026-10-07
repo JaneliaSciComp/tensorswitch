@@ -128,6 +128,7 @@ class DistributedConverter:
         bbox: Optional[Tuple[Tuple[int, ...], Tuple[int, ...]]] = None,
         bbox_axes: Optional[Tuple[int, ...]] = None,
         squeeze_singleton_axes: bool = False,
+        squeeze_if_known: bool = False,
         axes_order_override: Optional[List[str]] = None,
         axis_relabel: Optional[Dict[str, str]] = None,
         input_axes: Optional[str] = None,
@@ -419,7 +420,11 @@ class DistributedConverter:
         # Only squeezes axes identified as non-spatial (NON_SPATIAL_AXES) with
         # size 1 -- never a genuinely-spatial axis that happens to be 1 voxel
         # thick, and never anything when axes_order couldn't be determined.
-        if squeeze_singleton_axes:
+        # squeeze_if_known (the miaai preset): same squeeze, but a source whose axes could not be
+        # determined is left as it is, with a note, instead of failing the conversion.
+        if squeeze_if_known and not squeeze_singleton_axes and not axes_order:
+            print("  Note: axis names are unknown, so singleton axes were not dropped (preset miaai)")
+        if squeeze_singleton_axes or (squeeze_if_known and axes_order):
             if not axes_order:
                 raise ValueError(
                     "--squeeze_singleton_axes requires known axis identity "
