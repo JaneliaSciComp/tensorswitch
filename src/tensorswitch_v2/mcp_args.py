@@ -49,6 +49,7 @@ SPEC = [
     ("bbox", "--bbox", "value", ("", None)),
     ("bbox_axes", "--bbox_axes", "value", ("", None)),
     ("squeeze_singleton_axes", "--squeeze_singleton_axes", "flag", (False, None)),
+    ("input_axes", "--input_axes", "value", ("", None)),
     ("relabel_axis", "--relabel_axis", "repeat", ("", None, [])),
     ("expand_to_5d", "--expand-to-5d", "flag", (False, None)),
     ("axes_order", "--axes_order", "value", ("", None)),

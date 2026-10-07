@@ -686,6 +686,15 @@ Supported output formats:
              "'z') -- use --relabel_axis for that.",
     )
 
+    parser.add_argument(
+        "--input_axes", type=str, default=None,
+        help="Name every axis of the source, one letter per axis in the order the reader reports them "
+             "(slowest to fastest), e.g. 'zyxc' for a TIFF read as i,y,x,s or 'yxz' for a TIFF whose z "
+             "slices are stored as samples. Letters: t, c, s (samples per pixel, its own non-spatial axis), "
+             "z, y, x. Only renames: the order of the spatial axes is not changed. Use for sources that "
+             "do not state their axes (a multi-page TIFF reads its pages as 'i').",
+    )
+
     # Explicit axis identity correction (does not infer/guess)
     parser.add_argument(
         "--relabel_axis", type=str, default=None, action="append",
@@ -1417,6 +1426,23 @@ def _warn_if_inferred_channel_axis(args, reader, axes) -> None:
     )
 
 
+def _renamed_axes(args, axes_order):
+    """The source axes after --input_axes and --relabel_axis, as the converter will see them."""
+    from .core.converter import DistributedConverter
+
+    explicit = {}
+    for spec in (getattr(args, 'relabel_axis', None) or []):
+        if '=' in spec:
+            old, new = spec.lower().split('=', 1)
+            explicit[old.strip()] = new.strip()
+    if getattr(args, 'input_axes', None):
+        explicit = DistributedConverter._relabel_from_input_axes(args.input_axes, list(axes_order), explicit)
+    renamed = [explicit.get(a, a) for a in axes_order]
+    if len(renamed) != len(set(renamed)):
+        raise ValueError(f"the axis names given would create a duplicate axis name: {list(axes_order)} -> {renamed}")
+    return renamed
+
+
 def _get_input_metadata(args):
     """Read input shape, dtype, and axes for resource estimation.
 
@@ -1439,18 +1465,8 @@ def _get_input_metadata(args):
     # Apply explicit --relabel_axis here too, so resource estimation (chunk/shard
     # sizing) and the mismatch warning below both see the corrected axis identity
     # instead of re-warning about something the user already fixed explicitly.
-    if axes_order and getattr(args, 'relabel_axis', None):
-        relabel = {}
-        for spec in args.relabel_axis:
-            if '=' in spec:
-                old, new = spec.lower().split('=', 1)
-                relabel[old.strip()] = new.strip()
-        relabeled = [relabel.get(a, a) for a in axes_order]
-        if len(relabeled) != len(set(relabeled)):
-            raise ValueError(
-                f"--relabel_axis would create a duplicate axis name: "
-                f"{axes_order} -> {relabeled}")
-        axes_order = relabeled
+    if axes_order:
+        axes_order = _renamed_axes(args, axes_order)
 
     # Catch CYX/IYX/SYX mis-labeling early, before resource estimation silently
     # drops the Z value from --voxel_size.
@@ -1815,6 +1831,8 @@ def submit_job(args, return_job_id=False):
     if getattr(args, 'relabel_axis', None):
         for spec in args.relabel_axis:
             reinvoke += ["--relabel_axis", spec]
+    if getattr(args, 'input_axes', None):
+        reinvoke += ["--input_axes", args.input_axes]
     if getattr(args, 'preset', None) in ('miaai', 'mia_lmvd'):
         reinvoke += ["--preset", args.preset]
     if getattr(args, 'expansion_factor', None):
@@ -2586,14 +2604,9 @@ def run_conversion(args):
                     'c' if l.lower() == 'channel' else l.lower() for l in _labels
                 ]
         _warn_if_inferred_channel_axis(args, reader, _axes_for_warning)
-        if _axes_for_warning and getattr(args, 'relabel_axis', None):
-            # the user already corrected an axis: warn about what is left, not about what they fixed
-            _mapping = {}
-            for _spec in args.relabel_axis:
-                if '=' in _spec:
-                    _old, _new = _spec.lower().split('=', 1)
-                    _mapping[_old.strip()] = _new.strip()
-            _axes_for_warning = [_mapping.get(a, a) for a in _axes_for_warning]
+        if _axes_for_warning:
+            # the user already named the axes: warn about what is left, not about what they fixed
+            _axes_for_warning = _renamed_axes(args, _axes_for_warning)
         _warn_if_axis_voxel_mismatch(args, _axes_for_warning)
     except Exception:
         pass  # warning is best-effort; never block conversion
@@ -2725,6 +2738,7 @@ def run_conversion(args):
             squeeze_singleton_axes=getattr(args, 'squeeze_singleton_axes', False),
             axes_order_override=axes_order_override,
             axis_relabel=axis_relabel,
+            input_axes=getattr(args, 'input_axes', None),
             no_ome_meta_export=no_ome_meta_export,
             no_ome_xml_attr=no_ome_xml_attr,
             output_dtype=getattr(args, 'dtype', None),
@@ -2746,6 +2760,7 @@ def run_conversion(args):
             squeeze_singleton_axes=getattr(args, 'squeeze_singleton_axes', False),
             axes_order_override=axes_order_override,
             axis_relabel=axis_relabel,
+            input_axes=getattr(args, 'input_axes', None),
             no_ome_meta_export=no_ome_meta_export,
             no_ome_xml_attr=no_ome_xml_attr,
             output_dtype=getattr(args, 'dtype', None),

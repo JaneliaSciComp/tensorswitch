@@ -396,6 +396,7 @@ def convert(
     add_to_existing: bool = False,
     bbox_axes: str = "",
     squeeze_singleton_axes: bool = False,
+    input_axes: str = "",
     relabel_axis: str = "",
     output_offset: str = "",
     target_shape: str = "",
@@ -458,6 +459,10 @@ def convert(
             Safe write applies to the subgroup (e.g., labels/) not the container root.
         bbox_axes: Which source axes bbox refers to, comma-separated indices (e.g. "2,3,4" for z,y,x of a 5D t,c,z,y,x source).
         squeeze_singleton_axes: Drop length-1 axes (e.g. t, c) from the output. Needs known axis identity.
+        input_axes: Name every source axis, one letter per axis in the reader's order, slowest to fastest
+                    (e.g. "zyxc" for a TIFF read as i,y,x,s; "zyxs" keeps samples per pixel as their own axis
+                    `s`; "yxz" for z slices stored as samples). Letters t, c, s, z, y, x. Only renames; spatial
+                    axis order is unchanged. Use the `axes` of a catalog record.
         relabel_axis: Correct a mis-detected source axis, "OLD=NEW" (e.g. "t=z"); several separated by ";".
         output_offset: Sparse label ingest: voxel position of the label inside the existing container,
             comma-separated (e.g. "0,0,128,64,64"). Use with add_to_existing and data_type="labels".
@@ -905,6 +910,7 @@ def submit_job(
     add_to_existing: bool = False,
     bbox_axes: str = "",
     squeeze_singleton_axes: bool = False,
+    input_axes: str = "",
     relabel_axis: str = "",
     output_offset: str = "",
     target_shape: str = "",
@@ -966,6 +972,10 @@ def submit_job(
         bbox_axes: Which source axes --bbox refers to, as comma-separated indices
             (e.g. "2,3,4" for z,y,x of a 5D t,c,z,y,x source). Needed for N-D bbox.
         squeeze_singleton_axes: Drop length-1 axes (e.g. t, c) from the output. Needs known axis identity.
+        input_axes: Name every source axis, one letter per axis in the reader's order, slowest to fastest
+                    (e.g. "zyxc" for a TIFF read as i,y,x,s; "zyxs" keeps samples per pixel as their own axis
+                    `s`; "yxz" for z slices stored as samples). Letters t, c, s, z, y, x. Only renames; spatial
+                    axis order is unchanged. Use the `axes` of a catalog record.
         relabel_axis: Correct a mis-detected source axis, "OLD=NEW" (e.g. "t=z"); several separated by ";".
         output_offset: Sparse label ingest: voxel position where the label is placed in the existing
             container, comma-separated (e.g. "0,0,128,64,64"). Use with add_to_existing and data_type="labels".

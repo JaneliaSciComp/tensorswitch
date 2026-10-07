@@ -82,7 +82,7 @@ SAMPLES = {
     "expansion_factor": (4.0, "expansion_factor", 4.0), "extra_attributes": ("{\"a\": 1}", "extra_attributes", "{\"a\": 1}"),
     "bbox": ("0,0,0,4,4,4", "bbox", "0,0,0,4,4,4"), "bbox_axes": ("2,3,4", "bbox_axes", "2,3,4"),
     "squeeze_singleton_axes": (True, "squeeze_singleton_axes", True),
-    "relabel_axis": ("t=z;c=y", "relabel_axis", ["t=z", "c=y"]),
+    "relabel_axis": ("t=z;c=y", "relabel_axis", ["t=z", "c=y"]), "input_axes": ("zyxc", "input_axes", "zyxc"),
     "expand_to_5d": (True, "expand_to_5d", True), "axes_order": ("xyz", "axes_order", "xyz"),
     "use_bioio": (True, "use_bioio", True), "use_bioformats": (True, "use_bioformats", True),
     "no_ome_meta_export": (True, "no_ome_meta_export", True), "no_ome_xml_attr": (True, "no_ome_xml_attr", True),

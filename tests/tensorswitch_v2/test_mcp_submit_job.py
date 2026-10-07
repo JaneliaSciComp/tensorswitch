@@ -123,6 +123,10 @@ class TestPresets:
         _, cmds = submit(src, work, extra_attributes=extra)
         assert flag_value(reinvoke(cmds[0]), "--extra_attributes") == [extra]
 
+    def test_input_axes_reaches_the_job(self, src, work):
+        _, cmds = submit(src, work, input_axes="zyx")
+        assert flag_value(reinvoke(cmds[0]), "--input_axes") == ["zyx"]
+
     def test_paintera_preset(self, src, work):
         result, cmds = submit(src, work, preset="paintera")
         argv = reinvoke(cmds[0])

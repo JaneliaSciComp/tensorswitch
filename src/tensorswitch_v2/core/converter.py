@@ -55,6 +55,26 @@ class DistributedConverter:
         self._output_store = None
         self._total_chunks = None
 
+    @staticmethod
+    def _relabel_from_input_axes(input_axes: str, axes_order: List[str],
+                                 axis_relabel: Optional[Dict[str, str]]) -> Dict[str, str]:
+        """Turn --input_axes (one letter per source axis, in the reader's order) into an {old: new} map."""
+        wanted = list(input_axes.strip().lower())
+        if len(wanted) != len(axes_order):
+            raise ValueError(
+                f"--input_axes {input_axes!r} names {len(wanted)} axes but the source has {len(axes_order)} "
+                f"({', '.join(axes_order)}). Give one letter per source axis, slowest to fastest.")
+        bad = sorted({a for a in wanted if a not in "tcszyx"})
+        if bad:
+            raise ValueError(f"--input_axes may only use t, c, s, z, y, x; got {bad} in {input_axes!r}")
+        mapping = {old.lower(): new for old, new in zip(axes_order, wanted) if old.lower() != new}
+        for old, new in (axis_relabel or {}).items():
+            if old.lower() in mapping and mapping[old.lower()] != new.lower():
+                raise ValueError(f"--input_axes and --relabel_axis disagree about axis '{old}' "
+                                 f"({mapping[old.lower()]!r} vs {new!r}); use only one of them")
+            mapping[old.lower()] = new.lower()
+        return mapping
+
     def _warn_if_override_disagrees(self, override: Dict[str, float], unit: str, tolerance: float = 0.01):
         """Warn when an explicit voxel size differs from a header the reader trusts.
 
@@ -110,6 +130,7 @@ class DistributedConverter:
         squeeze_singleton_axes: bool = False,
         axes_order_override: Optional[List[str]] = None,
         axis_relabel: Optional[Dict[str, str]] = None,
+        input_axes: Optional[str] = None,
         no_ome_meta_export: bool = False,
         no_ome_xml_attr: bool = False,
         output_dtype: Optional[str] = None,
@@ -335,6 +356,11 @@ class DistributedConverter:
                                           f"domain to {axes_order}: {e}")
             except Exception:
                 pass
+
+        # 2a-input. --input_axes names every source axis by position (e.g. "zyxc" for a TIFF the
+        # reader reports as i,y,x,s). It only renames, through the same path as --relabel_axis.
+        if input_axes and axes_order:
+            axis_relabel = self._relabel_from_input_axes(input_axes, axes_order, axis_relabel)
 
         # 2a-relabel. Apply explicit, user-named axis relabeling (--relabel_axis).
         # This is the ONLY place axis identity is ever changed from what the
