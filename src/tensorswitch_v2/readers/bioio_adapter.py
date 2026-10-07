@@ -97,55 +97,38 @@ class BIOIOReader(DaskReader):
 
         self._load_bioimage()
 
-        # Get the full dask array (TCZYX order)
+        # The full dask array. BioIO orders it TCZYX, plus a trailing S (samples per pixel,
+        # e.g. RGB) when the file has them. Keep track of which dimension each axis is, so the
+        # axes are named from BioIO's own order and not guessed from the array's rank.
         dask_data = self._bioimage.dask_data
+        order = list(getattr(self._bioimage.dims, 'order', None) or 'TCZYX')
+        if len(order) != dask_data.ndim:
+            order = list('TCZYX') if dask_data.ndim == 5 else order[:dask_data.ndim]
 
-        # Handle dimension selection if requested
-        if self._time_index is not None or self._channel_index is not None:
-            slices = []
-            dims_to_keep = []
+        # Dimension selection (a single time point or channel), by name
+        picks = {'T': self._time_index, 'C': self._channel_index}
+        index = tuple(picks[d] if picks.get(d) is not None else slice(None) for d in order)
+        if any(not isinstance(i, slice) for i in index):
+            dask_data = dask_data[index]
+            order = [d for d, i in zip(order, index) if isinstance(i, slice)]
 
-            # T dimension
-            if self._time_index is not None:
-                slices.append(self._time_index)
-            else:
-                slices.append(slice(None))
-                if dask_data.shape[0] > 1:
-                    dims_to_keep.append('T')
+        # Squeeze singleton T and C (unless the caller selected them)
+        squeeze = [i for i, d in enumerate(order)
+                   if d in ('T', 'C') and dask_data.shape[i] == 1 and picks[d] is None]
+        if squeeze:
+            dask_data = dask_data.squeeze(axis=tuple(squeeze))
+            order = [d for i, d in enumerate(order) if i not in squeeze]
 
-            # C dimension
-            if self._channel_index is not None:
-                slices.append(self._channel_index)
-            else:
-                slices.append(slice(None))
-                if dask_data.shape[1] > 1:
-                    dims_to_keep.append('C')
-
-            # Z, Y, X dimensions (always keep)
-            slices.extend([slice(None), slice(None), slice(None)])
-            dims_to_keep.extend(['Z', 'Y', 'X'])
-
-            dask_data = dask_data[tuple(slices)]
-
-        # Squeeze singleton dimensions (T=1, C=1)
-        shape = dask_data.shape
-        squeeze_axes = []
-
-        if len(shape) > 0 and shape[0] == 1 and self._time_index is None:
-            squeeze_axes.append(0)
-
-        if len(shape) > 1 and shape[1] == 1 and self._channel_index is None:
-            squeeze_axes.append(1)
-
-        if squeeze_axes:
-            dask_data = dask_data.squeeze(axis=tuple(squeeze_axes))
-
+        self._bioio_dims = order
         self._dask_array = dask_data
 
     def _get_dimension_names(self) -> List[str]:
         """Infer dimension names from squeezed array shape."""
         self._load()
         ndim = len(self._dask_array.shape)
+        known = getattr(self, '_bioio_dims', None)
+        if known and len(known) == ndim:
+            return [d.lower() for d in known]
 
         if ndim == 2:
             return ['y', 'x']
