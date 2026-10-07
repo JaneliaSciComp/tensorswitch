@@ -40,7 +40,7 @@ EXTENSIONS = {
     "zarr": (".zarr",), "ome-zarr": (".zarr",), "n5": (".n5",),
 }
 # words that name a file's role, not the sample it belongs to (dropped when pairing raw with labels)
-_ROLE_WORDS = {"image", "images", "img", "raw", "input", "inputs", "label", "labels", "mask", "masks", "seg",
+_ROLE_WORDS = {"image", "images", "img", "raw", "data", "input", "inputs", "label", "labels", "mask", "masks", "seg",
                "segmentation", "gt", "groundtruth", "target", "targets", "annotation", "annotations"}
 _GENERIC_TOKENS = {"data", "the", "and", "set", "tif", "tiff", "png", "h5", "hdf5", "mrc", "nii", "gz", "zip",
                    "file", "files", "nnn", "name", "stem", "uid", "id"}
@@ -203,6 +203,25 @@ def _voxel_arg(record: Dict[str, Any], dimensionality: str) -> Tuple[Optional[st
                   "and is refused if the header is incomplete"]
 
 
+def _tiff_input_axes(array: Dict[str, Any]) -> Tuple[Optional[str], Optional[str]]:
+    """(input_axes, problem) for a plain TIFF array. The record's `axes` name every axis, slowest to fastest.
+
+    A TIFF read without them gets the reader's own names (`i` for pages, `s` for samples per pixel), which
+    are neither z nor a channel, so the record has to say what the axes are.
+    """
+    axes = (array.get("axes") or "").strip().lower()
+    if not axes:
+        return None, ("the record gives no `axes` for this TIFF array; without them TensorSwitch would name the "
+                      "pages `i` and samples per pixel `s` (not z or a channel), so it is not planned until "
+                      "technical.arrays[].axes is filled in")
+    if len(set(axes)) != len(axes) or set(axes) - set("tcszyx"):
+        return None, f"the record's axes {axes!r} are not a string of distinct letters from t, c, s, z, y, x"
+    shape = array.get("shape")
+    if shape and len(shape) != len(axes):
+        return None, f"the record's axes {axes!r} name {len(axes)} axes but its shape has {len(shape)}"
+    return axes, None
+
+
 def _local_path(source_dir: str, spec: str) -> str:
     """Where fetch_dataset puts a spec inside source_dir (mirrors utils.fetch)."""
     url, member = _split_spec(spec)
@@ -331,6 +350,13 @@ def plan_record(record: Dict[str, Any], output_dir: str, project: Optional[str] 
                          f"converter would refuse; not planned until imaging.voxel_size_nm is filled in")
             entry["needs"] = "voxel_size"
             continue
+        tiff_axes = None
+        if fmt == "tiff":
+            tiff_axes, problem = _tiff_input_axes(array)
+            if problem:
+                notes.append(problem)
+                entry["needs"] = "axes"
+                continue
         dataset_path = _split_dataset(array.get("path_pattern") or "", fmt)[1]
         if fmt == "hdf5" and not dataset_path:
             notes.append("HDF5 dataset name is not in the record; TensorSwitch picks the main dataset itself "
@@ -354,6 +380,8 @@ def plan_record(record: Dict[str, Any], output_dir: str, project: Optional[str] 
                                 "output_path": container["path"]}
         if voxel:
             args["voxel_size"] = voxel
+        if tiff_axes:
+            args["input_axes"] = tiff_axes
         if fmt == "hdf5":
             args["dataset_path"] = dataset_path
             shape = array.get("shape")
@@ -502,6 +530,12 @@ def plan_dataset(record: Dict[str, Any], output_dir: str, project: Optional[str]
         for index, array in enumerate(arrays):
             if _match_score(spec, array) == 100:
                 key = _pair_key(entry.name)
+                if array.get("role") in ("label", "target") and array.get("alignment") != "same-grid":
+                    # never pair on the name alone: the record has to say the label sits on the raw's grid
+                    key = (key[0], key[1] + (f"unpaired{index}",))
+                    plan["unpaired"].append(
+                        f"{entry.name}: the record gives alignment {array.get('alignment')!r}, not 'same-grid', "
+                        f"so it is not paired with a raw file")
                 if key in by_array[index]:
                     plan["unpaired"].append(f"{entry.name}: same sample key as {by_array[index][key][0]}")
                 else:

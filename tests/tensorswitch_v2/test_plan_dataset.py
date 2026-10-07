@@ -27,7 +27,8 @@ def record(**kw):
             "arrays": [
                 {"role": "raw", "format": "tiff", "axes": "zyx", "shape": [5, 6, 7], "shape_varies": True,
                  "path_pattern": "set/{train,test}/images/X*.tif"},
-                {"role": "label", "format": "tiff", "axes": "zyx", "path_pattern": "set/{train,test}/masks/Y*.tif"},
+                {"role": "label", "format": "tiff", "axes": "zyx", "alignment": "same-grid",
+                 "path_pattern": "set/{train,test}/masks/Y*.tif"},
             ],
         },
     }
@@ -81,6 +82,29 @@ class TestPairing:
         rec["technical"]["arrays"][0]["path_pattern"] = "set/*X*.tif"
         plan = rp.plan_dataset(rec, OUT, lister=lister(*FILES, "set/train/X1.tif"))
         assert any("same sample key" in u for u in plan["unpaired"])
+
+
+class TestPairingNeedsAlignment:
+    def test_label_without_same_grid_is_not_paired(self):
+        rec = record()
+        rec["technical"]["arrays"][1]["alignment"] = "unknown"
+        plan = rp.plan_dataset(rec, OUT, lister=lister(*FILES))
+        assert not any(len(s["files"]) == 2 for s in plan["samples"])
+        assert any("not 'same-grid'" in u for u in plan["unpaired"])
+
+    def test_same_grid_label_is_paired(self):
+        rec = record()
+        rec["technical"]["arrays"][1]["alignment"] = "same-grid"
+        plan = rp.plan_dataset(rec, OUT, lister=lister(*FILES))
+        assert sorted(len(s["files"]) for s in plan["samples"]) == [2, 2]
+
+    def test_data_and_mask_files_pair(self):
+        rec = record()
+        rec["technical"]["arrays"][0]["path_pattern"] = "set/{train,test}/data_NNN.tif"
+        rec["technical"]["arrays"][1].update(path_pattern="set/{train,test}/mask_NNN.tif", alignment="same-grid")
+        names = ["set/train/data_000.tif", "set/train/mask_000.tif", "set/train/data_001.tif", "set/train/mask_001.tif"]
+        plan = rp.plan_dataset(rec, OUT, lister=lister(*names))
+        assert plan["unpaired"] == [] and sorted(len(s["files"]) for s in plan["samples"]) == [2, 2]
 
 
 class TestLimitsAndBlocking:

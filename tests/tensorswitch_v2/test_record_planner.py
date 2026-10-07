@@ -108,7 +108,7 @@ class TestRawAndLabel:
         rec = record()
         rec["technical"]["sample"]["urls"].append(f"{ZIP}::set/masks2/b.tif")
         rec["technical"]["arrays"].append(
-            {"role": "label", "format": "tiff", "path_pattern": "data.zip::set/masks2/*.tif"})
+            {"role": "label", "format": "tiff", "axes": "zyx", "path_pattern": "data.zip::set/masks2/*.tif"})
         labels = [a for t, a in tools(rp.plan_record(rec, OUT)) if t == "convert" and a.get("is_label")]
         assert [a["label_key"] for a in labels] == ["segmentation", "segmentation_2"]
 
@@ -257,6 +257,42 @@ class TestHdf5:
         assert not any("background=True" in w for w in rp.plan_record(record(), OUT)["warnings"])
 
 
+class TestTiffAxes:
+    def one(self, **array):
+        rec = record()
+        rec["technical"]["sample"]["urls"] = [f"{ZIP}::set/images/a.tif"]
+        rec["technical"]["arrays"] = [{"role": "raw", "format": "tiff", "path_pattern": "data.zip::set/images/*.tif", **array}]
+        return rp.plan_record(rec, OUT)
+
+    def test_record_axes_are_passed_as_input_axes(self):
+        convert = [a for t, a in tools(self.one(axes="zyxc", shape=[5, 6, 7, 3])) if t == "convert"][0]
+        assert convert["input_axes"] == "zyxc"
+
+    def test_tiff_without_axes_is_held_back_and_says_why(self):
+        plan = self.one()
+        assert plan["status"] == "blocked" and plan["steps"] == [] and plan["needs"] == ["axes"]
+        assert "no `axes`" in plan["arrays"][0]["notes"][0]
+
+    @pytest.mark.parametrize("axes,shape", [("zyq", None), ("zzx", None), ("zyx", [5, 6, 7, 3]), ("zyxc", [5, 6, 7])])
+    def test_unusable_axes_are_held_back(self, axes, shape):
+        plan = self.one(axes=axes, **({"shape": shape} if shape else {}))
+        assert plan["status"] == "blocked" and plan["needs"] == ["axes"]
+
+    def test_other_formats_do_not_need_tiff_axes(self):
+        rec = record()
+        rec["technical"]["sample"]["urls"] = [f"{ZIP}::set/images/a.nii.gz"]
+        rec["technical"]["arrays"] = [{"role": "raw", "format": "nifti", "path_pattern": "data.zip::set/images/*.nii.gz"}]
+        convert = [a for t, a in tools(rp.plan_record(rec, OUT)) if t == "convert"][0]
+        assert "input_axes" not in convert
+
+    def test_ome_tiff_uses_the_file_header(self):
+        rec = record()
+        rec["technical"]["sample"]["urls"] = [f"{ZIP}::set/images/a.ome.tif"]
+        rec["technical"]["arrays"] = [{"role": "raw", "format": "ome-tiff", "path_pattern": "data.zip::set/images/*.ome.tif"}]
+        convert = [a for t, a in tools(rp.plan_record(rec, OUT)) if t == "convert"][0]
+        assert "input_axes" not in convert
+
+
 class TestUnconvertible:
     def one(self, fmt, role="raw", pattern="data.zip::set/images/*.tif", url=f"{ZIP}::set/images/a.tif"):
         rec = record()
@@ -380,7 +416,7 @@ class TestSizeAndPaths:
     def test_plain_url_path_matches_fetch(self, temp_dir):
         rec = record()
         rec["technical"]["sample"]["urls"] = ["https://h.org/a/my%20vol.tif"]
-        rec["technical"]["arrays"] = [{"role": "raw", "format": "tiff", "path_pattern": "a/*.tif"}]
+        rec["technical"]["arrays"] = [{"role": "raw", "format": "tiff", "axes": "zyx", "path_pattern": "a/*.tif"}]
         plan = rp.plan_record(rec, temp_dir)
         convert = [a for t, a in tools(plan) if t == "convert"][0]
         assert convert["input_path"] == os.path.join(temp_dir, "source", "my vol.tif")
