@@ -699,7 +699,7 @@ A plain multi-page TIFF does not say what its pages are, so the reader calls the
 
 ### N5 notes
 
-N5 `pixelResolution.dimensions` (and the `resolution` key) are read as **x, y, z**, the same order as the dataset's `dimensions` and the order the N5 writer emits; earlier versions read them as z, y, x, which swapped x and z on a round trip. The multiscale pyramid planner for N5 pairs these sizes with the array axes by name, so an anisotropic N5 volume gets the right downsampling factors.
+N5 `pixelResolution.dimensions` (and the `resolution` key) are read as **x, y, z**, the same order as the dataset's `dimensions` and the order the N5 writer emits. The multiscale pyramid planner for N5 pairs these sizes with the array axes by name, so an anisotropic N5 volume gets the right downsampling factors.
 
 ### PNG notes (directory, `.zip`, or single `.png`)
 
