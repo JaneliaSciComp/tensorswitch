@@ -1,8 +1,8 @@
 """
 Sparse label ingestion for OME-NGFF zarr containers.
 
-Provides ingest_label_at_offset() and _read_target_shape_from_container()
-used by the --output-offset / --add-to-existing branch in __main__.py.
+Provides ingest_label_at_offset(), _read_target_shape_from_container(), and the
+source-orientation helpers (orient_label_source, check_offset_flags_supported) used by the --output-offset / --add-to-existing branch in __main__.py.
 """
 
 import os
@@ -43,6 +43,69 @@ def _read_target_shape_from_container(container_path: str) -> list:
         f"No readable sibling label found in {labels_dir}/. "
         "Supply --target-shape to specify the full output shape."
     )
+
+
+# Source-side flags the standard converter honors but this path does not (yet). Refused loudly
+# instead of being ignored, so a label is never written with a layout the caller did not ask for.
+_UNSUPPORTED_WITH_OFFSET = (
+    ("bbox", "--bbox"),
+    ("bbox_axes", "--bbox_axes"),
+    ("squeeze_singleton_axes", "--squeeze_singleton_axes"),
+)
+
+
+def check_offset_flags_supported(args) -> None:
+    """Raise if a flag this sparse-ingest path cannot apply was given."""
+    used = [flag for attr, flag in _UNSUPPORTED_WITH_OFFSET if getattr(args, attr, None)]
+    if used:
+        raise ValueError(
+            f"{', '.join(used)} cannot be combined with --output-offset: the sparse label path "
+            "writes the whole source at the offset and does not crop or squeeze it."
+        )
+
+
+def orient_label_source(source_ts, axes_order=None, input_axes=None, relabel_axis=None):
+    """Return source_ts with its spatial axes permuted into `axes_order` (e.g. ['z','y','x']).
+
+    Mirrors what the standard converter does for --axes_order: the source axes are first named
+    (from the reader's labels, then --input_axes / --relabel_axis), only spatial axes may move,
+    and a non-matching request is an error rather than a silent no-op. Returns source_ts
+    unchanged when axes_order is not given.
+    """
+    if not axes_order:
+        return source_ts
+    labels = [str(l) for l in source_ts.domain.labels]
+    explicit = {}
+    for spec in (relabel_axis or []):
+        old, new = spec.lower().split('=', 1)
+        explicit[old.strip()] = new.strip()
+    if all(labels):
+        names = ['c' if l.lower() == 'channel' else l.lower() for l in labels]
+        if input_axes:
+            from ..core.converter import DistributedConverter
+            explicit = DistributedConverter._relabel_from_input_axes(input_axes, names, explicit)
+        names = [explicit.get(a, a) for a in names]
+    elif input_axes and len(input_axes.strip()) == source_ts.rank:
+        names = list(input_axes.strip().lower())
+    else:
+        raise ValueError(
+            "--axes_order needs named source axes; this source has none. "
+            "Name them with --input_axes (one letter per axis, slowest to fastest)."
+        )
+    if len(names) != len(set(names)):
+        raise ValueError(f"source axis names are not unique: {names}")
+    source_spatial = [a for a in names if a in ('x', 'y', 'z')]
+    if sorted(axes_order) != sorted(source_spatial):
+        raise ValueError(
+            f"--axes_order {list(axes_order)} does not match the source spatial axes "
+            f"{source_spatial}; fix the axis names with --input_axes or --relabel_axis first."
+        )
+    spatial_iter = iter(axes_order)
+    target = [next(spatial_iter) if a in ('x', 'y', 'z') else a for a in names]
+    perm = [names.index(a) for a in target]
+    if perm == list(range(len(names))):
+        return source_ts
+    return source_ts.transpose(perm)
 
 
 def ingest_label_at_offset(

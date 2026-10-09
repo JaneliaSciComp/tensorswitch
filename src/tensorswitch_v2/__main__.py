@@ -2527,8 +2527,12 @@ def run_conversion(args):
     # (submitted separately when --auto_multiscale --submit are used) runs on
     # the final label path after _finalize_add_to_existing() renames .tmp.
     if add_to_existing and subgroup_parent == 'labels' and getattr(args, 'output_offset', None) is not None:
-        from .utils.label_ingest import ingest_label_at_offset, _read_target_shape_from_container
+        from .utils.label_ingest import (
+            ingest_label_at_offset, _read_target_shape_from_container,
+            check_offset_flags_supported, orient_label_source,
+        )
 
+        check_offset_flags_supported(args)
         offset = list(args.output_offset)
         if getattr(args, 'target_shape', None) is not None:
             target_shape = list(args.target_shape)
@@ -2542,6 +2546,15 @@ def run_conversion(args):
 
         _reader = create_reader(args)
         source_ts = _reader.get_tensorstore()
+        _axes_override = None
+        if getattr(args, 'axes_order', None):
+            _axes_override = list(args.axes_order.lower().replace(',', ''))
+            if not set(_axes_override) <= {'x', 'y', 'z'} or len(set(_axes_override)) != len(_axes_override):
+                raise ValueError(f"--axes_order must be a permutation of x, y, z, got: {args.axes_order}")
+        source_ts = orient_label_source(
+            source_ts, axes_order=_axes_override,
+            input_axes=getattr(args, 'input_axes', None),
+            relabel_axis=getattr(args, 'relabel_axis', None))
 
         ingest_label_at_offset(
             source_ts=source_ts,

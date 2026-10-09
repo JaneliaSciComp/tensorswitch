@@ -431,6 +431,8 @@ def convert(
         use_bioio: Force BIOIO adapter (Tier 3) instead of auto-detected Tier 2 reader.
         use_bioformats: Force Bio-Formats reader (Tier 4, Java-backed) for 150+ formats.
         axes_order: Override output spatial axis order (e.g., "xyz", "zyx"). Default: preserve source order.
+                    Also applied to a sparse label ingest (output_offset); bbox and squeeze_singleton_axes are
+                    refused there with an error rather than ignored.
         force_order: Force output memory order — "c" for C-order (row-major),
                      "f" for F-order (column-major), or "" for auto-detection.
         expand_to_5d: Force 5D TCZYX expansion.
@@ -942,7 +944,8 @@ def submit_job(
         use_bioio: Force BIOIO adapter (Tier 3).
         use_bioformats: Force Bio-Formats reader (Tier 4).
         view_index: CZI view index (-1 = all views).
-        axes_order: Override output spatial axis order (e.g., "xyz", "zyx").
+        axes_order: Override output spatial axis order (e.g., "xyz", "zyx"). Also applied to a sparse label ingest
+                    (output_offset); bbox and squeeze_singleton_axes are refused there with an error.
         force_order: Force output memory order — "c" for C-order, "f" for F-order, or "" for auto.
         expand_to_5d: Force 5D TCZYX expansion.
         bbox: Bounding box for subvolume: "origin_z,origin_y,origin_x,size_z,size_y,size_x".
