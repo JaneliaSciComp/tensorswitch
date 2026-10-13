@@ -46,7 +46,8 @@ from ..utils.tensorstore_utils import (
 from .retry import retry_write, MAX_RETRIES
 
 # Set team permissions: rwxrwxr-x (files get rw-rw-r--)
-os.umask(0o0002)
+from ..utils.output_group import default_umask
+os.umask(default_umask())
 
 # Mapping from user-friendly method names to scipy interpolation orders
 UPSAMPLE_METHODS = {

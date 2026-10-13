@@ -42,7 +42,8 @@ if hasattr(sys.stdout, 'reconfigure'):
 if hasattr(sys.stderr, 'reconfigure'):
     sys.stderr.reconfigure(line_buffering=True)
 
-os.umask(0o0002)  # Team permissions: rwxrwxr-x
+from .utils.output_group import default_umask
+os.umask(default_umask())  # Team permissions: rwxrwxr-x
 
 __version__ = "2.0.0-beta"
 
@@ -2437,6 +2438,14 @@ def _apply_preset(args):
 
 
 def run_conversion(args):
+    """Convert one source to one local output (see _run_conversion). Under --preset miaai the files are written 644 /
+    755 with group miaai for the length of the conversion only, so a long-lived caller (the MCP server) is not changed."""
+    from .utils.output_group import preset_permissions
+    with preset_permissions(getattr(args, "preset", None)):
+        return _run_conversion(args)
+
+
+def _run_conversion(args):
     """Convert one source to one local output (the CLI's standard, non-submit path).
 
     Writes to a ``.tmp`` path and renames on completion; handles --add-to-existing
@@ -2601,6 +2610,8 @@ def run_conversion(args):
                 include_translation=not args.no_translation,
                 verbose=verbose,
             )
+            from .utils.output_group import apply_parent_group
+            apply_parent_group(root_path)               # levels written after the label's group was applied
         return info
 
     reader = create_reader(args)
@@ -2891,6 +2902,8 @@ def main(argv=None):
     args = parse_args(argv)
 
     _apply_preset(args)
+    from .utils.output_group import apply_preset_permissions
+    apply_preset_permissions(args.preset)       # --preset miaai: files 644, directories 755, group miaai (this process only)
 
     # Parse optional shapes
     chunk_shape = parse_shape(args.chunk_shape, "chunk_shape") if args.chunk_shape else None
@@ -3319,6 +3332,8 @@ def main(argv=None):
                 include_translation=not args.no_translation,
                 verbose=verbose,
             )
+            from .utils.output_group import apply_parent_group
+            apply_parent_group(root_path)               # the new levels get the group too (s0 got it when it was written)
         return
 
     # Handle upsample mode (anisotropic → isotropic)

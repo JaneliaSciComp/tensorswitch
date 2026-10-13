@@ -34,7 +34,8 @@ from pathlib import Path
 from ..utils.resource_utils import calculate_job_resources
 
 # Set team permissions: rwxrwxr-x (files get rw-rw-r--)
-os.umask(0o0002)
+from ..utils.output_group import default_umask
+os.umask(default_umask())
 
 
 # Supported input format extensions

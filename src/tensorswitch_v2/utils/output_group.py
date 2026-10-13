@@ -17,7 +17,54 @@ import warnings
 from typing import List, Optional
 
 APPLIED_ENV = "TENSORSWITCH_GROUP_APPLIED"
+UMASK_ENV = "TENSORSWITCH_UMASK"
+GROUP_ENV = "TENSORSWITCH_GROUP"
 _warned = set()
+
+PRESET_UMASK = "0022"       # --preset miaai: directories 755, files 644 (no group write)
+PRESET_GROUP = "miaai"
+
+
+def default_umask() -> int:
+    """The umask files are created with: 002 (rwxrwxr-x, team write) unless a preset set TENSORSWITCH_UMASK."""
+    try:
+        return int(os.environ.get(UMASK_ENV, "0002"), 8)
+    except ValueError:
+        return 0o002
+
+
+from contextlib import contextmanager
+
+
+@contextmanager
+def preset_permissions(preset: Optional[str]):
+    """apply_preset_permissions for the length of one conversion, then put back what was there (the MCP server is a
+    long-lived process: a miaai conversion must not change the next one's permissions or group)."""
+    before_umask = os.umask(0o002)
+    os.umask(before_umask)
+    before_env = {name: os.environ.get(name) for name in (UMASK_ENV, GROUP_ENV)}
+    apply_preset_permissions(preset)
+    try:
+        yield
+    finally:
+        os.umask(before_umask)
+        for name, value in before_env.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+
+
+def apply_preset_permissions(preset: Optional[str]) -> None:
+    """--preset miaai / mia_lmvd: create files 644 and directories 755 and give them group `miaai`.
+
+    The umask applies from here on (and in worker processes, through the environment); the group is applied when an
+    output is finished (apply_parent_group). Any other preset, or none, keeps the defaults.
+    """
+    if preset in ("miaai", "mia_lmvd"):
+        os.environ[UMASK_ENV] = PRESET_UMASK
+        os.environ[GROUP_ENV] = PRESET_GROUP
+        os.umask(int(PRESET_UMASK, 8))
 
 
 def _member_gids() -> set:
@@ -85,7 +132,7 @@ def _existing_ancestor(path: str) -> str:
 
 
 def apply_parent_group(output_path: str) -> int:
-    """Give a finished local output the group of the folder it was written into.
+    """Give a finished local output the group of the folder it was written into (or the preset's group, `miaai`).
 
     Does nothing inside a cluster job that already ran under the project's group,
     when the user is not in the parent's group, or when the group already matches.
@@ -93,13 +140,23 @@ def apply_parent_group(output_path: str) -> int:
     """
     if os.environ.get(APPLIED_ENV) or not os.path.exists(output_path):
         return 0
-    parent = _existing_ancestor(os.path.dirname(os.path.abspath(output_path)))
-    try:
-        gid = os.stat(parent).st_gid
-    except OSError:
-        return 0
-    if gid not in _member_gids():
-        return 0
+    gid = None
+    named = os.environ.get(GROUP_ENV)               # a preset names the group (miaai); otherwise the folder's own group
+    if named:
+        try:
+            gid = grp.getgrnam(named).gr_gid
+        except KeyError:
+            gid = None
+        if gid is not None and gid not in _member_gids():
+            gid = None
+    if gid is None:
+        parent = _existing_ancestor(os.path.dirname(os.path.abspath(output_path)))
+        try:
+            gid = os.stat(parent).st_gid
+        except OSError:
+            return 0
+        if gid not in _member_gids():
+            return 0
 
     changed = 0
 

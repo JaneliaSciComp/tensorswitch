@@ -23,7 +23,8 @@ from typing import Optional, List, Dict, Any, Tuple
 import numpy as np
 
 # Set team permissions: rwxrwxr-x (files get rw-rw-r--)
-os.umask(0o0002)
+from ..utils.output_group import default_umask
+os.umask(default_umask())
 
 # Import utility functions from v2 utils (independent from v1)
 from tensorswitch_v2.utils import (
