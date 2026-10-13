@@ -456,13 +456,13 @@ Supported output formats:
     )
     parser.add_argument(
         "--output-offset", nargs="+", type=int, dest="output_offset", default=None,
-        help="TCZYX offset for sparse label ingestion (use with --add-to-existing). "
-             "Fewer dims are zero-padded on the left. "
-             "E.g. '--output-offset 10' sets T=10, C=Z=Y=X=0.",
+        help="Offset for sparse label ingestion (use with --add-to-existing), in the target container's own axis "
+             "order (usually T C Z Y X; a few crops are stored x,y,z). Fewer dims are zero-padded on the left. "
+             "E.g. '--output-offset 10' sets T=10, C=Z=Y=X=0. Orient the source into that order with --axes_order.",
     )
     parser.add_argument(
         "--target-shape", nargs="+", type=int, dest="target_shape", default=None,
-        help="Full output shape TCZYX for --output-offset. "
+        help="Full output shape for --output-offset, in the target container's own axis order. "
              "Auto-inferred from sibling labels in the target container if omitted.",
     )
     parser.add_argument(

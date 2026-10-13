@@ -467,8 +467,11 @@ def convert(
                     axis order is unchanged. Use the `axes` of a catalog record.
         relabel_axis: Correct a mis-detected source axis, "OLD=NEW" (e.g. "t=z"); several separated by ";".
         output_offset: Sparse label ingest: voxel position of the label inside the existing container,
-            comma-separated (e.g. "0,0,128,64,64"). Use with add_to_existing and data_type="labels".
-        target_shape: Shape of the target container for output_offset, comma-separated (read from the container if empty).
+            comma-separated (e.g. "0,0,128,64,64"), in the container's own axis order (usually t,c,z,y,x; a few
+            crops are stored x,y,z). Orient the source into that order with axes_order. Use with add_to_existing
+            and data_type="labels".
+        target_shape: Shape of the target container for output_offset, in the container's own axis order,
+            comma-separated (read from the container if empty).
     """
     params = dict(locals())
     try:
@@ -981,8 +984,11 @@ def submit_job(
                     axis order is unchanged. Use the `axes` of a catalog record.
         relabel_axis: Correct a mis-detected source axis, "OLD=NEW" (e.g. "t=z"); several separated by ";".
         output_offset: Sparse label ingest: voxel position where the label is placed in the existing
-            container, comma-separated (e.g. "0,0,128,64,64"). Use with add_to_existing and data_type="labels".
-        target_shape: Shape of the target container for output_offset, comma-separated (read from the container if empty).
+            container, comma-separated (e.g. "0,0,128,64,64"), in the container's own axis order (usually
+            t,c,z,y,x; a few crops are stored x,y,z). Orient the source into that order with axes_order. Use with
+            add_to_existing and data_type="labels".
+        target_shape: Shape of the target container for output_offset, in the container's own axis order,
+            comma-separated (read from the container if empty).
     """
     params = dict(locals())
     try:
