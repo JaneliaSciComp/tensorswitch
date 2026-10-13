@@ -159,3 +159,32 @@ class TestThroughMcp:
         assert res.get("status") == "success", res
         got = np.asarray(Readers.auto_detect(os.path.join(out, "labels", "seg", "s0")).get_tensorstore().read().result())
         assert np.array_equal(got, src.transpose(2, 1, 0))
+
+
+class TestLabelArrayAxisNames:
+    """The label's s0 array carries the container's axis names, so a container stored x,y,z is not mistaken for z,y,x."""
+
+    def _container(self, tmp_path, names):
+        import json
+        root = tmp_path / "crop.zarr"
+        (root / "labels").mkdir(parents=True)
+        ms = {"axes": [{"name": n, "type": "space", "unit": "nanometer"} for n in names],
+              "datasets": [{"path": "s0", "coordinateTransformations": [{"type": "scale", "scale": [8.0, 8.0, 40.0]}]}]}
+        (root / "zarr.json").write_text(json.dumps({"zarr_format": 3, "node_type": "group",
+                                                   "attributes": {"ome": {"version": "0.5", "multiscales": [ms]}}}))
+        return str(root)
+
+    def _ingest(self, container, shape):
+        from tensorswitch_v2.utils.label_ingest import ingest_label_at_offset
+        ingest_label_at_offset(source_ts=ts.array(np.ones((2, 3, 4), np.uint64)), target_container=container, label_tmp_key="l.tmp",
+                               offset=[1, 1, 1], target_shape=list(shape), chunk_shape=(4, 4, 4), dtype="uint64", compression="zstd")
+        import json
+        return json.load(open(os.path.join(container, "labels", "l.tmp", "s0", "zarr.json")))
+
+    def test_an_xyz_container_gives_xyz_names(self, tmp_path):
+        meta = self._ingest(self._container(tmp_path, "xyz"), (8, 6, 5))
+        assert meta["dimension_names"] == ["x", "y", "z"] and meta["shape"] == [8, 6, 5]
+
+    def test_a_zyx_container_gives_zyx_names(self, tmp_path):
+        meta = self._ingest(self._container(tmp_path, "zyx"), (5, 6, 8))
+        assert meta["dimension_names"] == ["z", "y", "x"]

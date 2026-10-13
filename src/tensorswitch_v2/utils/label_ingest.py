@@ -177,6 +177,10 @@ def ingest_label_at_offset(
         compress_codec,
     ]
 
+    # Name the array's axes after the container's own, so the pyramid step and any reader know the layout
+    # instead of guessing z,y,x from the shape (wrong for a container stored x,y,z).
+    axis_names = [a.get('name') for a in _infer_axes(target_container, ndim)]
+
     # Create target array at labels/<label_tmp_key>/s0
     s0_path = os.path.join(target_container, 'labels', label_tmp_key, 's0')
     os.makedirs(os.path.dirname(s0_path), exist_ok=True)
@@ -198,6 +202,8 @@ def ingest_label_at_offset(
             'codecs': codecs,
         },
     }
+    if all(isinstance(n, str) and n for n in axis_names):
+        spec['metadata']['dimension_names'] = axis_names
     target_store = ts.open(spec).result()
 
     # Read source into memory, add leading singleton dims if fewer than ndim
