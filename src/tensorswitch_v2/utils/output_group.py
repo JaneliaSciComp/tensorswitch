@@ -21,8 +21,15 @@ UMASK_ENV = "TENSORSWITCH_UMASK"
 GROUP_ENV = "TENSORSWITCH_GROUP"
 _warned = set()
 
-PRESET_UMASK = "0022"       # --preset miaai: directories 755, files 644 (no group write)
+PRESET_UMASK = "0022"       # --preset miaai: new directories 755, new files start at 644 (no group write)
 PRESET_GROUP = "miaai"
+PRESET_ADD_BITS, PRESET_DROP_BITS = 0o050, 0o020      # --preset miaai: group read+execute is added, group write is dropped
+
+
+def preset_mode(mode: int) -> int:
+    """The mode a finished miaai output has: group read+execute and no group write; every other bit is kept (directories 755,
+    files 654). This is the rule of the corpus (lmvd guideline section 2, Oct 6, 2026) and of the QC check ownership_permissions."""
+    return (mode | PRESET_ADD_BITS) & ~PRESET_DROP_BITS & 0o7777
 
 
 def default_umask() -> int:
@@ -58,8 +65,9 @@ def preset_permissions(preset: Optional[str]):
 def apply_preset_permissions(preset: Optional[str]) -> None:
     """--preset miaai / mia_lmvd: create files 644 and directories 755 and give them group `miaai`.
 
-    The umask applies from here on (and in worker processes, through the environment); the group is applied when an
-    output is finished (apply_parent_group). Any other preset, or none, keeps the defaults.
+    The umask applies from here on (and in worker processes, through the environment); the group and group read+execute
+    (files 654: files cannot be created executable) are applied when an output is finished (apply_parent_group,
+    apply_preset_to_container). Any other preset, or none, keeps the defaults.
     """
     if preset in ("miaai", "mia_lmvd"):
         os.environ[UMASK_ENV] = PRESET_UMASK
@@ -131,6 +139,62 @@ def _existing_ancestor(path: str) -> str:
     return path
 
 
+def _preset_gid() -> Optional[int]:
+    """The preset's group id when a preset named one and the user is in it."""
+    named = os.environ.get(GROUP_ENV)
+    if not named:
+        return None
+    try:
+        gid = grp.getgrnam(named).gr_gid
+    except KeyError:
+        return None
+    return gid if gid in _member_gids() else None
+
+
+def apply_preset_entry(path: str) -> bool:
+    """Under a preset (--preset miaai) give one existing path, never a symlink, the preset's group and its modes (group
+    read+execute, no group write). Not recursive. Returns True when something changed; a no-op without a preset."""
+    if not os.environ.get(GROUP_ENV) or not os.path.exists(path) or os.path.islink(path):
+        return False
+    changed = False
+    try:
+        st = os.lstat(path)
+        gid = _preset_gid()
+        if gid is not None and st.st_gid != gid:
+            os.chown(path, -1, gid, follow_symlinks=False)
+            changed = True
+        want = preset_mode(st.st_mode & 0o7777)
+        if (st.st_mode & 0o7777) != want:
+            os.chmod(path, want)
+            changed = True
+    except OSError:
+        pass
+    return changed
+
+
+def apply_preset_to_container(container: str) -> int:
+    """Under a preset, finish the files a run rewrites in an existing container and the folder it creates for a first label:
+    the root and every layer's zarr.json, and `labels/` with its zarr.json. A temp-file-and-rename write makes a new inode that
+    comes out 644 under the job's own group, and `labels/` is made by the run itself, so neither is covered by the output
+    folder's own sweep (apply_parent_group). Not recursive. Returns the number of entries changed."""
+    if not os.environ.get(GROUP_ENV) or not os.path.isdir(container):
+        return 0
+    paths = [container, os.path.join(container, "zarr.json"), os.path.join(container, "labels"),
+             os.path.join(container, "labels", "zarr.json")]
+    try:
+        for name in os.listdir(container):
+            if name != "labels" and os.path.isfile(os.path.join(container, name, "zarr.json")):
+                paths.append(os.path.join(container, name, "zarr.json"))
+        labels = os.path.join(container, "labels")
+        if os.path.isdir(labels):
+            for name in os.listdir(labels):
+                if os.path.isfile(os.path.join(labels, name, "zarr.json")):
+                    paths.append(os.path.join(labels, name, "zarr.json"))
+    except OSError:
+        pass
+    return sum(apply_preset_entry(p) for p in paths)
+
+
 def apply_parent_group(output_path: str) -> int:
     """Give a finished local output the group of the folder it was written into (or the preset's group, `miaai`).
 
@@ -138,7 +202,10 @@ def apply_parent_group(output_path: str) -> int:
     when the user is not in the parent's group, or when the group already matches.
     Files the user does not own are skipped. Returns the number of entries changed.
     """
-    if os.environ.get(APPLIED_ENV) or not os.path.exists(output_path):
+    if not os.path.exists(output_path):
+        return 0
+    modes = bool(os.environ.get(GROUP_ENV))         # under a preset every finished entry also gets group read+execute and loses group write
+    if os.environ.get(APPLIED_ENV) and not modes:
         return 0
     gid = None
     named = os.environ.get(GROUP_ENV)               # a preset names the group (miaai); otherwise the folder's own group
@@ -149,23 +216,35 @@ def apply_parent_group(output_path: str) -> int:
             gid = None
         if gid is not None and gid not in _member_gids():
             gid = None
-    if gid is None:
+    if os.environ.get(APPLIED_ENV):
+        gid = None                                  # the job already runs under the project's group: only the modes are left to fix
+    elif gid is None:
         parent = _existing_ancestor(os.path.dirname(os.path.abspath(output_path)))
         try:
             gid = os.stat(parent).st_gid
         except OSError:
-            return 0
-        if gid not in _member_gids():
-            return 0
+            gid = None
+        if gid is not None and gid not in _member_gids():
+            gid = None
+    if gid is None and not modes:
+        return 0
 
     changed = 0
 
     def fix(path):
         nonlocal changed
         try:
-            if os.lstat(path).st_gid != gid:
+            st = os.lstat(path)
+            if os.path.islink(path):
+                return
+            touched = False
+            if gid is not None and st.st_gid != gid:
                 os.chown(path, -1, gid, follow_symlinks=False)
-                changed += 1
+                touched = True
+            if modes and (st.st_mode & 0o7777) != preset_mode(st.st_mode & 0o7777):
+                os.chmod(path, preset_mode(st.st_mode & 0o7777))
+                touched = True
+            changed += touched
         except OSError:
             pass
 

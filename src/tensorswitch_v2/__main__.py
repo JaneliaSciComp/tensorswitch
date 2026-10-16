@@ -968,6 +968,8 @@ def _apply_group_to_added_label(final_output, subgroup_parent, label_name):
     from .utils.output_group import apply_parent_group
     added = os.path.join(final_output, subgroup_parent, label_name)
     apply_parent_group(added if os.path.exists(added) else os.path.join(final_output, subgroup_parent))
+    from .utils.output_group import apply_preset_to_container
+    apply_preset_to_container(final_output)          # the labels/ folder and zarr.json files of the container (--preset miaai)
 
 
 def _finalize_add_to_existing(
@@ -2438,8 +2440,7 @@ def _apply_preset(args):
 
 
 def run_conversion(args):
-    """Convert one source to one local output (see _run_conversion). Under --preset miaai the files are written 644 /
-    755 with group miaai for the length of the conversion only, so a long-lived caller (the MCP server) is not changed."""
+    """Convert one source to one local output (see _run_conversion). Under --preset miaai the files are written with group miaai, group read+execute and no group write (directories 755, files 654) for the length of the conversion only, so a long-lived caller (the MCP server) is not changed."""
     from .utils.output_group import preset_permissions
     with preset_permissions(getattr(args, "preset", None)):
         return _run_conversion(args)
@@ -2895,6 +2896,8 @@ def _apply_post_conversion_metadata(args, final_output, group):
     if getattr(args, 'preset', None) in ('miaai', 'mia_lmvd') and args.output_format == 'zarr3':
         mm.mark_container(final_output, 'miaai', getattr(args, 'expansion_factor', None))
         mm.finalize_container(final_output, getattr(args, 'expansion_factor', None))
+        from .utils.output_group import apply_preset_to_container
+        apply_preset_to_container(final_output)      # the finalizer rewrote zarr.json files: group miaai, group read+execute, no group write
 
 
 def main(argv=None):
@@ -2903,7 +2906,7 @@ def main(argv=None):
 
     _apply_preset(args)
     from .utils.output_group import apply_preset_permissions
-    apply_preset_permissions(args.preset)       # --preset miaai: files 644, directories 755, group miaai (this process only)
+    apply_preset_permissions(args.preset)       # --preset miaai: group miaai, group read+execute and no group write (directories 755, files 654), this process only
 
     # Parse optional shapes
     chunk_shape = parse_shape(args.chunk_shape, "chunk_shape") if args.chunk_shape else None
