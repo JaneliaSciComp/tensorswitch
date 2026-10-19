@@ -23,12 +23,15 @@ _warned = set()
 
 PRESET_UMASK = "0022"       # --preset miaai: new directories 755, new files start at 644 (no group write)
 PRESET_GROUP = "miaai"
-PRESET_ADD_BITS, PRESET_DROP_BITS = 0o050, 0o020      # --preset miaai: group read+execute is added, group write is dropped
+PRESET_ADD_BITS, PRESET_DROP_BITS = 0o150, 0o020      # --preset miaai: owner+group execute is added, group write is dropped
 
 
 def preset_mode(mode: int) -> int:
-    """The mode a finished miaai output has: group read+execute and no group write; every other bit is kept (directories 755,
-    files 654). This is the rule of the corpus (lmvd guideline section 2, Oct 6, 2026) and of the QC check ownership_permissions."""
+    """The mode a finished miaai output has: group read+execute and no group write, with owner execute added too so the
+    creator's own access is never a strict subset of the group's (Unix permission checks never fall through from owner to
+    group bits, even for a member of that group) -- directories 755, files 754. This is the rule of the corpus (lmvd
+    guideline section 2, Oct 19, 2026) and of the QC check ownership_permissions (which only checks the group triad, so
+    this owner-side change doesn't affect it)."""
     return (mode | PRESET_ADD_BITS) & ~PRESET_DROP_BITS & 0o7777
 
 
@@ -65,8 +68,9 @@ def preset_permissions(preset: Optional[str]):
 def apply_preset_permissions(preset: Optional[str]) -> None:
     """--preset miaai / mia_lmvd: create files 644 and directories 755 and give them group `miaai`.
 
-    The umask applies from here on (and in worker processes, through the environment); the group and group read+execute
-    (files 654: files cannot be created executable) are applied when an output is finished (apply_parent_group,
+    The umask applies from here on (and in worker processes, through the environment); the group and group read+execute,
+    plus owner execute so the creator is never a strict subset of the group (files 754: files cannot be created
+    executable, so this is added at finalize time) are applied when an output is finished (apply_parent_group,
     apply_preset_to_container). Any other preset, or none, keeps the defaults.
     """
     if preset in ("miaai", "mia_lmvd"):

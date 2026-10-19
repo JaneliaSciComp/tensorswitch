@@ -1918,7 +1918,10 @@ def _submit_dependent_pyramid(args, conversion_job_id: str):
 
     After the conversion job finishes, this coordinator job runs
     --auto_multiscale on the output zarr, which submits chained
-    pyramid level jobs via create_pyramid_parallel().
+    pyramid level jobs via create_pyramid_parallel(). The reinvoke carries
+    --preset forward (when it's 'miaai'/'mia_lmvd') so every per-level
+    downsample job gets finalized the same way as the conversion job's
+    own output, not just s0.
 
     Args:
         args: Parsed command-line arguments
@@ -1943,6 +1946,8 @@ def _submit_dependent_pyramid(args, conversion_job_id: str):
         "--submit",
         "-P", args.project,
     ]
+    if getattr(args, 'preset', None) in ('miaai', 'mia_lmvd'):
+        reinvoke += ["--preset", args.preset]
     if getattr(args, 'downsample_method', 'auto') != 'auto':
         reinvoke += ["--downsample_method", args.downsample_method]
     if getattr(args, 'per_level_factors', None):
@@ -2233,6 +2238,11 @@ def submit_downsample_job(args, cumulative_factors):
         reinvoke.append("--no_ome_xml_attr")
     if getattr(args, 'cumulative_factor_for_metadata', None):
         reinvoke += ["--cumulative_factor_for_metadata", args.cumulative_factor_for_metadata]
+    if getattr(args, 'preset', None) in ('miaai', 'mia_lmvd'):
+        # Without this, the compute node never sees --preset, so the finalization
+        # step after downsample_level() (group miaai, no group write, 754/755)
+        # never runs for this level -- it silently stays at whatever bare umask gave it.
+        reinvoke += ["--preset", args.preset]
 
     # Convert to properly quoted shell command string
     # This handles paths with spaces correctly when bsub creates its wrapper
@@ -2440,7 +2450,7 @@ def _apply_preset(args):
 
 
 def run_conversion(args):
-    """Convert one source to one local output (see _run_conversion). Under --preset miaai the files are written with group miaai, group read+execute and no group write (directories 755, files 654) for the length of the conversion only, so a long-lived caller (the MCP server) is not changed."""
+    """Convert one source to one local output (see _run_conversion). Under --preset miaai the files are written with group miaai, group read+execute and no group write (directories 755, files 754) for the length of the conversion only, so a long-lived caller (the MCP server) is not changed."""
     from .utils.output_group import preset_permissions
     with preset_permissions(getattr(args, "preset", None)):
         return _run_conversion(args)
@@ -2906,7 +2916,7 @@ def main(argv=None):
 
     _apply_preset(args)
     from .utils.output_group import apply_preset_permissions
-    apply_preset_permissions(args.preset)       # --preset miaai: group miaai, group read+execute and no group write (directories 755, files 654), this process only
+    apply_preset_permissions(args.preset)       # --preset miaai: group miaai, group read+execute and no group write (directories 755, files 754), this process only
 
     # Parse optional shapes
     chunk_shape = parse_shape(args.chunk_shape, "chunk_shape") if args.chunk_shape else None
@@ -3265,6 +3275,7 @@ def main(argv=None):
                         custom_per_level_factors=custom_per_level_factors,
                         include_translation=not args.no_translation,
                         log_dir=getattr(args, 'log_dir', None),
+                        preset=getattr(args, 'preset', None),
                     )
                     coordinator_jid = result.get('coordinator_job_id')
                     num_levels = result.get('pyramid_plan', {}).get('num_levels', 0)
@@ -3314,6 +3325,7 @@ def main(argv=None):
                 custom_per_level_factors=custom_per_level_factors,
                 include_translation=not args.no_translation,
                 log_dir=getattr(args, 'log_dir', None),
+                preset=getattr(args, 'preset', None),
             )
             num_levels = result.get('pyramid_plan', {}).get('num_levels', 0)
             coordinator_job_id = result.get('coordinator_job_id')
@@ -3471,6 +3483,14 @@ def main(argv=None):
                 verbose=verbose,
                 cumulative_factor_for_metadata=cumulative_factor_for_metadata,
             )
+            # This branch is also what a chained-pyramid coordinator's per-level job
+            # actually runs on the compute node (it reinvokes --downsample without
+            # --submit). Unlike run_conversion(), nothing here finalizes the level
+            # it just wrote -- do that now so s1..sN end up group miaai, no group
+            # write, same as s0 (which run_conversion() already finalizes).
+            if getattr(args, 'preset', None) in ('miaai', 'mia_lmvd'):
+                from .utils.output_group import apply_parent_group
+                apply_parent_group(args.output)
         return
 
     # Standard conversion mode (single level / s0)

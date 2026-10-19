@@ -1,5 +1,7 @@
-"""--preset miaai gives every finished file and folder group miaai, group read+execute and no group write (directories 755,
-files 654, the corpus rule of guideline section 2 and of the QC check ownership_permissions); no other preset changes the defaults.
+"""--preset miaai gives every finished file and folder group miaai, group read+execute and no group write, with owner
+execute added too so the creator is never a strict subset of the group (directories 755, files 754, the corpus rule of
+guideline section 2 and of the QC check ownership_permissions, which only checks the group triad); no other preset
+changes the defaults.
 
 The umask is applied from the preset (and through TENSORSWITCH_UMASK into worker processes), so new files start at 644 and new
 directories at 755; the group and group execute are applied when an output is finished (apply_parent_group, and
@@ -153,7 +155,7 @@ def test_a_finished_output_under_the_preset_gets_group_read_execute_and_no_group
     os.chmod(out, 0o775)                                       # a folder made with the team umask
     os.chmod(f, 0o664)                                         # a file with group write
     og.apply_parent_group(str(out))
-    assert _mode(out) == 0o755 and _mode(f) == 0o654           # group r-x, no group write, the other bits kept
+    assert _mode(out) == 0o755 and _mode(f) == 0o754           # group r-x, no group write, owner execute added too
 
 
 def test_the_modes_are_fixed_even_inside_a_job_that_already_runs_under_the_project_group(restore, tmp_path, monkeypatch):
@@ -163,7 +165,7 @@ def test_the_modes_are_fixed_even_inside_a_job_that_already_runs_under_the_proje
     f.write_text("x")
     os.chmod(f, 0o644)
     og.apply_parent_group(str(tmp_path))
-    assert _mode(f) == 0o654
+    assert _mode(f) == 0o754
 
 
 def test_without_a_preset_no_mode_is_changed(restore, tmp_path):
@@ -186,7 +188,7 @@ def test_the_container_files_a_run_rewrites_and_the_labels_folder_it_creates_are
     changed = og.apply_preset_to_container(str(c))
     assert changed >= 4
     for rel in ("zarr.json", "raw/zarr.json", "labels/zarr.json", "labels/manual_gt-cell-snap_10162026/zarr.json"):
-        assert _mode(c / rel) == 0o654, rel
+        assert _mode(c / rel) == 0o754, rel
     assert _mode(c / "labels") == 0o755
     assert og.apply_preset_to_container(str(c)) == 0           # nothing more to do the second time
 

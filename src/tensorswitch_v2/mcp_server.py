@@ -1051,6 +1051,7 @@ def submit_job(
                     log_dir=args.log_dir or "",
                     include_translation=not args.no_translation,
                     subgroup=_cli_subgroup(args),
+                    preset=args.preset,
                 )
 
         # Suppress stdout - MCP uses stdio transport (stdout = JSON-RPC)
@@ -1118,6 +1119,7 @@ def _submit_pyramid_job(
     log_dir: str = "",
     include_translation: bool = True,
     subgroup: str = None,
+    preset: str = None,
 ) -> str:
     """Submit pyramid generation as chained LSF jobs."""
     import contextlib
@@ -1184,6 +1186,7 @@ def _submit_pyramid_job(
             custom_per_level_factors=custom_factors,
             log_dir=log_dir if log_dir else None,
             include_translation=include_translation,
+            preset=preset,
         )
 
     return json.dumps({
