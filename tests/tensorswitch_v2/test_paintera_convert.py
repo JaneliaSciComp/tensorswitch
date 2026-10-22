@@ -209,3 +209,60 @@ def test_real_helper_on_an_anisotropic_crop_gives_the_expected_offset_resolution
     d = json.load(open(out / "labels" / "data" / "attributes.json"))
     assert d["resolution"] == pytest.approx([SCALE["x"], SCALE["y"], SCALE["z"]]) and d["offset"] == pytest.approx(r["offset_xyz"])
     assert json.load(open(out / "labels" / "attributes.json"))["maxId"] == int(zyx[3:13, 5:17, 7:21].max())
+
+
+def _add_outer(arr_dir, outer, expansion=None):
+    """Turn make_source's group into an ExM-style one: group-level outer scale 1/expansion_factor, inner values in expanded units."""
+    gj = os.path.join(os.path.dirname(arr_dir), "zarr.json")
+    j = json.load(open(gj))
+    if outer is not None:
+        j["attributes"]["ome"]["multiscales"][0]["coordinateTransformations"] = [{"type": "scale", "scale": outer}]
+    if expansion is not None:
+        j["attributes"]["expansion_microscopy"] = {"expansion_factor": expansion}
+    json.dump(j, open(gj, "w"))
+
+
+def test_the_outer_scale_of_an_expansion_source_is_applied_to_scale_and_translation(tmp_path):
+    arr, _ = make_source(tmp_path)                      # inner values: SCALE and TRANS per axis
+    _add_outer(arr, [0.0625] * 3, expansion=16)
+    g = pc.read_geometry(arr)
+    assert g.scale_nm == pytest.approx({a: SCALE[a] * 0.0625 for a in "zyx"})
+    assert g.translation_nm == pytest.approx({a: TRANS[a] * 0.0625 for a in "zyx"})
+    res, off = pc.expected_geometry_xyz(g, {"z": 2, "y": 3, "x": 4})
+    assert res == pytest.approx([SCALE["x"] * 0.0625, SCALE["y"] * 0.0625, SCALE["z"] * 0.0625])
+    assert off == pytest.approx([(TRANS["x"] + SCALE["x"] * 4) * 0.0625, (TRANS["y"] + SCALE["y"] * 3) * 0.0625, (TRANS["z"] + SCALE["z"] * 2) * 0.0625])
+
+
+def test_an_anisotropic_outer_scale_follows_the_axis_names(tmp_path):
+    arr, _ = make_source(tmp_path, axes=("x", "y", "z"))
+    _add_outer(arr, [0.5, 0.25, 0.125], expansion=4)             # the outer scale is in the group's stored axis order (x, y, z here)
+    g = pc.read_geometry(arr)
+    assert g.scale_nm == pytest.approx({"x": SCALE["x"] * 0.5, "y": SCALE["y"] * 0.25, "z": SCALE["z"] * 0.125})
+
+
+def test_an_expansion_source_without_an_outer_scale_is_refused_loudly(tmp_path):
+    arr, _ = make_source(tmp_path)
+    _add_outer(arr, None, expansion=32)
+    with pytest.raises(pc.PainteraConvertError) as e:
+        pc.read_geometry(arr)
+    assert e.value.code == "outer_scale_missing"
+
+
+def test_a_plain_em_source_without_an_outer_scale_is_unchanged(tmp_path):
+    arr, _ = make_source(tmp_path)
+    g = pc.read_geometry(arr)
+    assert g.scale_nm == SCALE and g.translation_nm == TRANS
+    _add_outer(arr, None, expansion=1)                            # an expansion block of 1 is not expansion
+    assert pc.read_geometry(arr).scale_nm == SCALE
+
+
+def test_the_converted_n5_of_an_expansion_source_carries_the_physical_size(tmp_path, monkeypatch):
+    arr, zyx = make_source(tmp_path)
+    _add_outer(arr, [0.0625] * 3, expansion=16)
+    monkeypatch.setenv("FAKE_MAXID", str(int(zyx[3:13, 5:17, 7:21].max())))
+    out = tmp_path / "out" / "crop.n5"
+    (tmp_path / "out").mkdir()
+    r = pc.convert_bbox(arr, (3, 5, 7), (10, 12, 14), str(out), str(tmp_path / "work"), group=None, script=fake_helper(tmp_path), helper_dir=str(tmp_path))
+    assert r["ok"], r["checks"]
+    d = json.load(open(out / "labels" / "data" / "attributes.json"))
+    assert d["resolution"] == pytest.approx([SCALE["x"] * 0.0625, SCALE["y"] * 0.0625, SCALE["z"] * 0.0625])      # not 16x too coarse

@@ -54,7 +54,8 @@ def read_geometry(array_dir):
     gj = os.path.join(group_dir, "zarr.json")
     if not os.path.isfile(gj):
         raise PainteraConvertError("geometry_unknown", f"{group_dir} has no zarr.json with OME multiscales")
-    ms = (_read(gj).get("attributes", {}).get("ome", {}).get("multiscales") or [None])[0]
+    gattrs = _read(gj).get("attributes", {})
+    ms = (gattrs.get("ome", {}).get("multiscales") or [None])[0]
     if not ms:
         raise PainteraConvertError("geometry_unknown", f"{group_dir} has no OME multiscales")
     axes = [a["name"] for a in ms["axes"]]
@@ -67,8 +68,19 @@ def read_geometry(array_dir):
     trans = next((t["translation"] for t in ds["coordinateTransformations"] if t["type"] == "translation"), [0.0] * 3)
     if scale is None:
         raise PainteraConvertError("geometry_unknown", f"dataset {name!r} has no scale")
-    return Geometry(array_dir, axes, list(arr["shape"]), arr["data_type"],
-                    dict(zip(axes, map(float, scale))), dict(zip(axes, map(float, trans))))
+    # The group-level (outer) scale applies on top of every dataset's own: expansion-microscopy crops store expanded units and carry
+    # 1/expansion_factor there. Paintera works in the physical size (inner x outer), for the scale AND the translation; skipping it
+    # made the #31 and #1129 expansions exactly 16x and 32x too coarse (Oct 22, 2026).
+    outer = next((t["scale"] for t in (ms.get("coordinateTransformations") or []) if t.get("type") == "scale"), None)
+    if outer is None and (gattrs.get("expansion_microscopy") or {}).get("expansion_factor") not in (None, 1, 1.0):
+        raise PainteraConvertError("outer_scale_missing", f"{group_dir} is an expansion-microscopy source but its multiscales carry no outer "
+                                   "scale (1/expansion_factor), so the physical voxel size is unknown; nothing was converted")
+    if outer is not None and len(outer) != 3:
+        raise PainteraConvertError("geometry_unknown", f"the outer scale {outer} of {group_dir} is not 3D")
+    outer = outer or [1.0, 1.0, 1.0]
+    scale = [float(s) * float(o) for s, o in zip(scale, outer)]
+    trans = [float(t) * float(o) for t, o in zip(trans, outer)]
+    return Geometry(array_dir, axes, list(arr["shape"]), arr["data_type"], dict(zip(axes, scale)), dict(zip(axes, trans)))
 
 
 def expected_geometry_xyz(geom, start_by_axis):
