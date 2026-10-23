@@ -145,6 +145,26 @@ def crop_to_source(geom, start_zyx, size_zyx, out_dir, group=None, chunk=128):
     return max_id, nonzero
 
 
+def verify_crop(geom, start_zyx, size_zyx, source_dir):
+    """Compare the staged crop with the array it was cut from, voxel for voxel (read back from disk, in slabs). Returns (n_voxels, n_different).
+    A wrong slice, a dropped chunk or an axis reorder in the crop step shows up here even when every piece of metadata agrees."""
+    import numpy as np
+    import tensorstore as ts
+    start, size = _bbox_by_axis(geom, start_zyx, size_zyx)
+    src = ts.open({"driver": "zarr3", "kvstore": {"driver": "file", "path": geom.array_dir}}).result()
+    dst = ts.open({"driver": "zarr3", "kvstore": {"driver": "file", "path": os.path.join(source_dir, "segments", "s0")}}).result()
+    if list(dst.shape) != [size[a] for a in geom.axes]:
+        return int(np.prod(size_zyx)), int(np.prod(size_zyx))
+    sl = tuple(slice(start[a], start[a] + size[a]) for a in geom.axes)
+    lead = max(1, (64 * 1024 * 1024) // max(1, int(np.prod(dst.shape[1:])) * 8))
+    diff = 0
+    for z0 in range(0, dst.shape[0], lead):
+        z1 = min(z0 + lead, dst.shape[0])
+        a = src[(slice(sl[0].start + z0, sl[0].start + z1),) + sl[1:]].read().result()
+        diff += int(np.count_nonzero(a != dst[z0:z1].read().result()))
+    return int(np.prod(dst.shape)), diff
+
+
 def helper_version(helper_dir):
     """The highest (1, 3, 1)-style version among the helper's jars, or None."""
     lib = os.path.join(helper_dir, "target", "dependency")
@@ -250,6 +270,9 @@ def convert_bbox(array_dir, start_zyx, size_zyx, out_container, workdir, group="
     if group:
         shutil.chown(out_container, group=group)
         os.chmod(out_container, 0o2775)                          # pre-created setgid, so the helper's last-written files inherit the group
+    n_vox, n_diff = verify_crop(geom, start_zyx, size_zyx, source)          # the crop is what the helper converts: it must equal its source
+    if n_diff:
+        raise PainteraConvertError("crop_mismatch", f"the staged crop differs from its source in {n_diff:,} of {n_vox:,} voxels; nothing was converted")
     cmd = build_command(script, source, out_container, res, off, spark_master=spark_master)
     log = os.path.join(workdir, "paintera_convert.log")
     runner = runner or _run
@@ -258,7 +281,7 @@ def convert_bbox(array_dir, start_zyx, size_zyx, out_container, workdir, group="
         raise PainteraConvertError("helper_failed", f"paintera-convert exited with {rc}; see {log}")
     if group:
         set_handoff_permissions(out_container, group)
-    checks = check_output(out_container, res, off, max_id)
+    checks = [{"name": "crop_identity", "status": "pass", "detail": f"the staged crop equals its source in all {n_vox:,} voxels"}] + check_output(out_container, res, off, max_id)
     if not keep_source:
         shutil.rmtree(source, ignore_errors=True)
     return {"ok": all(c["status"] == "pass" for c in checks), "checks": checks, "max_id": max_id, "nonzero_voxels": nonzero,

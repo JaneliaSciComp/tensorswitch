@@ -266,3 +266,24 @@ def test_the_converted_n5_of_an_expansion_source_carries_the_physical_size(tmp_p
     assert r["ok"], r["checks"]
     d = json.load(open(out / "labels" / "data" / "attributes.json"))
     assert d["resolution"] == pytest.approx([SCALE["x"] * 0.0625, SCALE["y"] * 0.0625, SCALE["z"] * 0.0625])      # not 16x too coarse
+
+
+def test_the_staged_crop_is_compared_with_its_source_voxel_for_voxel(tmp_path):
+    arr, _ = make_source(tmp_path)
+    g = pc.read_geometry(arr)
+    out = tmp_path / "crop.zarr"
+    pc.crop_to_source(g, (3, 5, 7), (10, 12, 14), str(out))
+    assert pc.verify_crop(g, (3, 5, 7), (10, 12, 14), str(out)) == (10 * 12 * 14, 0)
+    import tensorstore as ts
+    dst = ts.open({"driver": "zarr3", "kvstore": {"driver": "file", "path": str(out / "segments" / "s0")}}).result()
+    dst[0, 0, 0].write(123456789).result()                                      # one voxel changed after the crop: the check must see it
+    assert pc.verify_crop(g, (3, 5, 7), (10, 12, 14), str(out)) == (10 * 12 * 14, 1)
+    assert pc.verify_crop(g, (3, 5, 7), (9, 12, 14), str(out))[1] > 0                # a crop of the wrong shape is a mismatch, not a pass
+
+
+def test_convert_bbox_reports_the_crop_identity_check(tmp_path, monkeypatch):
+    arr, zyx = make_source(tmp_path)
+    monkeypatch.setenv("FAKE_MAXID", str(int(zyx[3:13, 5:17, 7:21].max())))
+    (tmp_path / "out").mkdir()
+    r = pc.convert_bbox(arr, (3, 5, 7), (10, 12, 14), str(tmp_path / "out" / "c.n5"), str(tmp_path / "w"), group=None, script=fake_helper(tmp_path), helper_dir=str(tmp_path))
+    assert r["ok"] and r["checks"][0]["name"] == "crop_identity" and r["checks"][0]["status"] == "pass"
