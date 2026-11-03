@@ -2491,6 +2491,16 @@ def _run_conversion(args):
             raise ValueError(
                 f"--add-to-existing: target is not a zarr container: {final_output}"
             )
+        # The new label follows its container: a zarr 2 crop gets a zarr 2 label (also when --output_format was left at its zarr3 default),
+        # a zarr 3 crop never gets a zarr 2 one.
+        container_fmt = 'zarr3' if is_zarr3 else 'zarr2'
+        if args.output_format in ('zarr3', 'zarr2') and args.output_format != container_fmt:
+            if args.output_format == 'zarr2':
+                raise ValueError(
+                    f"--add-to-existing: {final_output} is a zarr3 container, --output_format zarr2 cannot be added to it"
+                )
+            print(f"--add-to-existing: {final_output} is a zarr2 container: writing the label as zarr2")
+            args.output_format = 'zarr2'
         subgroup = _resolve_conversion_subgroup(args)
         if not subgroup:
             raise ValueError(

@@ -9,9 +9,51 @@ import os
 import json
 
 
+def container_format(container_path: str) -> str:
+    """'zarr3' when the container has a root zarr.json, 'zarr2' when it has a .zgroup (and no zarr.json), else 'zarr3'.
+    The one place that decides the format of a label added to an existing container: the label follows its container."""
+    if os.path.exists(os.path.join(container_path, 'zarr.json')):
+        return 'zarr3'
+    if os.path.exists(os.path.join(container_path, '.zgroup')):
+        return 'zarr2'
+    return 'zarr3'
+
+
+def _read_json(path: str):
+    """The parsed JSON file at `path`, or None when it does not exist or cannot be read."""
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+def _zarr2_compressor(codec_name: str, level: int) -> dict:
+    """The zarr 2 compressor for the codec the zarr 3 path uses, by TensorSwitch's one rule for zarr 2 (zstd is written wrapped in blosc: bare
+    zstd frames from TensorStore releases before 0.1.80 carry no content size and numcodecs cannot read them)."""
+    from .metadata_utils import normalize_zarr2_compressor_for_tensorstore
+    if codec_name == 'blosc':
+        return {'id': 'blosc', 'cname': 'zstd', 'clevel': level, 'shuffle': 1, 'blocksize': 0}
+    return normalize_zarr2_compressor_for_tensorstore({'id': 'gzip' if codec_name in ('gzip', 'gz') else 'zstd', 'level': level})
+
+
+def _zarr2_multiscales(container_path: str) -> list:
+    """The `multiscales` list of a zarr 2 container: its root .zattrs, else raw/.zattrs, else a sibling label's .zattrs (first one found)."""
+    candidates = [os.path.join(container_path, '.zattrs'), os.path.join(container_path, 'raw', '.zattrs')]
+    labels_dir = os.path.join(container_path, 'labels')
+    if os.path.isdir(labels_dir):
+        candidates += [os.path.join(labels_dir, e, '.zattrs') for e in sorted(os.listdir(labels_dir))
+                       if not e.endswith('.tmp') and os.path.isdir(os.path.join(labels_dir, e))]
+    for path in candidates:
+        ms = (_read_json(path) or {}).get('multiscales')
+        if ms:
+            return ms
+    return []
+
+
 def _read_target_shape_from_container(container_path: str) -> list:
     """
-    Infer target shape from the first non-.tmp sibling label's s0/zarr.json.
+    Infer target shape from the first non-.tmp sibling label's s0/zarr.json (zarr 3) or s0/.zarray (zarr 2).
 
     Args:
         container_path: Root path of the target zarr container.
@@ -28,10 +70,11 @@ def _read_target_shape_from_container(container_path: str) -> list:
             f"No labels/ directory in {container_path}. "
             "Supply --target-shape to specify the full output shape."
         )
+    s0_meta_name = '.zarray' if container_format(container_path) == 'zarr2' else 'zarr.json'
     for entry in sorted(os.listdir(labels_dir)):
-        if entry.endswith('.tmp') or entry == 'zarr.json':
+        if entry.endswith('.tmp') or entry in ('zarr.json', '.zgroup', '.zattrs'):
             continue
-        s0_meta = os.path.join(labels_dir, entry, 's0', 'zarr.json')
+        s0_meta = os.path.join(labels_dir, entry, 's0', s0_meta_name)
         if not os.path.exists(s0_meta):
             continue
         with open(s0_meta) as f:
@@ -122,7 +165,7 @@ def ingest_label_at_offset(
     """
     Write source_ts into a full-size label array at a TCZYX offset.
 
-    Creates labels/<label_tmp_key>/s0 (zarr3, fill_value=0) in target_container,
+    Creates labels/<label_tmp_key>/s0 (fill_value=0; zarr 3 or zarr 2, whichever the container is: see container_format()) in target_container,
     writes source data at [offset[0]:offset[0]+src[0], ...], and writes
     OME-NGFF label image group metadata.
 
@@ -185,26 +228,47 @@ def ingest_label_at_offset(
     s0_path = os.path.join(target_container, 'labels', label_tmp_key, 's0')
     os.makedirs(os.path.dirname(s0_path), exist_ok=True)
 
-    spec = {
-        'driver': 'zarr3',
-        'kvstore': {'driver': 'file', 'path': s0_path},
-        'create': True,
-        'delete_existing': True,
-        'metadata': {
-            'shape': list(target_shape),
-            'chunk_grid': {
-                'name': 'regular',
-                'configuration': {'chunk_shape': chunk_list},
+    fmt = container_format(target_container)
+    if fmt == 'zarr2':
+        spec = {
+            'driver': 'zarr',
+            'kvstore': {'driver': 'file', 'path': s0_path},
+            'create': True,
+            'delete_existing': True,
+            'metadata': {
+                'shape': list(target_shape),
+                'chunks': chunk_list,
+                'dtype': np.dtype(dtype).str,
+                'compressor': _zarr2_compressor(codec_name, compression_level),
+                'order': 'C',
+                'dimension_separator': '/',
+                'fill_value': 0,
             },
-            'chunk_key_encoding': {'name': 'default'},
-            'fill_value': 0,
-            'data_type': dtype,
-            'codecs': codecs,
-        },
-    }
-    if all(isinstance(n, str) and n for n in axis_names):
-        spec['metadata']['dimension_names'] = axis_names
+        }
+    else:
+        spec = {
+            'driver': 'zarr3',
+            'kvstore': {'driver': 'file', 'path': s0_path},
+            'create': True,
+            'delete_existing': True,
+            'metadata': {
+                'shape': list(target_shape),
+                'chunk_grid': {
+                    'name': 'regular',
+                    'configuration': {'chunk_shape': chunk_list},
+                },
+                'chunk_key_encoding': {'name': 'default'},
+                'fill_value': 0,
+                'data_type': dtype,
+                'codecs': codecs,
+            },
+        }
+        if all(isinstance(n, str) and n for n in axis_names):
+            spec['metadata']['dimension_names'] = axis_names
     target_store = ts.open(spec).result()
+    if fmt == 'zarr2' and all(isinstance(n, str) and n for n in axis_names):
+        with open(os.path.join(s0_path, '.zattrs'), 'w') as f:                  # a zarr 2 array names its axes here
+            json.dump({'_ARRAY_DIMENSIONS': axis_names}, f, indent=2)
 
     # Read source into memory, add leading singleton dims if fewer than ndim
     data = source_ts.read().result()
@@ -236,7 +300,7 @@ def _write_label_group_metadata(
     target_shape: list,
 ) -> None:
     """Write zarr.json for labels/<label_tmp_key>/ (OME-NGFF label image group)."""
-    from .ome_structure import OMEStructure, OMEStructureConfig
+    from .ome_structure import OMEStructure, OMEStructureConfig, OMEStructureZarr2, OMEStructureZarr2Config
 
     ndim = len(target_shape)
     axes = _infer_axes(target_container, ndim)
@@ -246,6 +310,18 @@ def _write_label_group_metadata(
         'coordinateTransformations': [{'type': 'scale', 'scale': scale}],
     }]
 
+    if container_format(target_container) == 'zarr2':
+        labels_dir = os.path.join(target_container, 'labels')
+        if not os.path.exists(os.path.join(labels_dir, '.zgroup')):         # the first label of a crop: the labels/ group itself
+            with open(os.path.join(labels_dir, '.zgroup'), 'w') as f:
+                json.dump({'zarr_format': 2}, f, indent=2)
+        OMEStructureZarr2(target_container, OMEStructureZarr2Config(label_name=label_tmp_key)).write_label_image_metadata(
+            multiscales={'axes': axes, 'datasets': datasets},
+            name=label_tmp_key.replace('.tmp', ''),
+            source_image_path='../../raw',
+            label_name=label_tmp_key,
+        )
+        return
     config = OMEStructureConfig(label_name=label_tmp_key)
     ome = OMEStructure(target_container, config)
     ome.write_label_image_metadata(
@@ -263,6 +339,14 @@ def _infer_base_scale(container_path: str, ndim: int) -> list:
     scale while sibling raw/other labels carry the real voxel size,
     misaligning the label layer in any viewer that respects declared
     physical scale."""
+    if container_format(container_path) == 'zarr2':
+        for ms in _zarr2_multiscales(container_path):
+            datasets = ms.get('datasets', [])
+            if datasets:
+                for ct in datasets[0].get('coordinateTransformations', []):
+                    if ct.get('type') == 'scale' and len(ct.get('scale', [])) == ndim:
+                        return list(ct['scale'])
+        return [1.0] * ndim
     root_meta = os.path.join(container_path, 'zarr.json')
     if os.path.exists(root_meta):
         try:
@@ -281,7 +365,11 @@ def _infer_base_scale(container_path: str, ndim: int) -> list:
 
 
 def _infer_axes(container_path: str, ndim: int) -> list:
-    """Read axes from root zarr.json, sibling label zarr.json, or fall back to defaults."""
+    """Read axes from root zarr.json, sibling label zarr.json (zarr 2: the container's .zattrs, raw's, a sibling label's), or fall back to defaults."""
+    if container_format(container_path) == 'zarr2':
+        for ms in _zarr2_multiscales(container_path):
+            if len(ms.get('axes', [])) == ndim:
+                return ms['axes']
     root_meta = os.path.join(container_path, 'zarr.json')
     if os.path.exists(root_meta):
         try:
