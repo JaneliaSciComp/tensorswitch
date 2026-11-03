@@ -60,7 +60,7 @@ A high-performance microscopy data conversion tool with TensorStore as the unifi
 - **Dtype Casting**: Convert output to a different numeric dtype (e.g., float32 → int16) with upfront range validation and per-chunk clipping safety
 - **Safe Write**: Writes to `.tmp` during conversion and renames on completion — interrupted jobs never leave corrupted output
 - **Chunk Write Retry**: Automatic retry with exponential backoff (3 attempts) for transient I/O errors on network storage — failed chunks are tracked and the job fails with a summary of failed indices
-- **Add to Existing Container**: `--add-to-existing` safely adds labels to a container that already has image data (subgroup-level safe write to `labels.tmp/`) — no risk of overwriting existing `raw/` data. Supported in CLI, MCP, and LSF `--submit`.
+- **Add to Existing Container**: `--add-to-existing` safely adds labels to a container that already has image data (subgroup-level safe write to `labels.tmp/`) — no risk of overwriting existing `raw/` data. The label is written in the container's own format (a Zarr2 crop gets a Zarr2 label, a Zarr3 crop a Zarr3 label), including a sparse label placed at an offset (`--output-offset`). Supported in CLI, MCP, and LSF `--submit`.
 - **MCP Server**: AI/agent integration via Model Context Protocol (Claude Code, LLM agents)
 
 ---
@@ -756,7 +756,7 @@ TensorSwitch v2 preserves source data layout by default (RFC-3 compliant):
 | Format | Description | Features |
 |--------|-------------|----------|
 | **Zarr v3** | Primary format | Sharding, OME-NGFF v0.5, zstd compression |
-| **Zarr v2** | Legacy format | OME-NGFF v0.4, blosc compression |
+| **Zarr v2** | Legacy format | OME-NGFF v0.4, blosc compression (zstd is written wrapped in blosc; bare zstd chunks written by tensorstore before 0.1.85 carry no uncompressed size, which zarr-python/numcodecs cannot read, so `tensorstore>=0.1.85` is required) |
 | **N5** | Java tools | BigDataViewer compatible |
 
 ### OME-NGFF Nested Structure
@@ -810,6 +810,22 @@ tensorswitch -i segmentation.tif -o existing.zarr --data-type labels --add-to-ex
 # Auto-detect from folder (Neuroglancer Precomputed)
 tensorswitch -i /path/to/folder/ -o output.zarr
 ```
+
+#### Adding a label to an existing container (also a sparse one)
+
+`--add-to-existing --is_label --label-key NAME` writes `labels/NAME/` next to the container's `raw/` and registers it; the raw and the other labels are not touched. The new label **follows the container's format**: a Zarr2 container (`.zgroup`) gets a Zarr2 label (`.zarray`, `.zattrs` with `_ARRAY_DIMENSIONS`, the label registered in `labels/.zattrs`), a Zarr3 container (`zarr.json`) a Zarr3 label, whatever `--output_format` says. `--output_format zarr2` into a Zarr3 container is refused. Data type and chunk shape follow the same rule in both formats (the source's dtype or `--dtype`; chunks from `--chunk_shape`, default 64 per spatial axis, or 128 with `--preset miaai`, and 1 on t and c; labels are not sharded); Zarr2 uses TensorSwitch's usual compressor (zstd wrapped in blosc).
+
+For a label that covers only part of the container, `--output-offset` and `--target-shape` place it at the right position of a full-size, zero-filled array. Both are given in the container's own axis order (for example `t c x y z` for a Betzig tile crop, `t c z y x` for a Zarr3 time series; a time-series label of one timepoint: `--output-offset 5 0 0 0 0`), and `--axes_order` / `--input_axes` orient the source into that order:
+
+```bash
+# A label of timepoint 5 (a Paintera N5 export stored x,y,z) into a zarr2 time-series crop stored t,c,x,y,z
+tensorswitch -i export.n5 -o crop.zarr --is_label --label-key proofread_t5 --add-to-existing \
+    --input_axes xyz --axes_order xyz --output-offset 5 0 0 0 0 --target-shape 96 1 3328 384 128 --voxel_size 108,108,200 --dtype uint16
+# Then its pyramid (the format of the container is used for the levels too)
+tensorswitch --auto_multiscale --is_label -i crop.zarr/labels/proofread_t5/s0 -o crop.zarr/labels/proofread_t5 --output_format zarr2
+```
+
+Only the target timepoint holds data; every other timepoint stays zero. The source-side flags the sparse path cannot apply (`--bbox`, `--bbox_axes`, `--squeeze_singleton_axes`) are refused, not ignored.
 
 See [OME_NGFF_STRUCTURE_PLAN.md](docs/OME_NGFF_STRUCTURE_PLAN.md) for full documentation.
 
