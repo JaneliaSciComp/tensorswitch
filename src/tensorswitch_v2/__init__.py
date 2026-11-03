@@ -30,7 +30,7 @@ CLI Usage:
 For detailed documentation, see: src/tensorswitch_v2/README.md
 """
 
-__version__ = '2.0.3'
+__version__ = '2.1.1'
 __author__ = 'Diyi Chen'
 
 # Public API exports
