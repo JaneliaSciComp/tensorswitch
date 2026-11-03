@@ -21,8 +21,9 @@ from typing import Dict, List, Optional, Tuple
 # Shared Constants
 # ============================================================================
 
-NON_SPATIAL_AXES = frozenset({'c', 't', 'v', 'channel'})
-"""Axis names that should never be downsampled (factor=1)."""
+NON_SPATIAL_AXES = frozenset({'c', 't', 'v', 'channel', 's'})
+"""Axis names that should never be downsampled (factor=1). 's' is the samples-per-pixel axis of a TIFF
+(as in BioIO's S dimension): its own non-spatial axis, never a channel and never spatial."""
 
 LABEL_KEYWORDS = ('label', 'mask', 'seg', 'annotation', 'binary', 'instance')
 """Path keywords that indicate segmentation/label data (use mode downsampling)."""
@@ -54,6 +55,8 @@ def get_axis_type(axis_name: str) -> str:
         return 'channel'
     if ax in ('t', 'v'):
         return 'time'
+    if ax == 's':
+        return 'custom'
     return 'space'
 
 
@@ -605,7 +608,7 @@ def _compute_scale_rounded_ratio(level0_scale_factors, level0_shape, level_shape
     return level_scale
 
 
-def _compute_translation(level_scale, level0_scale_factors, downsample_method=None):
+def _compute_translation(level_scale, level0_scale_factors, downsample_method=None, base_translation=None):
     """
     Compute per-axis translation for a downsampled level.
 
@@ -622,11 +625,15 @@ def _compute_translation(level_scale, level0_scale_factors, downsample_method=No
     correct offset is unknown and applying the wrong value is worse than
     omitting it.
 
+    A level 0 that already carries a translation (a crop at an offset) keeps it: every level's translation is
+    that base translation plus the shift above.
+
     Args:
         level_scale: Scale factors for this level (e.g., [800, 232, 232] nm)
         level0_scale_factors: Scale factors for level 0 (e.g., [400, 116, 116] nm)
         downsample_method: Downsample method used ('mean', 'mode', 'stride', etc.)
                            None defaults to block-method behavior.
+        base_translation: Level 0's own translation per axis (default: zeros).
 
     Returns:
         list of float: Per-axis translation values (physical units)
@@ -636,19 +643,29 @@ def _compute_translation(level_scale, level0_scale_factors, downsample_method=No
     # Stride: output pixel = input pixel at j*f — no shift
     STRIDE_METHODS = {'stride'}
 
+    base = list(base_translation) if base_translation else [0.0] * len(level_scale)
+
     if downsample_method in STRIDE_METHODS:
-        return [0.0] * len(level_scale)
+        return base
 
     if downsample_method is not None and downsample_method not in BLOCK_METHODS:
         print(
             f"WARNING: Unknown downsample method '{downsample_method}' — "
             f"cannot determine correct translation offset (only 0.5 is supported "
-            f"for block methods). Skipping translation to avoid incorrect metadata."
+            f"for block methods). Skipping the half-voxel shift to avoid incorrect metadata."
         )
-        return [0.0] * len(level_scale)
+        return base
 
-    # Block methods (or None/default): 0.5 * (sN - s0) per axis
-    return [0.5 * (scale - level0_scale_factors[i]) for i, scale in enumerate(level_scale)]
+    # Block methods (or None/default): base translation + 0.5 * (sN - s0) per axis
+    return [base[i] + 0.5 * (scale - level0_scale_factors[i]) for i, scale in enumerate(level_scale)]
+
+
+def _level0_translation(first_dataset, ndim):
+    """Level 0's translation from its coordinateTransformations (zeros when it has none)."""
+    for t in (first_dataset or {}).get("coordinateTransformations", []):
+        if t.get("type") == "translation" and len(t.get("translation", [])) == ndim:
+            return [float(v) for v in t["translation"]]
+    return [0.0] * ndim
 
 
 def update_ome_multiscale_metadata(zarr_path, max_level=4, prefix=None, include_translation=True, downsample_method=None):
@@ -712,7 +729,8 @@ def update_ome_multiscale_metadata(zarr_path, max_level=4, prefix=None, include_
 
         # Add translation transform for Neuroglancer compatibility
         if include_translation:
-            translation = _compute_translation(level_scale, level0_scale_factors, downsample_method)
+            translation = _compute_translation(level_scale, level0_scale_factors, downsample_method,
+                                               _level0_translation(multiscales["datasets"][0], len(level0_scale_factors)))
             if any(t != 0 for t in translation):
                 coordinate_transformations.append({"type": "translation", "translation": translation})
                 method_label = downsample_method or 'block'
@@ -798,7 +816,8 @@ def update_ome_multiscale_metadata_zarr2(zarr_path, max_level=4, prefix=None, in
 
         # Add translation transform for Neuroglancer compatibility (same as Zarr3)
         if include_translation:
-            translation = _compute_translation(level_scale, level0_scale_factors, downsample_method)
+            translation = _compute_translation(level_scale, level0_scale_factors, downsample_method,
+                                               _level0_translation(multiscales.get("datasets", [{}])[0], len(level0_scale_factors)))
             if any(t != 0 for t in translation):
                 coordinate_transformations.append({"type": "translation", "translation": translation})
                 method_label = downsample_method or 'block'
@@ -1112,6 +1131,12 @@ def update_ome_metadata_if_needed(output_path, use_ome_structure, include_transl
                     _update_parent_zarr3_json(output_path, parent_path, image_key)
                 except Exception as e:
                     print(f"Warning: Failed to update parent zarr3 metadata: {e}")
+
+            try:
+                from .miaai_metadata import apply_marker_if_any
+                apply_marker_if_any(output_path)
+            except Exception as e:
+                print(f"Warning: Failed to apply preset metadata conventions: {e}")
 
         elif os.path.exists(zarr2_metadata):
             print(f"Updating zarr2 OME metadata for {output_path} with levels {level0_name}-{max_level_name}")

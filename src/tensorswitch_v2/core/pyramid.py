@@ -16,13 +16,15 @@ Key Features:
 import os
 import json
 import shlex
+from ..utils.output_group import wrap_for_project
 import subprocess
 import sys
 from typing import Optional, List, Dict, Any, Tuple
 import numpy as np
 
 # Set team permissions: rwxrwxr-x (files get rw-rw-r--)
-os.umask(0o0002)
+from ..utils.output_group import default_umask
+os.umask(default_umask())
 
 # Import utility functions from v2 utils (independent from v1)
 from tensorswitch_v2.utils import (
@@ -1110,8 +1112,8 @@ echo "=========================================="
             "-P", project,
             "-o", log_path,
             "-e", error_path,
-            "/bin/bash", script_path
         ]
+        bsub_cmd += wrap_for_project(project, ["/bin/bash", script_path])
 
         if verbose:
             print(f"\nSubmitting metadata coordinator job...")
@@ -1148,6 +1150,7 @@ echo "=========================================="
         dry_run: bool = False,
         verbose: bool = True,
         log_dir: Optional[str] = None,
+        preset: Optional[str] = None,
     ) -> str:
         """
         Submit chained pyramid generation via a coordinator job.
@@ -1193,6 +1196,7 @@ echo "=========================================="
             use_shard=use_shard,
             downsample_method=downsample_method,
             log_dir=log_dir,
+            preset=preset,
         )
 
         # Write script to shared filesystem
@@ -1283,8 +1287,8 @@ echo "=========================================="
             "-P", project,
             "-o", log_path,
             "-e", error_path,
-            "/bin/bash", script_path
         ]
+        bsub_cmd += wrap_for_project(project, ["/bin/bash", script_path])
 
         if verbose:
             print(f"\nSubmitting coordinator job...")
@@ -1324,6 +1328,7 @@ echo "=========================================="
         use_shard: bool = True,
         downsample_method: str = "auto",
         log_dir: Optional[str] = None,
+        preset: Optional[str] = None,
     ) -> str:
         """
         Generate bash script for chained pyramid generation.
@@ -1339,6 +1344,11 @@ echo "=========================================="
             cores: Cores per job (None = auto-calculate)
             use_shard: Whether to use sharding
             downsample_method: TensorStore downsample method (default: "auto")
+            preset: Preset the parent conversion used. When 'miaai' or 'mia_lmvd', each
+                per-level downsample job gets --preset too, so its own output (group
+                miaai, no group write, 754/755) is finalized the same way as the level
+                the parent job wrote directly -- otherwise s1..sN silently stay at
+                whatever bare umask gave them.
 
         Returns:
             Bash script as string
@@ -1350,6 +1360,7 @@ echo "=========================================="
         # Quote paths for safe shell usage (handles spaces)
         q_tensorswitch_dir = shlex.quote(tensorswitch_dir)
         q_python_path = shlex.quote(python_path)
+        preset_flag = f"--preset {shlex.quote(preset)} \\\n        " if preset in ("miaai", "mia_lmvd") else ""
         q_root_path = shlex.quote(self.root_path)
 
         num_levels = pyramid_plan['num_levels']
@@ -1406,7 +1417,7 @@ submit_and_wait() {{
         --target_level $level \\
         --cumulative_factors "$factor" \\
         --cumulative_factor_for_metadata "$cumulative_factor_for_metadata" \\
-        --use_shard {1 if use_shard else 0} \\
+        {preset_flag}--use_shard {1 if use_shard else 0} \\
         --shard_shape "$shard_shape" \\
         --chunk_shape "$chunk_shape" \\
         --downsample_method {downsample_method} \\
@@ -1628,6 +1639,7 @@ def create_pyramid_parallel(
     custom_per_level_factors: Optional[List[List[int]]] = None,
     include_translation: bool = True,
     log_dir: Optional[str] = None,
+    preset: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Convenience function to create full pyramid with chained job submission.
@@ -1650,6 +1662,9 @@ def create_pyramid_parallel(
         verbose: Print progress messages
         custom_per_level_factors: Custom per-level factors (bypasses auto-calculation).
                                   E.g., [[1,2,2], [1,2,2], [1,2,2]] for 3 levels with Z-skip.
+        preset: Preset the parent conversion used ('miaai'/'mia_lmvd' triggers group
+                miaai + no-group-write finalization on every per-level downsample job too,
+                not just the level the parent job itself wrote).
 
     Returns:
         dict with 'pyramid_plan' and 'coordinator_job_id' keys
@@ -1703,6 +1718,7 @@ def create_pyramid_parallel(
         dry_run=dry_run,
         verbose=verbose,
         log_dir=log_dir,
+        preset=preset,
     )
 
     return {

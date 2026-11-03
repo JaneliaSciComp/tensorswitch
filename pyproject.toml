@@ -1,9 +1,9 @@
 [project]
 name = "tensorswitch"
-version = "2.1.0"
+version = "2.1.1"
 requires-python = ">= 3.11"
 dependencies = [
-    "tensorstore>=0.1.79,<0.2",
+    "tensorstore>=0.1.85,<0.2",
     "psutil",
     "requests",
     "numpy",
@@ -15,6 +15,8 @@ dependencies = [
     "nd2>=0.10.3",
     "h5py>=3.14.0",
     "nibabel>=5.0.0",
+    "mrcfile>=1.5.0",
+    "pyyaml>=6.0",
     "pillow>=10.0.0",
     "ome-types>=0.6.0,<0.7",
     "bioio>=3.2.0,<4",
@@ -90,6 +92,8 @@ ome-types = ">=0.6.0,<0.7"
 nd2 = ">=0.10.3,<0.11"
 h5py = ">=3.14.0,<4"
 nibabel = ">=5.0.0,<6"
+mrcfile = ">=1.5.0,<2"
+pyyaml = ">=6.0"
 pillow = ">=10.0.0,<12"
 pydantic = ">=2.0.0,<3"
 pandas = "*"

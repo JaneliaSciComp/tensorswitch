@@ -21,6 +21,23 @@ import numpy as np
 import tensorstore as ts
 
 
+@pytest.fixture(autouse=True)
+def _keep_the_miaai_preset_inside_one_test():
+    """The CLI `main` applies --preset miaai to its own process (the umask and the group environment). Called in-process by a test, that
+    would stay for every later test, and now that the preset also fixes modes it changes what they see. Put it back after each test."""
+    names = ("TENSORSWITCH_UMASK", "TENSORSWITCH_GROUP", "TENSORSWITCH_GROUP_APPLIED")
+    before_env = {n: os.environ.get(n) for n in names}
+    before_umask = os.umask(0o002)
+    os.umask(before_umask)
+    yield
+    os.umask(before_umask)
+    for n, v in before_env.items():
+        if v is None:
+            os.environ.pop(n, None)
+        else:
+            os.environ[n] = v
+
+
 def pytest_configure(config):
     """Pytest hook to configure paths before collection."""
     src_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../src'))

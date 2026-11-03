@@ -11,7 +11,7 @@ import warnings
 from typing import Dict, Optional, Tuple
 from urllib.parse import urlparse
 import tensorstore as ts
-from .base import BaseReader, _default_voxel_sizes
+from .base import BaseReader
 from ..utils.format_loaders import convert_to_nanometers
 from ..utils import get_tensorstore_context
 
@@ -315,9 +315,9 @@ class N5Reader(BaseReader):
             print(f"Warning: Failed to fetch N5 attributes: {e}")
             return {}
 
-    def get_voxel_sizes(self) -> Dict[str, float]:
+    def _read_voxel_sizes(self) -> Optional[Dict[str, float]]:
         """
-        Return voxel dimensions from N5 metadata.
+        Return the voxel dimensions stated in the N5 metadata, in nanometers.
 
         Extracts physical pixel/voxel sizes from N5 metadata.
         N5 typically stores this in 'pixelResolution' or 'resolution' fields.
@@ -332,9 +332,9 @@ class N5Reader(BaseReader):
             {'x': 116.0, 'y': 116.0, 'z': 500.0}
 
         Notes:
-            - Returns 1.0 for each dimension if metadata doesn't contain voxel sizes
+            - Returns None if the metadata doesn't contain voxel sizes
             - Detects unit from metadata and converts to nanometers
-            - N5 convention: dimensions = [z, y, x] (reverse of XYZ)
+            - N5 convention: pixelResolution/resolution are [x, y, z], like the dataset 'dimensions'
         """
         metadata = self.get_metadata()
 
@@ -348,9 +348,9 @@ class N5Reader(BaseReader):
                 dimensions = voxel_data['dimensions']
                 unit = voxel_data.get('unit', 'um')
 
-                # N5 convention: dimensions are [z, y, x]
+                # N5 convention: same order as the dataset 'dimensions', i.e. [x, y, z]
                 if len(dimensions) >= 3:
-                    z, y, x = dimensions[0], dimensions[1], dimensions[2]
+                    x, y, z = dimensions[0], dimensions[1], dimensions[2]
 
                     # Convert to nanometers using helper
                     return {
@@ -363,7 +363,7 @@ class N5Reader(BaseReader):
         elif 'resolution' in metadata:
             resolution = metadata['resolution']
             if isinstance(resolution, list) and len(resolution) >= 3:
-                z, y, x = resolution[0], resolution[1], resolution[2]
+                x, y, z = resolution[0], resolution[1], resolution[2]
                 # No unit specified, assume already nanometers
                 return {'x': float(x), 'y': float(y), 'z': float(z)}
 
@@ -377,7 +377,7 @@ class N5Reader(BaseReader):
                     z, y, x = scale_data[0], scale_data[1], scale_data[2]
                     return {'x': float(x), 'y': float(y), 'z': float(z)}
 
-        return _default_voxel_sizes("N5")
+        return None
 
     def supports_remote(self) -> bool:
         """

@@ -29,7 +29,7 @@ import os
 from typing import Dict, List, Optional
 
 from ..utils import load_png_stack
-from .base import DaskReader, _default_voxel_sizes
+from .base import DaskReader
 
 
 class PngReader(DaskReader):
@@ -87,14 +87,14 @@ class PngReader(DaskReader):
             }
         return self._metadata_cache
 
-    def get_voxel_sizes(self) -> Dict[str, float]:
-        """Always the default + warning: PNG stores no voxel size, ever.
+    def _read_voxel_sizes(self) -> None:
+        """Always unstated: PNG stores no voxel size, ever.
 
         PNG's optional pHYs chunk records pixels-per-metre for *printing* and
         is absent from every scientific export seen in practice; trusting it
         would be worse than admitting there is nothing here. Pass --voxel_size.
         """
-        return _default_voxel_sizes("PNG")
+        return None
 
     def __repr__(self) -> str:
         return f"PngReader(path='{self.path}')"

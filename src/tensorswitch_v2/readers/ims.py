@@ -52,25 +52,17 @@ class IMSReader(DaskReader):
                 if isinstance(metadata, tuple):
                     raw_metadata, voxel_sizes = metadata
                     if isinstance(voxel_sizes, (list, tuple)) and len(voxel_sizes) >= 3:
-                        vx, vy, vz = voxel_sizes[0], voxel_sizes[1], voxel_sizes[2]
+                        stated = dict(zip('xyz', voxel_sizes[:3]))
                     elif isinstance(voxel_sizes, dict):
-                        vx = voxel_sizes.get('x', 1.0)
-                        vy = voxel_sizes.get('y', 1.0)
-                        vz = voxel_sizes.get('z', 1.0)
+                        stated = {a: voxel_sizes.get(a) for a in 'xyz'}
                     else:
-                        vx, vy, vz = 1.0, 1.0, 1.0
+                        stated = {}
                     self._metadata_cache = {
                         'raw_metadata': raw_metadata,
-                        'voxel_size_x': vx if vx else 1.0,
-                        'voxel_size_y': vy if vy else 1.0,
-                        'voxel_size_z': vz if vz else 1.0,
+                        'voxel_sizes_stated': {a: v for a, v in stated.items() if v},
                     }
                 elif isinstance(metadata, dict):
                     self._metadata_cache = metadata
-                    if 'voxel_size_x' not in self._metadata_cache:
-                        self._metadata_cache['voxel_size_x'] = 1.0
-                        self._metadata_cache['voxel_size_y'] = 1.0
-                        self._metadata_cache['voxel_size_z'] = 1.0
                 else:
                     self._metadata_cache = {}
             except Exception as e:
@@ -79,14 +71,9 @@ class IMSReader(DaskReader):
 
         return self._metadata_cache
 
-    def get_voxel_sizes(self) -> Dict[str, float]:
-        """Return voxel dimensions from IMS metadata in nanometers."""
-        metadata = self.get_metadata()
-        return {
-            'x': metadata.get('voxel_size_x', 1.0),
-            'y': metadata.get('voxel_size_y', 1.0),
-            'z': metadata.get('voxel_size_z', 1.0)
-        }
+    def _read_voxel_sizes(self) -> Optional[Dict[str, Optional[float]]]:
+        """Voxel sizes stated by the IMS DataSetInfo, in nanometers."""
+        return self.get_metadata().get('voxel_sizes_stated') or None
 
     def __repr__(self) -> str:
         return f"IMSReader(path='{self.path}', resolution_level={self._resolution_level})"

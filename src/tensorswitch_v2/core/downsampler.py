@@ -19,7 +19,8 @@ import numpy as np
 import tensorstore as ts
 
 # Set team permissions: rwxrwxr-x (files get rw-rw-r--)
-os.umask(0o0002)
+from ..utils.output_group import default_umask
+os.umask(default_umask())
 
 # Import utility functions from v2 utils (independent from v1)
 from tensorswitch_v2.utils import (

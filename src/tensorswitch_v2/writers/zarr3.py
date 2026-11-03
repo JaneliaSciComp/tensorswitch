@@ -665,6 +665,8 @@ class Zarr3Writer(BaseWriter):
                 axes.append({'name': 'c', 'type': 'channel'})
             elif axis_lower in ['t', 'v']:
                 axes.append({'name': 't', 'type': 'time', 'unit': 'millisecond'})
+            elif axis_lower == 's':
+                axes.append({'name': 's', 'type': 'custom'})
             else:
                 axes.append({'name': axis_lower, 'type': 'space'})
 

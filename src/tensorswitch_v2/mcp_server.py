@@ -1,6 +1,9 @@
 """
 TensorSwitch MCP Server — exposes TensorSwitch v2 as tools for Claude and other LLM agents.
 
+convert and submit_job build a command line from their parameters and run the real CLI
+parser and code (see mcp_args.py), so they cannot drift from the command line.
+
 Usage:
     # Run directly
     pixi run python -m tensorswitch_v2.mcp_server
@@ -9,10 +12,13 @@ Usage:
     claude mcp add --transport stdio tensorswitch -- pixi run python -m tensorswitch_v2.mcp_server
 """
 
+import contextlib
+import io
 import json
 import logging
 import os
 import shutil
+import subprocess
 import sys
 import traceback
 from pathlib import Path
@@ -21,6 +27,7 @@ import tensorstore as ts
 
 from tensorswitch_v2.readers.base import is_remote_path
 from tensorswitch_v2.utils.tensorstore_utils import get_zarr_store_spec
+from tensorswitch_v2.utils.output_group import apply_parent_group, wrap_for_project
 
 from mcp.server.fastmcp import FastMCP
 
@@ -34,34 +41,42 @@ logger = logging.getLogger("tensorswitch-mcp")
 
 mcp = FastMCP("tensorswitch")
 
+_PLACEHOLDER_VOXEL_NOTE = "No voxel size found for axis"
+
+
+def _relevant(notes: list, voxel_size: str) -> list:
+    """Drop the 'using placeholder 1.0' note when the caller gave voxel_size (the placeholder is unused)."""
+    return [n for n in notes if not (voxel_size and n.startswith(_PLACEHOLDER_VOXEL_NOTE))]
+
+
+# Messages from libraries that are harmless for a conversion and only distract the caller.
+_BENIGN_NOTES = ("Casting invalid PixelsID",)
+
+
+@contextlib.contextmanager
+def _quiet_capture():
+    """Silence stdout (it carries the JSON-RPC stream) and collect what the code warns about.
+
+    Yields a list that is filled when the block ends with the distinct UserWarning messages
+    and any 'WARNING ...' lines written to stderr, so the tool response can show them.
+    """
+    import warnings
+
+    notes: list = []
+    out, err = io.StringIO(), io.StringIO()
+    with warnings.catch_warnings(record=True) as caught, contextlib.redirect_stdout(out), \
+            contextlib.redirect_stderr(err):
+        warnings.simplefilter("always")
+        yield notes
+        found = [str(w.message).strip() for w in caught if issubclass(w.category, UserWarning)]
+        found += [line.strip() for line in err.getvalue().splitlines() if line.strip().startswith("WARNING")]
+        for message in found:
+            if message and message not in notes and not any(b in message for b in _BENIGN_NOTES):
+                notes.append(message)
+
+
 # Size guard: refuse in-process conversion for datasets larger than this
 MCP_CONVERT_MAX_GB = 2
-
-
-def _resolve_conversion_subgroup(
-    output_format: str,
-    data_type: str,
-    is_label: bool,
-    image_key: str = "raw",
-    label_key: str = "segmentation",
-):
-    """Return the OME-NGFF subgroup the conversion writes to, or None.
-
-    Mirrors __main__._resolve_conversion_subgroup() but takes explicit params
-    instead of an argparse Namespace.
-
-    Returns:
-        "labels/<label_key>" for label output, "<image_key>" for image output,
-        or None when the subgroup cannot be determined (N5, or data_type 'auto'
-        without is_label).
-    """
-    if output_format not in ("zarr2", "zarr3"):
-        return None
-    if is_label or data_type == "labels":
-        return f"labels/{label_key}"
-    if data_type == "image":
-        return image_key
-    return None
 
 
 # ---------------------------------------------------------------------------
@@ -85,15 +100,18 @@ def inspect_dataset(path: str) -> str:
     try:
         path = path.strip()
 
-        # For local paths, check if this is an OME-Zarr container
-        if not is_remote_path(path):
-            zarr_json = os.path.join(path, "zarr.json")
-            zattrs = os.path.join(path, ".zattrs")
-            if os.path.isfile(zarr_json) or os.path.isfile(zattrs):
-                return _inspect_zarr_container(path)
+        # Stdout carries the JSON-RPC stream under stdio transport, so nothing
+        # the readers or discovery code print may reach it.
+        with contextlib.redirect_stdout(io.StringIO()):
+            # For local paths, check if this is an OME-Zarr container
+            if not is_remote_path(path):
+                zarr_json = os.path.join(path, "zarr.json")
+                zattrs = os.path.join(path, ".zattrs")
+                if os.path.isfile(zarr_json) or os.path.isfile(zattrs):
+                    return _inspect_zarr_container(path)
 
-        # Remote paths or non-container local: inspect as single dataset
-        return _inspect_single_dataset(path)
+            # Remote paths or non-container local: inspect as single dataset
+            return _inspect_single_dataset(path)
     except Exception as e:
         logger.error(f"inspect_dataset failed: {e}\n{traceback.format_exc()}")
         return f"Error inspecting {path}: {e}"
@@ -124,7 +142,8 @@ def _inspect_zarr_container(path: str) -> str:
     if "multiscales" in ome:
         ms = ome["multiscales"][0]
         result["axes"] = [a["name"] for a in ms.get("axes", [])]
-        result["unit"] = ms.get("axes", [{}])[0].get("unit", "unknown")
+        axis_units = [a["unit"] for a in ms.get("axes", []) if a.get("unit")]
+        result["unit"] = axis_units[0] if axis_units else "unknown"
         result["name"] = ms.get("name", "unknown")
         result["type"] = ms.get("type", "unknown")
         result["num_levels"] = len(ms.get("datasets", []))
@@ -301,7 +320,8 @@ def discover_datasets(
             discover_datasets as _discover,
         )
 
-        result = _discover(path.strip(), verbose=False, pattern=pattern, recursive=recursive)
+        with contextlib.redirect_stdout(io.StringIO()):
+            result = _discover(path.strip(), verbose=False, pattern=pattern, recursive=recursive)
 
         output = {"path": path, "images": [], "segmentations": []}
 
@@ -332,38 +352,6 @@ def discover_datasets(
     except Exception as e:
         logger.error(f"discover_datasets failed: {e}\n{traceback.format_exc()}")
         return f"Error scanning {path}: {e}"
-
-
-# ---------------------------------------------------------------------------
-# Helper: create reader based on parameters
-# ---------------------------------------------------------------------------
-def _create_reader(input_path: str, dataset_path: str = "",
-                   use_bioio: bool = False, use_bioformats: bool = False,
-                   view_index: int = -1):
-    """Create the appropriate reader based on parameters."""
-    from tensorswitch_v2.api import Readers
-
-    if use_bioformats:
-        return Readers.bioformats(input_path)
-    if use_bioio:
-        return Readers.bioio(input_path)
-
-    if dataset_path:
-        ext = Path(input_path).suffix.lower()
-        if ext in (".h5", ".hdf5", ".hdf", ".he5"):
-            return Readers.hdf5(input_path, dataset_path=dataset_path)
-        elif ext in (".n5",) or (not is_remote_path(input_path) and os.path.isfile(
-            os.path.join(input_path, "attributes.json")
-        )):
-            return Readers.n5(input_path, dataset_path=dataset_path)
-
-    reader = Readers.auto_detect(input_path)
-
-    # Handle CZI view_index
-    if view_index >= 0 and hasattr(reader, 'set_view_index'):
-        reader.set_view_index(view_index)
-
-    return reader
 
 
 # ---------------------------------------------------------------------------
@@ -402,22 +390,36 @@ def convert(
     per_level_factors: str = "",
     omero: bool = True,
     no_translation: bool = False,
+    expansion_factor: float = 0.0,
+    extra_attributes: str = "",
     output_dtype: str = "",
     add_to_existing: bool = False,
+    bbox_axes: str = "",
+    squeeze_singleton_axes: bool = False,
+    input_axes: str = "",
+    relabel_axis: str = "",
+    output_offset: str = "",
+    target_shape: str = "",
 ) -> str:
-    """Convert a microscopy dataset between formats.
+    """Convert a microscopy dataset between formats, in-process (datasets up to 2 GB).
 
-    Supported inputs: HDF5, TIFF, ND2, IMS, CZI, Zarr2, Zarr3, N5,
-    Neuroglancer precomputed, and 150+ formats via Bio-Formats.
-    Supported outputs: zarr3 (with sharding), zarr2, n5.
+    Runs the same code as the command line (`python -m tensorswitch_v2`), so every
+    CLI option and default applies. See list_formats for supported inputs (Zarr2/3,
+    N5, Precomputed, TIFF, ND2, IMS, HDF5, CZI, NIfTI, MRC, PNG stacks, BioIO and
+    Bio-Formats plugins) and outputs (zarr3 with sharding, zarr2, n5).
 
-    For datasets larger than 2 GB, use submit_job instead to run on the
-    LSF cluster asynchronously.
+    The source must state a voxel size for every spatial axis, or you must pass
+    voxel_size (X,Y,Z); otherwise the conversion is refused.
+
+    For datasets larger than 2 GB use submit_job to run on the LSF cluster. Data that
+    only exists at a URL (zip members, FTP) must be downloaded first with fetch_dataset.
 
     Args:
         input_path: Path to source dataset.
         output_path: Path for output (e.g., /data/output.zarr).
-        output_format: Output format — "zarr3" (default), "zarr2", or "n5".
+        output_format: Output format — "zarr3" (default), "zarr2", or "n5". With add_to_existing the new layer follows the
+            existing container (a zarr2 container gets a zarr2 layer, a zarr3 container a zarr3 one); zarr2 into a zarr3
+            container is refused.
         chunk_shape: Comma-separated chunk shape (e.g., "64,64,64"). Auto-calculated if empty.
         shard_shape: Comma-separated shard shape for zarr3 (e.g., "512,512,512"). Auto-calculated if empty.
         no_sharding: Disable sharding for zarr3 output. Default: False (sharding enabled).
@@ -431,10 +433,13 @@ def convert(
         use_bioio: Force BIOIO adapter (Tier 3) instead of auto-detected Tier 2 reader.
         use_bioformats: Force Bio-Formats reader (Tier 4, Java-backed) for 150+ formats.
         axes_order: Override output spatial axis order (e.g., "xyz", "zyx"). Default: preserve source order.
+                    Also applied to a sparse label ingest (output_offset); bbox and squeeze_singleton_axes are
+                    refused there with an error rather than ignored.
         force_order: Force output memory order — "c" for C-order (row-major),
                      "f" for F-order (column-major), or "" for auto-detection.
         expand_to_5d: Force 5D TCZYX expansion.
-        bbox: Bounding box for subvolume extraction: "origin_z,origin_y,origin_x,size_z,size_y,size_x".
+        bbox: Bounding box for subvolume extraction: origin then size, one pair per source axis in source order
+            ("origin_z,origin_y,origin_x,size_z,size_y,size_x" for ZYX; any number of axes, see bbox_axes).
         view_index: CZI view index (-1 = all views as 5D VCZYX).
         data_type: Data type for output structure — "auto", "image", or "labels".
         image_key: Name for image group in output (default: "raw").
@@ -443,70 +448,88 @@ def convert(
         no_ome_xml_attr: Do not embed OME/CZI XML in zarr.json/.zattrs.
         preset: Preset configuration — "webknossos" (chunk 32x32x32, shard 1024x1024x1024).
                           "paintera" (n5, xyz axis order, gzip, chunk 64x64x64; or zarr2 with zyx).
+                          "miaai" (alias "mia_lmvd"; zarr3, chunk 128^3, shard 512^3, zstd-5, C-order).
         auto_multiscale: Generate full multiscale pyramid after conversion. Default: False.
         downsample_method: Downsampling method for pyramid — "auto", "mean", "mode", etc. Used with auto_multiscale.
         per_level_factors: Custom per-level factors, semicolon-separated (e.g., "1,2,2;1,2,2"). Used with auto_multiscale.
         omero: Include structured omero channel metadata for visualization tools (default: True).
         no_translation: Disable translation transforms in OME-NGFF multiscale metadata.
+        expansion_factor: Expansion microscopy factor (e.g. 4). With preset "miaai" the outer
+                          coordinateTransformations become 1/factor on the spatial axes. 0 = not expansion data.
+        extra_attributes: JSON file path, or inline JSON object, of extra attributes to add to the zarr.json of
+                          the group this call writes (raw/ or labels/<name>/). "ome" and "_software" cannot be set.
         output_dtype: Output dtype override (e.g., "uint8", "int16", "uint16"). Empty = preserve source dtype.
         add_to_existing: Add data to existing container without destroying it.
-            Safe write applies to the subgroup (e.g., labels/) not the container root.
+            Safe write applies to the subgroup (e.g., labels/) not the container root. The new layer is written in the
+            container's own format (zarr2 or zarr3), including a sparse label ingest with output_offset.
+        bbox_axes: Which source axes bbox refers to, comma-separated indices (e.g. "2,3,4" for z,y,x of a 5D t,c,z,y,x source).
+        squeeze_singleton_axes: Drop length-1 axes (e.g. t, c) from the output. Needs known axis identity.
+        input_axes: Name every source axis, one letter per axis in the reader's order, slowest to fastest
+                    (e.g. "zyxc" for a TIFF read as i,y,x,s; "zyxs" keeps samples per pixel as their own axis
+                    `s`; "yxz" for z slices stored as samples). Letters t, c, s, z, y, x. Only renames; spatial
+                    axis order is unchanged. Use the `axes` of a catalog record.
+        relabel_axis: Correct a mis-detected source axis, "OLD=NEW" (e.g. "t=z"); several separated by ";".
+        output_offset: Sparse label ingest: voxel position of the label inside the existing container,
+            comma-separated (e.g. "0,0,128,64,64"), in the container's own axis order (usually t,c,z,y,x; a few
+            crops are stored x,y,z). Orient the source into that order with axes_order. Use with add_to_existing
+            and data_type="labels".
+        target_shape: Shape of the target container for output_offset, in the container's own axis order,
+            comma-separated (read from the container if empty).
     """
+    params = dict(locals())
     try:
         import contextlib
         import io
 
         import numpy as np
-        from tensorswitch_v2.api import Readers, Writers
-        from tensorswitch_v2.core.converter import DistributedConverter
+        from tensorswitch_v2.__main__ import (
+            _apply_preset,
+            create_reader,
+            parse_args,
+            parse_bbox,
+            parse_bbox_axes,
+            run_conversion,
+        )
+        from tensorswitch_v2.mcp_args import build_argv
         from tensorswitch_v2.utils import get_dtype_name
 
-        input_path = input_path.strip()
-        output_path = output_path.strip()
+        input_path = params["input_path"] = input_path.strip()
+        output_path = params["output_path"] = output_path.strip()
 
-        # Apply preset
-        if preset == "webknossos":
-            if not chunk_shape:
-                chunk_shape = "32,32,32"
-            if not shard_shape:
-                shard_shape = "1024,1024,1024"
-        elif preset == "paintera":
-            if output_format == "zarr3":
-                output_format = "n5"
-            if not chunk_shape:
-                chunk_shape = "64,64,64"
-            if compression == "zstd":
-                compression = "gzip"
-            if not axes_order:
-                axes_order = "xyz" if output_format == "n5" else "zyx"
+        # Same path as the CLI: build argv -> real parser -> preset -> run_conversion.
+        parse_errors = io.StringIO()
+        try:
+            with contextlib.redirect_stderr(parse_errors):
+                args = parse_args(build_argv(params))
+        except SystemExit:
+            detail = [l for l in parse_errors.getvalue().strip().splitlines() if l.strip()]
+            return json.dumps({"error": "validation_error",
+                               "message": detail[-1] if detail else "invalid arguments"}, indent=2)
+        _apply_preset(args)
 
-        # Create reader (suppress stdout — MCP uses stdio transport)
-        with contextlib.redirect_stdout(io.StringIO()):
-            reader = _create_reader(input_path, dataset_path, use_bioio, use_bioformats, view_index)
-
-        # Size guard — refuse large datasets (use bbox size if specified)
-        store = reader.get_tensorstore()
-        shape = tuple(store.shape)
+        # Size guard: refuse large datasets (the bbox volume counts when one is given)
+        with _quiet_capture() as notes:
+            reader = create_reader(args)
+            store = reader.get_tensorstore()
+        shape = [int(n) for n in store.shape]
         dtype_str = get_dtype_name(store.dtype)
-
-        # If bbox is provided, use bbox volume for size check
-        if bbox:
-            bbox_parts = [int(x) for x in bbox.split(",")]
-            if len(bbox_parts) == 6:
-                effective_shape = tuple(bbox_parts[3:])  # size_z, size_y, size_x
-            else:
-                effective_shape = shape
-        else:
-            effective_shape = shape
-        effective_dtype_str = output_dtype if output_dtype else dtype_str
-        dataset_size_gb = (np.prod(effective_shape) * np.dtype(effective_dtype_str).itemsize) / (1024**3)
+        elements = int(np.prod(shape))
+        if args.bbox:
+            _, bbox_size = parse_bbox(args.bbox)
+            covered = (list(parse_bbox_axes(args.bbox_axes)) if args.bbox_axes
+                       else list(range(len(shape) - len(bbox_size), len(shape))))
+            if len(covered) == len(bbox_size) and all(0 <= i < len(shape) for i in covered):
+                elements = int(np.prod([n for i, n in enumerate(shape) if i not in covered])
+                               * np.prod(bbox_size))
+        effective_dtype = args.dtype or dtype_str
+        dataset_size_gb = (elements * np.dtype(effective_dtype).itemsize) / (1024**3)
 
         if dataset_size_gb > MCP_CONVERT_MAX_GB:
             return json.dumps({
                 "error": "dataset_too_large",
                 "dataset_size_gb": round(dataset_size_gb, 2),
                 "threshold_gb": MCP_CONVERT_MAX_GB,
-                "shape": list(shape),
+                "shape": shape,
                 "dtype": dtype_str,
                 "recommendation": (
                     f"Dataset is {dataset_size_gb:.1f} GB, exceeding the "
@@ -517,188 +540,38 @@ def convert(
                 ),
             }, indent=2)
 
-        # Resolve data_type
-        if data_type == "auto":
-            resolved_data_type = "labels" if is_label else "image"
-        else:
-            resolved_data_type = data_type
-
-        # Safe write: write to .tmp, rename on completion
-        final_output = output_path
-        _add_to_existing_parent = None  # Track subgroup parent for --add-to-existing
-
-        if add_to_existing:
-            # Subgroup-level safe write
-            if not os.path.exists(final_output):
-                return json.dumps({"error": f"--add-to-existing: container does not exist: {final_output}"}, indent=2)
-            subgroup = _resolve_conversion_subgroup(output_format, data_type, is_label, image_key, label_key)
-            if not subgroup:
-                return json.dumps({"error": "--add-to-existing requires data_type='labels' or 'image'"}, indent=2)
-            _add_to_existing_parent = subgroup.split('/')[0]
-            tmp_subgroup = os.path.join(final_output, _add_to_existing_parent + '.tmp')
-            if os.path.exists(tmp_subgroup):
-                shutil.rmtree(tmp_subgroup)
-            labels_container = 'labels.tmp' if _add_to_existing_parent == 'labels' else 'labels'
-            tmp_output = None  # No container-level .tmp
-        else:
-            tmp_output = output_path.rstrip('/\\') + '.tmp'
-            if os.path.exists(tmp_output):
-                shutil.rmtree(tmp_output)
-            output_path = tmp_output
-            labels_container = 'labels'
-
-        # Create writer
-        if output_format == "zarr3":
-            writer = Writers.zarr3(
-                output_path,
-                use_sharding=not no_sharding,
-                compression=compression,
-                compression_level=compression_level,
-                data_type=resolved_data_type,
-                level_path=level_path,
-                image_key=image_key,
-                label_key=label_key,
-                include_omero=omero,
-                labels_container=labels_container,
-            )
-        elif output_format == "zarr2":
-            writer = Writers.zarr2(
-                output_path,
-                compression=compression,
-                compression_level=compression_level,
-                data_type=resolved_data_type,
-                level_path=level_path,
-                image_key=image_key,
-                label_key=label_key,
-                include_omero=omero,
-                labels_container=labels_container,
-            )
-        elif output_format == "n5":
-            writer = Writers.n5(
-                output_path,
-                compression=compression,
-                compression_level=compression_level,
-            )
-        else:
-            return f"Error: unsupported output format '{output_format}'. Use zarr3, zarr2, or n5."
-
-        # Parse optional shapes
-        cs = tuple(int(x) for x in chunk_shape.split(",")) if chunk_shape else None
-        ss = tuple(int(x) for x in shard_shape.split(",")) if shard_shape else None
-
-        # Parse voxel size override
-        voxel_override = None
-        if voxel_size:
-            parts = [float(x) for x in voxel_size.split(",")]
-            if len(parts) == 3:
-                voxel_override = {"x": parts[0], "y": parts[1], "z": parts[2]}
-
-        # Parse bbox
-        bbox_parsed = None
-        if bbox:
-            parts = [int(x) for x in bbox.split(",")]
-            if len(parts) == 6:
-                bbox_parsed = (tuple(parts[:3]), tuple(parts[3:]))
-
-        # Parse axes_order
-        axes_order_list = list(axes_order) if axes_order else None
-
-        # Run conversion (suppress stdout — MCP uses stdio transport)
-        converter = DistributedConverter(reader, writer)
-        with contextlib.redirect_stdout(io.StringIO()):
-            result = converter.convert(
-                chunk_shape=cs,
-                shard_shape=ss,
-                voxel_size_override=voxel_override,
-                voxel_unit=voxel_unit if voxel_size else None,
-                is_label=is_label,
-                expand_to_5d=expand_to_5d,
-                bbox=bbox_parsed,
-                axes_order_override=axes_order_list,
-                force_order=force_order if force_order else None,
-                no_ome_meta_export=no_ome_meta_export,
-                no_ome_xml_attr=no_ome_xml_attr,
-                output_dtype=output_dtype if output_dtype else None,
-            )
+        # Suppress stdout - MCP uses stdio transport (stdout = JSON-RPC)
+        try:
+            with _quiet_capture() as run_notes:
+                info = run_conversion(args) or {}
+            notes.extend(n for n in run_notes if n not in notes)
+        except (FileNotFoundError, ValueError) as e:
+            if str(e).startswith("--add-to-existing"):
+                return json.dumps({"error": str(e)}, indent=2)
+            raise
 
         response = {
             "status": "success",
             "input": input_path,
             "output": output_path,
-            "format": output_format,
+            "format": args.output_format,
             "dataset_size_gb": round(dataset_size_gb, 2),
-            "chunks_processed": result.get("chunks_processed", "unknown"),
-            "time_seconds": round(result.get("elapsed_time", 0), 1),
+            "chunks_processed": info.get("chunks_processed", "unknown"),
+            "time_seconds": round(info.get("elapsed_seconds") or 0, 1),
         }
-
-        # Auto-multiscale: generate pyramid after conversion
-        if auto_multiscale:
-            from tensorswitch_v2.__main__ import find_base_level, run_local_pyramid
-            from tensorswitch_v2.utils.pyramid_utils import resolve_downsample_method
-
-            # Resolve the subgroup the converter just wrote to (e.g. 'raw'
-            # or 'labels/segmentation') so find_base_level targets the right
-            # levels instead of a stale subgroup from a prior stage.
-            pyramid_subgroup = _resolve_conversion_subgroup(
-                output_format, data_type, is_label, image_key, label_key,
-            )
-            if _add_to_existing_parent and pyramid_subgroup:
-                # Pyramid runs on .tmp subgroup before rename
-                parts = pyramid_subgroup.split('/', 1)
-                pyramid_subgroup = parts[0] + '.tmp' + ('/' + parts[1] if len(parts) > 1 else '')
-                find_target = os.path.join(final_output, pyramid_subgroup)
-            else:
-                find_target = (
-                    os.path.join(output_path, pyramid_subgroup) if pyramid_subgroup else output_path
-                )
-            s0_path, _ = find_base_level(find_target)
-            root_path = os.path.dirname(s0_path)
-
-            resolved_method = resolve_downsample_method(downsample_method, s0_path)
-
-            custom_factors = None
-            if per_level_factors:
-                custom_factors = [
-                    [int(x) for x in level.split(",")]
-                    for level in per_level_factors.split(";")
-                ]
-
-            with contextlib.redirect_stdout(io.StringIO()):
-                plan = run_local_pyramid(
-                    s0_path, root_path,
-                    downsample_method=resolved_method,
-                    custom_per_level_factors=custom_factors,
-                    include_translation=not no_translation,
-                    verbose=False,
-                )
+        if args.auto_multiscale:
+            plan = info.get("pyramid_plan")
             response["auto_multiscale"] = True
-            response["pyramid_s0"] = s0_path
+            response["pyramid_s0"] = info.get("pyramid_s0")
             if plan and isinstance(plan, dict):
                 response["pyramid_levels"] = plan.get("num_levels", 0)
                 response["pyramid_info"] = [
-                    {
-                        "level": f"s{lv['level']}",
-                        "factors": lv["cumulative_factor"],
-                        "shape": lv["predicted_shape"],
-                    }
+                    {"level": f"s{lv['level']}", "factors": lv["cumulative_factor"], "shape": lv["predicted_shape"]}
                     for lv in plan.get("levels", [])
                 ]
-
-        # Safe write: rename .tmp → final path
-        if _add_to_existing_parent:
-            from tensorswitch_v2.__main__ import _finalize_add_to_existing
-            _finalize_add_to_existing(
-                final_output=final_output,
-                subgroup_parent=_add_to_existing_parent,
-                output_format=output_format,
-                verbose=False,
-            )
-        elif tmp_output and os.path.exists(tmp_output):
-            if os.path.exists(final_output):
-                shutil.rmtree(final_output)
-            os.rename(tmp_output, final_output)
-        response["output"] = final_output
-
+        notes = _relevant(notes, args.voxel_size)
+        if notes:
+            response["warnings"] = notes
         return json.dumps(response, indent=2)
     except Exception as e:
         logger.error(f"convert failed: {e}\n{traceback.format_exc()}")
@@ -833,44 +706,65 @@ def generate_pyramid(
 # ---------------------------------------------------------------------------
 @mcp.tool()
 def list_formats() -> str:
-    """List all supported input and output formats for TensorSwitch.
+    """List the input and output formats TensorSwitch supports, and how to get data that is only at a URL.
 
-    Returns format names, extensions, and reader tiers (Tier 1 = native
-    TensorStore for maximum performance, Tier 4 = Bio-Formats for broadest
-    compatibility).
+    Input formats are grouped by reader tier (Tier 1 = native TensorStore, fastest;
+    Tier 2 = dedicated readers; Tier 3 = BioIO plugins actually installed here;
+    Tier 4 = Bio-Formats, optional and Java-backed). Each file format names the
+    reader that auto-detection picks from the extension.
     """
+    from importlib.metadata import entry_points
+
+    try:
+        bioio_plugins = sorted({ep.name for ep in entry_points(group="bioio.readers")})
+    except Exception:
+        bioio_plugins = []
     formats = {
         "input_formats": {
             "tier_1_native_tensorstore": [
-                {"name": "Zarr3", "extensions": [".zarr"], "notes": "With sharding support"},
-                {"name": "Zarr2", "extensions": [".zarr"], "notes": "Legacy format"},
-                {"name": "N5", "extensions": [".n5"], "notes": "Java/BigDataViewer format"},
-                {"name": "Neuroglancer Precomputed", "extensions": [], "notes": "Local or remote (GCS/S3/HTTP)"},
+                {"name": "Zarr3", "extensions": [".zarr"], "reader": "Zarr3Reader", "notes": "With sharding support"},
+                {"name": "Zarr2", "extensions": [".zarr"], "reader": "Zarr2Reader", "notes": "Legacy format"},
+                {"name": "N5", "extensions": [".n5"], "reader": "N5Reader", "notes": "Java/BigDataViewer format"},
+                {"name": "Neuroglancer Precomputed", "extensions": [], "reader": "PrecomputedReader",
+                 "notes": "Local or remote (GCS/S3/HTTP)"},
             ],
-            "tier_2_custom_optimized": [
-                {"name": "TIFF", "extensions": [".tif", ".tiff"], "notes": "Single or stack, OME-TIFF supported"},
-                {"name": "ND2", "extensions": [".nd2"], "notes": "Nikon NIS-Elements"},
-                {"name": "IMS", "extensions": [".ims"], "notes": "Imaris/Bitplane HDF5-based"},
-                {"name": "HDF5", "extensions": [".h5", ".hdf5", ".hdf", ".he5"], "notes": "Generic HDF5 containers"},
-                {"name": "CZI", "extensions": [".czi"], "notes": "Zeiss multi-view"},
+            "tier_2_dedicated_readers": [
+                {"name": "TIFF", "extensions": [".tif", ".tiff"], "reader": "TiffReader",
+                 "notes": "Single file or a folder of 2D slices; OME-TIFF and ImageJ metadata"},
+                {"name": "ND2", "extensions": [".nd2"], "reader": "ND2Reader", "notes": "Nikon NIS-Elements"},
+                {"name": "IMS", "extensions": [".ims"], "reader": "IMSReader", "notes": "Imaris (HDF5-based)"},
+                {"name": "HDF5", "extensions": [".h5", ".hdf5"], "reader": "HDF5Reader",
+                 "notes": "Needs dataset_path; voxel size read from dataset attributes"},
+                {"name": "CZI", "extensions": [".czi"], "reader": "CZIReader", "notes": "Zeiss, multi-view"},
+                {"name": "NIfTI", "extensions": [".nii", ".nii.gz"], "reader": "NIfTIReader",
+                 "notes": "Header voxel size is often wrong or missing; pass voxel_size"},
+                {"name": "MRC / CCP4", "extensions": [".mrc", ".mrcs", ".rec", ".ali", ".st", ".map", ".rec.nad"], "reader": "MRCReader",
+                 "notes": "Cryo-ET and EM volumes; header voxel size is angstroms and only trusted when it looks calibrated"},
+                {"name": "PNG", "extensions": [".png"], "reader": "PngReader",
+                 "notes": "A folder or .zip of 2D slices becomes one volume; PNG has no voxel size, pass voxel_size"},
             ],
-            "tier_3_bioio": [
-                {"name": "BIOIO Adapter", "extensions": ["various"], "notes": "20+ formats via aicsimageio/bioio"},
-            ],
-            "tier_4_bioformats": [
-                {"name": "Bio-Formats", "extensions": ["various"], "notes": "150+ formats via Java Bio-Formats (requires scyjava)"},
-            ],
+            "tier_3_bioio": {
+                "installed_plugins": bioio_plugins,
+                "notes": "Used for formats without a dedicated reader when a plugin is installed",
+            },
+            "tier_4_bioformats": {
+                "notes": "Optional, Java-backed (needs the bioformats extra / scyjava); enable with use_bioformats=True",
+            },
         },
         "output_formats": [
             {"name": "Zarr3", "notes": "Default. OME-NGFF v0.5, sharding, zstd compression"},
             {"name": "Zarr2", "notes": "Legacy. OME-NGFF v0.4, for tools that don't support Zarr3"},
             {"name": "N5", "notes": "For Java tools (BigDataViewer, BigStitcher)"},
         ],
+        "presets": ["webknossos", "paintera", "miaai", "mia_lmvd"],
         "remote_sources": [
-            "gs:// (Google Cloud Storage)",
-            "s3:// (Amazon S3)",
-            "https:// (HTTP/HTTPS)",
+            "gs:// (Google Cloud Storage), s3:// (Amazon S3), https:// (HTTP/HTTPS): zarr, N5 and precomputed are read in place",
+            "any other file or a member of a remote zip: download it first with fetch_dataset, then convert it",
         ],
+        "voxel_size_rule": (
+            "Every spatial axis needs a real voxel size from the file or from the voxel_size parameter; "
+            "conversion is refused otherwise instead of defaulting to 1."
+        ),
     }
     return json.dumps(formats, indent=2)
 
@@ -1018,8 +912,16 @@ def submit_job(
     preset: str = "",
     omero: bool = True,
     no_translation: bool = False,
+    expansion_factor: float = 0.0,
+    extra_attributes: str = "",
     output_dtype: str = "",
     add_to_existing: bool = False,
+    bbox_axes: str = "",
+    squeeze_singleton_axes: bool = False,
+    input_axes: str = "",
+    relabel_axis: str = "",
+    output_offset: str = "",
+    target_shape: str = "",
 ) -> str:
     """Submit a conversion job to the LSF cluster (bsub).
 
@@ -1032,7 +934,8 @@ def submit_job(
         input_path: Path to source dataset.
         output_path: Path for output (e.g., /data/output.zarr).
         project: LSF project name for billing (required). Ask the user which project to use.
-        output_format: Output format — "zarr3" (default), "zarr2", or "n5".
+        output_format: Output format — "zarr3" (default), "zarr2", or "n5". With add_to_existing the new layer follows the
+            existing container (zarr2 container: zarr2 layer; zarr3: zarr3); zarr2 into a zarr3 container is refused.
         chunk_shape: Comma-separated chunk shape (e.g., "64,64,64"). Auto-calculated if empty.
         shard_shape: Comma-separated shard shape for zarr3. Auto-calculated if empty.
         no_sharding: Disable sharding for zarr3. Default: False.
@@ -1048,7 +951,8 @@ def submit_job(
         use_bioio: Force BIOIO adapter (Tier 3).
         use_bioformats: Force Bio-Formats reader (Tier 4).
         view_index: CZI view index (-1 = all views).
-        axes_order: Override output spatial axis order (e.g., "xyz", "zyx").
+        axes_order: Override output spatial axis order (e.g., "xyz", "zyx"). Also applied to a sparse label ingest
+                    (output_offset); bbox and squeeze_singleton_axes are refused there with an error.
         force_order: Force output memory order — "c" for C-order, "f" for F-order, or "" for auto.
         expand_to_5d: Force 5D TCZYX expansion.
         bbox: Bounding box for subvolume: "origin_z,origin_y,origin_x,size_z,size_y,size_x".
@@ -1065,19 +969,48 @@ def submit_job(
         per_level_factors: Custom per-level factors, semicolon-separated (e.g., "1,2,2;1,2,2").
         preset: Preset configuration — "webknossos" (chunk 32, shard 1024).
                           "paintera" (n5, xyz axis order, gzip, chunk 64x64x64; or zarr2 with zyx).
+                          "miaai" (alias "mia_lmvd"; zarr3, chunk 128^3, shard 512^3, zstd-5, C-order).
         omero: Include structured omero channel metadata for visualization tools.
         no_translation: Disable translation transforms in OME-NGFF multiscale metadata.
+        expansion_factor: Expansion microscopy factor (e.g. 4). With preset "miaai" the outer
+                          coordinateTransformations become 1/factor on the spatial axes. 0 = not expansion data.
+        extra_attributes: JSON file path, or inline JSON object, of extra attributes to add to the zarr.json of
+                          the group this call writes (raw/ or labels/<name>/). "ome" and "_software" cannot be set.
         output_dtype: Output dtype override (e.g., "uint8", "int16", "uint16"). Empty = preserve source dtype.
         add_to_existing: Add data to existing container without destroying it.
             Safe write applies to the subgroup (e.g., labels/) not the container root.
+        bbox_axes: Which source axes --bbox refers to, as comma-separated indices
+            (e.g. "2,3,4" for z,y,x of a 5D t,c,z,y,x source). Needed for N-D bbox.
+        squeeze_singleton_axes: Drop length-1 axes (e.g. t, c) from the output. Needs known axis identity.
+        input_axes: Name every source axis, one letter per axis in the reader's order, slowest to fastest
+                    (e.g. "zyxc" for a TIFF read as i,y,x,s; "zyxs" keeps samples per pixel as their own axis
+                    `s`; "yxz" for z slices stored as samples). Letters t, c, s, z, y, x. Only renames; spatial
+                    axis order is unchanged. Use the `axes` of a catalog record.
+        relabel_axis: Correct a mis-detected source axis, "OLD=NEW" (e.g. "t=z"); several separated by ";".
+        output_offset: Sparse label ingest: voxel position where the label is placed in the existing
+            container, comma-separated (e.g. "0,0,128,64,64"), in the container's own axis order (usually
+            t,c,z,y,x; a few crops are stored x,y,z). Orient the source into that order with axes_order. Use with
+            add_to_existing and data_type="labels".
+        target_shape: Shape of the target container for output_offset, in the container's own axis order,
+            comma-separated (read from the container if empty).
     """
+    params = dict(locals())
     try:
-        import argparse
         import contextlib
         import io
 
-        input_path = input_path.strip()
-        output_path = output_path.strip()
+        from tensorswitch_v2.__main__ import (
+            _apply_preset,
+            _resolve_conversion_subgroup as _cli_subgroup,
+            _submit_dependent_pyramid,
+            find_base_level,
+            parse_args,
+        )
+        from tensorswitch_v2.__main__ import submit_job as _cli_submit_job
+        from tensorswitch_v2.mcp_args import build_argv
+
+        input_path = params["input_path"] = input_path.strip()
+        output_path = params["output_path"] = output_path.strip()
 
         # Validate paths are on shared storage (LSF nodes can't see /tmp)
         for label, p in [("input_path", input_path), ("output_path", output_path)]:
@@ -1093,130 +1026,46 @@ def submit_job(
                     ),
                 }, indent=2)
 
-        # Apply preset
-        if preset == "webknossos":
-            if not chunk_shape:
-                chunk_shape = "32,32,32"
-            if not shard_shape:
-                shard_shape = "1024,1024,1024"
-        elif preset == "paintera":
-            if output_format == "zarr3":
-                output_format = "n5"
-            if not chunk_shape:
-                chunk_shape = "64,64,64"
-            if compression == "zstd":
-                compression = "gzip"
-            if not axes_order:
-                axes_order = "xyz" if output_format == "n5" else "zyx"
+        # Same path as the CLI: build argv -> real parser -> preset -> CLI submit.
+        # Every CLI option, default and validation therefore applies here too.
+        parse_errors = io.StringIO()
+        try:
+            with contextlib.redirect_stderr(parse_errors):
+                args = parse_args(build_argv(params) + ["--submit"])
+        except SystemExit:
+            detail = [l for l in parse_errors.getvalue().strip().splitlines() if l.strip()]
+            return json.dumps({"error": "validation_error",
+                               "message": detail[-1] if detail else "invalid arguments"}, indent=2)
+        _apply_preset(args)
 
-        # Handle auto_multiscale mode
-        if auto_multiscale:
-            from tensorswitch_v2.__main__ import find_base_level
-
-            # Detect whether input is an existing dataset (pyramid-only)
-            # or a raw source file (conversion + dependent pyramid).
-            # Only use pyramid-only shortcut when input and output resolve to
-            # the same directory — otherwise the user wants format conversion
-            # first, then pyramid on the *output*.
+        # auto_multiscale on an existing dataset (same input and output): pyramid only.
+        if args.auto_multiscale:
             is_existing_dataset = False
             try:
                 find_base_level(input_path)
                 is_existing_dataset = True
             except (ValueError, OSError):
                 pass
-
-            same_path = os.path.abspath(input_path) == os.path.abspath(output_path)
-            if is_existing_dataset and same_path:
-                # Pyramid-only: input already has s0, no conversion needed
-                subgroup = _resolve_conversion_subgroup(
-                    output_format, data_type, is_label, image_key, label_key,
-                )
+            if is_existing_dataset and os.path.abspath(input_path) == os.path.abspath(output_path):
                 return _submit_pyramid_job(
                     input_path, output_path, project,
-                    downsample_method=downsample_method,
-                    per_level_factors=per_level_factors,
-                    memory=memory, wall_time=wall_time, cores=cores,
-                    log_dir=log_dir,
-                    include_translation=not no_translation,
-                    subgroup=subgroup,
+                    downsample_method=args.downsample_method,
+                    per_level_factors=args.per_level_factors or "",
+                    memory=args.memory or 0, wall_time=args.wall_time or "", cores=args.cores or 0,
+                    log_dir=args.log_dir or "",
+                    include_translation=not args.no_translation,
+                    subgroup=_cli_subgroup(args),
+                    preset=args.preset,
                 )
-            # else: fall through to conversion submission, then chain pyramid
 
-        # Build argparse.Namespace matching what __main__.submit_job() reads
-        # Reference: __main__.py lines 836-1057
-        args = argparse.Namespace(
-            input=input_path,
-            output=output_path,
-            output_format=output_format,
-            project=project,
-            memory=memory if memory > 0 else None,
-            wall_time=wall_time if wall_time else None,
-            cores=cores if cores > 0 else None,
-            dataset_path=dataset_path if dataset_path else "",
-            level_path=level_path,
-            chunk_shape=chunk_shape if chunk_shape else None,
-            shard_shape=shard_shape if shard_shape else None,
-            no_sharding=no_sharding,
-            compression=compression,
-            compression_level=compression_level,
-            start_idx=None,
-            stop_idx=None,
-            write_metadata=False,
-            view_index=view_index if view_index >= 0 else None,
-            quiet=True,
-            use_bioio=use_bioio,
-            use_bioformats=use_bioformats,
-            force_c_order=(force_order.lower() == "c") if force_order else False,
-            force_f_order=(force_order.lower() == "f") if force_order else False,
-            voxel_size=voxel_size if voxel_size else None,
-            voxel_unit=voxel_unit if voxel_size else None,
-            is_label=is_label,
-            expand_to_5d=expand_to_5d,
-            data_type=data_type,
-            label_key=label_key,
-            image_key=image_key,
-            use_nested_structure=True,
-            bbox=bbox if bbox else None,
-            axes_order=axes_order if axes_order else None,
-            log_dir=log_dir if log_dir else None,
-            no_ome_meta_export=no_ome_meta_export,
-            no_ome_xml_attr=no_ome_xml_attr,
-            job_group=job_group if job_group else None,
-            omero=omero,
-            no_omero=not omero,
-            no_translation=no_translation,
-            dtype=output_dtype if output_dtype else None,
-            add_to_existing=add_to_existing,
-        )
-
-        # Import and call the CLI submit_job function
-        from tensorswitch_v2.__main__ import submit_job as _cli_submit_job
-
-        # Suppress stdout — MCP uses stdio transport (stdout = JSON-RPC)
-        with contextlib.redirect_stdout(io.StringIO()):
+        # Suppress stdout - MCP uses stdio transport (stdout = JSON-RPC)
+        with _quiet_capture() as notes:
             job_id = _cli_submit_job(args, return_job_id=True)
+            coordinator_id = (_submit_dependent_pyramid(args, conversion_job_id=str(job_id))
+                              if args.auto_multiscale and job_id else None)
+        notes = _relevant(notes, args.voxel_size)
 
-        # If auto_multiscale was requested for a raw source file, chain a
-        # dependent pyramid coordinator job after the conversion finishes.
-        if auto_multiscale:
-            coordinator_id = _submit_dependent_pyramid_mcp(
-                conversion_job_id=str(job_id),
-                output_path=output_path,
-                project=project,
-                output_format=output_format,
-                data_type=data_type,
-                is_label=is_label,
-                image_key=image_key,
-                label_key=label_key,
-                downsample_method=downsample_method,
-                per_level_factors=per_level_factors,
-                no_translation=no_translation,
-                log_dir=log_dir,
-                memory=memory,
-                wall_time=wall_time,
-                cores=cores,
-                job_group=job_group,
-            )
+        if args.auto_multiscale:
             return json.dumps({
                 "status": "submitted",
                 "mode": "convert_and_pyramid",
@@ -1224,12 +1073,15 @@ def submit_job(
                 "coordinator_job_id": coordinator_id,
                 "input": input_path,
                 "output": output_path,
-                "format": output_format,
+                "format": args.output_format,
                 "project": project,
+                **({"warnings": notes} if notes else {}),
                 "message": (
                     f"Conversion job {job_id} submitted. "
-                    f"Pyramid coordinator job {coordinator_id} will start after "
-                    f"conversion completes. Use check_job_status to monitor."
+                    + (f"Pyramid coordinator job {coordinator_id} will start after conversion completes. "
+                       if coordinator_id else
+                       "The pyramid coordinator could not be submitted; run auto_multiscale on the output afterwards. ")
+                    + "Use check_job_status to monitor."
                 ),
             }, indent=2)
 
@@ -1238,8 +1090,9 @@ def submit_job(
             "job_id": job_id,
             "input": input_path,
             "output": output_path,
-            "format": output_format,
+            "format": args.output_format,
             "project": project,
+            **({"warnings": notes} if notes else {}),
             "message": f"Job {job_id} submitted. Use check_job_status to monitor.",
         }, indent=2)
 
@@ -1263,95 +1116,6 @@ def submit_job(
         return f"Error submitting job: {e}"
 
 
-def _submit_dependent_pyramid_mcp(
-    conversion_job_id: str,
-    output_path: str,
-    project: str,
-    output_format: str = "zarr3",
-    data_type: str = "auto",
-    is_label: bool = False,
-    image_key: str = "raw",
-    label_key: str = "segmentation",
-    downsample_method: str = "auto",
-    per_level_factors: str = "",
-    no_translation: bool = False,
-    log_dir: str = "",
-    memory: int = 0,
-    wall_time: str = "",
-    cores: int = 0,
-    job_group: str = "",
-):
-    """Submit a dependent pyramid coordinator that waits for conversion to finish.
-
-    Mirrors __main__._submit_dependent_pyramid() but standalone for MCP.
-    Returns the coordinator LSF job ID, or "unknown" on failure.
-    """
-    import re
-    import shlex
-    import subprocess
-
-    output_abs = os.path.abspath(output_path)
-    subgroup = _resolve_conversion_subgroup(
-        output_format, data_type, is_label, image_key, label_key,
-    )
-    pyramid_input = os.path.join(output_abs, subgroup) if subgroup else output_abs
-
-    reinvoke = [
-        sys.executable, "-m", "tensorswitch_v2",
-        "--input", pyramid_input,
-        "--auto_multiscale",
-        "--submit",
-        "-P", project,
-    ]
-    if downsample_method and downsample_method != "auto":
-        reinvoke += ["--downsample_method", downsample_method]
-    if per_level_factors:
-        reinvoke += ["--per_level_factors", per_level_factors]
-    if no_translation:
-        reinvoke.append("--no_translation")
-    if log_dir:
-        reinvoke += ["--log_dir", log_dir]
-    if memory and memory > 0:
-        reinvoke += ["--memory", str(memory)]
-    if wall_time:
-        reinvoke += ["--wall_time", wall_time]
-    if cores and cores > 0:
-        reinvoke += ["--cores", str(cores)]
-
-    reinvoke_str = shlex.join(reinvoke)
-
-    output_parent = os.path.dirname(output_abs)
-    effective_log_dir = log_dir or os.path.join(output_parent, "output")
-    os.makedirs(effective_log_dir, exist_ok=True)
-
-    job_name = f"tsv2_pyramid_coordinator_{os.path.basename(output_path)}"
-    job_name = job_name.replace(" ", "_")[:128]
-
-    command = [
-        "bsub",
-        "-J", job_name,
-        "-n", "1",
-        "-W", "0:30",
-        "-M", "15GB",
-        "-R", "rusage[mem=15360]",
-        "-P", project,
-        "-w", f"done({conversion_job_id})",
-        "-o", os.path.join(effective_log_dir, f"output__{job_name}_%J.log"),
-        "-e", os.path.join(effective_log_dir, f"error__{job_name}_%J.log"),
-    ]
-    if job_group:
-        command += ["-g", job_group]
-    command += ["/bin/bash", "-c", reinvoke_str]
-
-    result = subprocess.run(command, capture_output=True, text=True)
-    if result.returncode == 0:
-        match = re.search(r'Job <(\d+)>', result.stdout)
-        return match.group(1) if match else "unknown"
-
-    logger.error(f"Pyramid coordinator submission failed: {result.stderr.strip()}")
-    return "unknown"
-
-
 def _submit_pyramid_job(
     input_path: str, output_path: str, project: str,
     downsample_method: str = "auto", per_level_factors: str = "",
@@ -1359,6 +1123,7 @@ def _submit_pyramid_job(
     log_dir: str = "",
     include_translation: bool = True,
     subgroup: str = None,
+    preset: str = None,
 ) -> str:
     """Submit pyramid generation as chained LSF jobs."""
     import contextlib
@@ -1425,6 +1190,7 @@ def _submit_pyramid_job(
             custom_per_level_factors=custom_factors,
             log_dir=log_dir if log_dir else None,
             include_translation=include_translation,
+            preset=preset,
         )
 
     return json.dumps({
@@ -1617,61 +1383,227 @@ def upsample_to_isotropic(
 # Tool 9: check_job_status
 # ---------------------------------------------------------------------------
 @mcp.tool()
-def check_job_status(job_id: str) -> str:
-    """Check the status of one or more LSF cluster jobs.
+def check_job_status(job_id: str, follow_dependents: bool = True, log_lines: int = 15) -> str:
+    """Report on LSF jobs: status, exit code, resources, log tails, and whether it looks right.
 
-    Returns the current status of jobs submitted via submit_job.
-    Supports checking multiple jobs by passing comma-separated IDs.
+    "DONE" only means the command exited 0. A job that never started the program is DONE
+    too, so each job also gets flags (for example "suspicious: reported DONE but used only
+    21 MB and 0.1 s of CPU") and the tail of its stdout and stderr logs.
+
+    Jobs that wait for it are included: the pyramid coordinator of a conversion and the
+    level jobs after it. `chain.state` is "running" while any of them is queued or running,
+    then "failed", "suspicious" or "done". A chain is only finished when the state is no
+    longer "running". Verify the output with verify_output once it is.
 
     Args:
-        job_id: LSF job ID (e.g., "12345") or comma-separated IDs (e.g., "12345,12346").
+        job_id: LSF job ID (e.g., "12345") or several separated by commas or spaces.
+        follow_dependents: Also report the jobs that depend on it (default True).
+        log_lines: How many lines of each log to return (default 15).
     """
+    import re
+
     try:
-        import subprocess
+        from tensorswitch_v2.utils.job_status import job_report
 
-        job_ids = [j.strip() for j in job_id.split(",") if j.strip()]
-        results = []
-
-        for jid in job_ids:
-            try:
-                result = subprocess.run(
-                    ["bjobs", "-noheader", "-o", "stat job_name", jid],
-                    capture_output=True, text=True, timeout=30,
-                )
-                if result.returncode == 0 and result.stdout.strip():
-                    parts = result.stdout.strip().split()
-                    status = parts[0] if parts else "UNKNOWN"
-                    job_name = parts[1] if len(parts) > 1 else "unknown"
-                    results.append({
-                        "job_id": jid,
-                        "status": status,
-                        "job_name": job_name,
-                    })
-                else:
-                    results.append({
-                        "job_id": jid,
-                        "status": "NOT_FOUND",
-                        "message": result.stderr.strip() or "Job not found in LSF",
-                    })
-            except subprocess.TimeoutExpired:
-                results.append({
-                    "job_id": jid,
-                    "status": "TIMEOUT",
-                    "message": "bjobs timed out after 30 seconds",
-                })
-
-        if len(results) == 1:
-            return json.dumps(results[0], indent=2)
-        return json.dumps({"jobs": results}, indent=2)
-
+        ids = [j for j in re.split(r"[,\s]+", job_id.strip()) if j]
+        if not ids:
+            return json.dumps({"error": "validation_error", "message": "no job id given"}, indent=2)
+        report = job_report(ids, follow_dependents=follow_dependents, log_lines=log_lines)
+        jobs = report["jobs"]
+        return json.dumps(jobs[0] if len(jobs) == 1 else report, indent=2)
     except FileNotFoundError:
         return json.dumps({
             "error": "bjobs_not_found",
             "message": "bjobs command not found. Requires LSF cluster environment.",
         }, indent=2)
+    except subprocess.TimeoutExpired:
+        return json.dumps({"error": "timeout", "message": "bjobs timed out after 60 seconds"}, indent=2)
     except Exception as e:
         logger.error(f"check_job_status failed: {e}\n{traceback.format_exc()}")
         return f"Error checking job status: {e}"
+
+
+# ---------------------------------------------------------------------------
+# Tool: fetch_dataset
+# ---------------------------------------------------------------------------
+@mcp.tool()
+def fetch_dataset(spec: str, dest_dir: str, max_gb: float = 2.0, background: bool = False) -> str:
+    """Download a file (or one member of a remote zip) so it can be converted.
+
+    Use this for data that only exists at a URL, e.g. a Zenodo or EBI link from a
+    dataset catalog record. Then pass the returned path to inspect_dataset/convert.
+
+    A download that is cut off is retried and continues from the bytes already saved
+    (when the server supports it). For large files or slow servers use background=True.
+
+    Args:
+        spec: A URL (http, https, ftp, s3), or "<zip url>::<path inside zip>" to
+              pull one member out of a remote zip without downloading the whole zip.
+        dest_dir: Folder to save into (created if needed). It must be visible to
+                  whatever will read it next (e.g. a batch job), so avoid /tmp then.
+        max_gb: Refuse anything larger than this. Default 2 GB, the in-process
+                limit; larger values need background=True.
+        background: Download in a detached process instead of waiting. The call
+                    returns at once with status "started"; call it again with the same
+                    arguments to see progress ("downloading"), the result ("success")
+                    or the error ("failed"; the next call tries again and resumes).
+    """
+    from tensorswitch_v2.utils import fetch as _fetch
+
+    try:
+        spec, dest_dir = spec.strip(), dest_dir.strip()
+        url, member = _fetch.parse_spec(spec)
+        _fetch.check_host(url)
+        if background:
+            state = _fetch.background_fetch(spec, dest_dir, int(max_gb * 1024 ** 3))
+            state["status"] = {"done": "success"}.get(state["state"], state["state"])
+            del state["state"]
+            return json.dumps(state, indent=2)
+        if max_gb > MCP_CONVERT_MAX_GB:
+            return json.dumps({
+                "error": "too_large_for_mcp",
+                "message": (
+                    f"max_gb={max_gb} exceeds the {MCP_CONVERT_MAX_GB} GB in-process limit. Call again with "
+                    f"background=True (the download continues in a detached process and resumes if interrupted), "
+                    f"or run it yourself:"
+                ),
+                "command": f"python -m tensorswitch_v2.utils.fetch '{spec}' '{dest_dir}' --max-gb {max_gb:g}",
+            }, indent=2)
+        result = _fetch.fetch(spec, dest_dir, int(max_gb * 1024 ** 3))
+        result["status"] = "success"
+        if os.path.realpath(result["path"]).startswith(("/tmp", "/var/tmp")):
+            result["warning"] = "saved under /tmp, which batch or cluster nodes usually cannot see"
+        return json.dumps(result, indent=2)
+    except _fetch.FetchError as e:
+        return json.dumps({"error": "fetch_refused", "message": str(e)}, indent=2)
+    except Exception as e:
+        logger.error(f"fetch_dataset failed: {e}\n{traceback.format_exc()}")
+        return json.dumps({"error": "fetch_failed", "message": str(e)}, indent=2)
+
+
+# ---------------------------------------------------------------------------
+# Tool: plan_conversion_from_yaml
+# ---------------------------------------------------------------------------
+@mcp.tool()
+def plan_conversion_from_yaml(record: str, output_dir: str, project: str = "", whole_dataset: bool = False) -> str:
+    """Plan the conversion of a dataset-catalog record (mia-agentic-search YAML).
+
+    Reads the record and returns the exact fetch_dataset / convert / submit_job
+    calls to run, in order, plus warnings for everything the record does not
+    settle (missing voxel size, unsupported format, no concrete file URL...).
+    Nothing is downloaded or converted: review the plan, then run the steps.
+
+    Only 3D and 3D+t records are planned. By default a plan covers the record's
+    sample unit (technical.sample.urls), one raw plus its labels. With
+    whole_dataset=True it covers every file of the record's zip download (listed
+    over the network), one container per sample with raw and labels paired by
+    folder and file name; files without a partner are reported in "unpaired",
+    and datasets over 50 GB are skipped and listed.
+
+    Args:
+        record: Path to a record .yaml, a GitHub URL of one, or a catalog record id.
+        output_dir: Folder for the converted containers. Downloads are staged in
+                    <output_dir>/source/ and can be deleted after checking the result.
+        project: LSF project, used in the plan when the sample is over 2 GB.
+        whole_dataset: Plan every file of the dataset instead of the sample unit.
+    """
+    from tensorswitch_v2.utils import record_planner
+
+    try:
+        loaded = record_planner.load_record(record.strip())
+        planner = record_planner.plan_dataset if whole_dataset else record_planner.plan_record
+        plan = planner(loaded, output_dir.strip(), project.strip() or None)
+        return json.dumps(plan, indent=2)
+    except record_planner.RecordError as e:
+        return json.dumps({"error": "bad_record", "message": str(e)}, indent=2)
+    except Exception as e:
+        logger.error(f"plan_conversion_from_yaml failed: {e}\n{traceback.format_exc()}")
+        return json.dumps({"error": "plan_failed", "message": str(e)}, indent=2)
+
+
+# ---------------------------------------------------------------------------
+# Tool: verify_output
+# ---------------------------------------------------------------------------
+@mcp.tool()
+def verify_output(
+    output_path: str,
+    source_path: str = "",
+    voxel_size: str = "",
+    labels: str = "",
+    bbox: str = "",
+    bbox_axes: str = "",
+    dataset_path: str = "",
+    output_dtype: str = "",
+    group: str = "",
+    image_key: str = "raw",
+    samples: int = 5,
+    input_axes: str = "",
+    label_input_axes: str = "",
+) -> str:
+    """Check a converted OME-Zarr container, above all against the data it came from.
+
+    Use after convert or after a submit_job chain has finished. Each check is pass, fail
+    or unverified (it could not run, with the reason). The overall result is fail if any
+    check failed, unverified if none failed but a check could not run, else pass; an
+    unverified result is NOT a pass. Nothing is deleted or changed except that a small
+    verification.json is written into the container.
+
+    Checks: structure (image and labels present, no .tmp leftovers), pyramid levels
+    (all exist, consistent shape and dtype), voxel size in nm vs what you expected,
+    data not constant, identity with the source (the whole array when it is 1 GB or
+    less, otherwise slices spread through it; catches transposed, shifted or dropped
+    data), and the Unix group of the files.
+
+    Args:
+        output_path: The converted .zarr container.
+        source_path: The file the image was converted from. Without it the identity check is unverified.
+        voxel_size: Expected voxel size "X,Y,Z" in nm.
+        labels: Label arrays to check, "name=source file;name2=source file2" (HDF5: "name=file.h5::dataset").
+        bbox: The bbox used for the conversion, so the right region of the source is compared.
+        bbox_axes: The bbox_axes used for the conversion.
+        dataset_path: Dataset inside an HDF5 source.
+        output_dtype: Set if the conversion cast the values (identity is then reported unverified).
+        group: Unix group the files should belong to.
+        image_key: Name of the image group (default "raw"); empty if the container holds labels only.
+        samples: Slices compared when the array is too big to compare whole.
+        input_axes: The input_axes used for the image conversion (e.g. "zyxc"), so source and output axes are
+                    matched by name. Axes are matched by name anyway when the source states them.
+        label_input_axes: The same for labels, "name=axes;name2=axes2" (e.g. "segmentation=yxz").
+    """
+    import contextlib
+    import io
+
+    from tensorswitch_v2.utils.verify import verify_output as _verify
+
+    try:
+        label_map = {}
+        for item in filter(None, (t.strip() for t in labels.split(";"))):
+            name, _, path = item.partition("=")
+            if not path:
+                return json.dumps({"error": "validation_error",
+                                   "message": f"labels must look like 'name=source file;...', got {item!r}"}, indent=2)
+            label_map[name.strip()] = path.strip()
+        expected = {k: v for k, v in {
+            "voxel_size": voxel_size, "labels": label_map, "bbox": bbox, "bbox_axes": bbox_axes,
+            "dataset_path": dataset_path, "output_dtype": output_dtype, "group": group}.items() if v}
+        label_axes = {}
+        for item in filter(None, (t.strip() for t in label_input_axes.split(";"))):
+            name, _, axes = item.partition("=")
+            if not axes:
+                return json.dumps({"error": "validation_error",
+                                   "message": f"label_input_axes must look like 'name=axes;...', got {item!r}"}, indent=2)
+            label_axes[name.strip()] = axes.strip()
+        if input_axes.strip():
+            expected["input_axes"] = input_axes.strip()
+        if label_axes:
+            expected["label_input_axes"] = label_axes
+        expected["image_key"] = image_key.strip()        # empty: the container has labels only
+        with contextlib.redirect_stdout(io.StringIO()):
+            report = _verify(output_path.strip(), source_path.strip() or None, expected, samples=samples)
+        return json.dumps(report, indent=2)
+    except Exception as e:
+        logger.error(f"verify_output failed: {e}\n{traceback.format_exc()}")
+        return json.dumps({"error": "verify_failed", "message": str(e)}, indent=2)
 
 
 # ---------------------------------------------------------------------------

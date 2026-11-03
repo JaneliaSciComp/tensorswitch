@@ -1,6 +1,6 @@
 # TensorSwitch v2
 
-**Version**: 2.1.0
+**Version**: 2.1.1
 **Status**: Production Ready
 **Branch**: `main`
 
@@ -60,7 +60,7 @@ A high-performance microscopy data conversion tool with TensorStore as the unifi
 - **Dtype Casting**: Convert output to a different numeric dtype (e.g., float32 → int16) with upfront range validation and per-chunk clipping safety
 - **Safe Write**: Writes to `.tmp` during conversion and renames on completion — interrupted jobs never leave corrupted output
 - **Chunk Write Retry**: Automatic retry with exponential backoff (3 attempts) for transient I/O errors on network storage — failed chunks are tracked and the job fails with a summary of failed indices
-- **Add to Existing Container**: `--add-to-existing` safely adds labels to a container that already has image data (subgroup-level safe write to `labels.tmp/`) — no risk of overwriting existing `raw/` data. Supported in CLI, MCP, and LSF `--submit`.
+- **Add to Existing Container**: `--add-to-existing` safely adds labels to a container that already has image data (subgroup-level safe write to `labels.tmp/`) — no risk of overwriting existing `raw/` data. The label is written in the container's own format (a Zarr2 crop gets a Zarr2 label, a Zarr3 crop a Zarr3 label), including a sparse label placed at an offset (`--output-offset`). Supported in CLI, MCP, and LSF `--submit`.
 - **MCP Server**: AI/agent integration via Model Context Protocol (Claude Code, LLM agents)
 
 ---
@@ -93,7 +93,7 @@ A high-performance microscopy data conversion tool with TensorStore as the unifi
 | Tier | Performance | Formats | Description |
 |------|-------------|---------|-------------|
 | **Tier 1** | Maximum | N5, Zarr2, Zarr3, Precomputed | Native TensorStore drivers |
-| **Tier 2** | Optimized | TIFF, ND2, IMS, HDF5, CZI, NIfTI, PNG | Custom optimized readers |
+| **Tier 2** | Optimized | TIFF, ND2, IMS, HDF5, CZI, NIfTI, MRC, PNG | Custom optimized readers |
 | **Tier 3** | Compatible | LIF + 20 more | BIOIO Python plugins |
 | **Tier 4** | Universal | 150+ formats | Bio-Formats Java (via bioio-bioformats) |
 
@@ -163,21 +163,21 @@ tensorswitch-v2 --version
 
 # Using pixi
 pixi run tensorswitch-v2 --version
-# Output: tensorswitch_v2 2.1.0
+# Output: tensorswitch_v2 2.1.1
 ```
 
 ### Python API
 
 ```python
 from tensorswitch_v2 import __version__, TensorSwitchDataset, Readers, Writers
-print(__version__)  # 2.1.0
+print(__version__)  # 2.1.1
 ```
 
 ### What's Included
 
 | Install Command | Formats Supported | Dependencies |
 |---|---|---|
-| `pip install tensorswitch` | N5, Zarr, TIFF, ND2, IMS, HDF5, CZI, NIfTI, PNG, LIF, Precomputed + 20 more | tensorstore, numpy, tifffile, h5py, nd2, nibabel, dask, bioio |
+| `pip install tensorswitch` | N5, Zarr, TIFF, ND2, IMS, HDF5, CZI, NIfTI, MRC, PNG, LIF, Precomputed + 20 more | tensorstore, numpy, tifffile, h5py, nd2, nibabel, mrcfile, dask, bioio |
 | `pip install "tensorswitch[bioformats]"` | + 150 more via Bio-Formats | + bioio-bioformats, scyjava (requires Java 8+) |
 | `pip install "tensorswitch[mcp]"` | + MCP server for AI agents | + mcp |
 | `pip install "tensorswitch[all]"` | Everything above | All of the above |
@@ -241,7 +241,9 @@ pixi run python -m tensorswitch_v2 -i input.tif -o output.zarr \
 |----------|-------------|
 | `--preset webknossos` | WebKnossos-optimized settings: zarr3, chunk 32x32x32, shard 1024x1024x1024, zstd |
 | `--preset paintera` | Paintera-ready settings: n5, xyz axis order, gzip, chunk 64x64x64. Use with `--output_format zarr2` for zyx Zarr2 output. Output is consumed by [paintera-conversion-helper](https://github.com/saalfeldlab/paintera-conversion-helper) to produce Paintera-native format. |
-| `--preset mia_lmvd` | MIA Large Microscopy Volume Dataset settings: zarr3, chunk 128x128x128, shard 512x512x512, zstd-5, C-order. Axis order preserved from source (RFC-3: t,c,z,y,x or z,y,x for 3D). Dtype and voxel size preserved from source unless explicitly overridden with `--dtype` or `--voxel_size`. |
+| `--preset miaai` (alias `mia_lmvd`) | MIAAI Large Microscopy Volume Dataset settings: zarr3, chunk 128x128x128, shard 512x512x512, zstd-5, C-order. Axis order preserved from source (RFC-3: t,c,z,y,x or z,y,x for 3D). The preset also drops singleton `t`, `c` and `s` axes when the axis names are known (a `t,c,z,y,x` source with `t=1,c=1` is written as `z,y,x`; larger ones are kept in the order `t,c,s,z,y,x`), never reorders the spatial axes, and drops the TensorSwitch-generated `name` from every multiscales block and adds an outer `coordinateTransformations`, in the root, `raw/` and each label, and keeps them through pyramids (a marker `tensorswitch.preset` in the root `zarr.json` lets later pyramid jobs apply them). `python -m tensorswitch_v2.utils.miaai_metadata <container>` applies them to an existing zarr3 container. Dtype and voxel size preserved from source unless explicitly overridden with `--dtype` or `--voxel_size`. |
+| `--expansion_factor N` | Expansion microscopy factor. With `--preset miaai` the outer `coordinateTransformations` of every multiscales block become `1/N` on the spatial axes (otherwise identity). |
+| `--extra_attributes JSON` | A JSON file, or an inline JSON object, of extra attributes added to the `zarr.json` of the group this conversion writes (`raw/`, or `labels/<name>/` with `--add-to-existing`). `ome`, `_software` and `tensorswitch` cannot be set. Zarr3 only. Inline JSON is written to a file for cluster jobs. |
 
 ```bash
 # Example: Convert for WebKnossos viewing
@@ -254,7 +256,7 @@ pixi run python -m tensorswitch_v2 -i input.tif -o output.n5 --preset paintera
 pixi run python -m tensorswitch_v2 -i input.zarr -o output.zarr --preset paintera --output_format zarr2
 
 # Example: Convert for MIA LMVD (Janelia internal)
-pixi run python -m tensorswitch_v2 -i input.zarr -o output.zarr --preset mia_lmvd
+pixi run python -m tensorswitch_v2 -i input.zarr -o output.zarr --preset miaai
 ```
 
 ### Chunk/Shard Configuration
@@ -359,6 +361,7 @@ pixi run python -m tensorswitch_v2 --upsample --auto_multiscale \
 |----------|-------------|
 | `--axes_order` | Override output spatial axis order (e.g., `xyz`, `zyx`, `xzy`). Default: preserve source order. Reorders only -- never reinterprets axis identity (does not turn `t`/`i`/`c` into `z`); use `--relabel_axis` for that. |
 | `--relabel_axis` | Explicitly relabel a source axis whose detected name is wrong (format `OLD=NEW`, e.g. `i=z`). Repeatable. Never fires automatically or infers intent -- only does exactly what you name. |
+| `--input_axes ZYXC` | Name every source axis, one letter per axis in the order the reader reports them (slowest to fastest), e.g. `zyxc` for a multi-page RGB TIFF read as `i,y,x,s`, or `yxz` for a TIFF whose z slices are stored as samples. Letters: `t`, `c`, `s`, `z`, `y`, `x`. Only renames: the order of the spatial axes is never changed. Combine with `--relabel_axis` only if they agree. |
 | `--expand-to-5d` | Force 5D TCZYX expansion (legacy behavior) |
 
 **Default behavior (RFC-3 compliant)**: Source dimensionality and axis order are preserved:
@@ -451,6 +454,8 @@ pixi run python -m tensorswitch_v2 \
 
 **Use case**: When source files lack embedded voxel size metadata (e.g., raw TIFF stacks, flat Zarr arrays). If a source file has no voxel metadata and `--voxel_size` is not provided, the converter will error rather than silently guessing.
 
+**What counts as "no voxel metadata"**: every reader reports only the sizes its file actually states, and the conversion is refused if any spatial axis the array has is missing (a 2D image needs x and y; a 3D volume needs x, y and z). So a TIFF with a calibrated XY but no Z spacing is refused rather than written with Z = 1.0 nm. A stated 1.0 nm on every axis is also treated as unstated, since it cannot be told apart from a placeholder. Readers also reject headers they know to be unreliable (NIfTI's uncalibrated 1.0 `pixdim`, MRC's micrometer-in-angstrom values). The check also runs at `--submit` time, so a cluster job is never queued just to fail on this. If you pass `--voxel_size` and the source has a trusted header that differs by more than 1%, a warning is printed and your value is used. With `--pattern` and `--submit`, every discovered file is checked before anything is queued, and all files without a usable voxel size are listed in one error. No "no voxel size found" warning is printed when `--voxel_size` is given.
+
 ```bash
 # Set voxel size in nanometers (default unit)
 pixi run python -m tensorswitch_v2 -i input.tif -o output.zarr \
@@ -519,6 +524,7 @@ reader = Readers.nd2("/path/to/data.nd2")       # Tier 2
 reader = Readers.czi("/path/to/data.czi")       # Tier 2
 reader = Readers.ims("/path/to/data.ims")       # Tier 2
 reader = Readers.nifti("/path/to/vol.nii.gz")   # Tier 2
+reader = Readers.mrc("/path/to/tomogram.mrc")   # Tier 2
 reader = Readers.png("/path/to/slices/")        # Tier 2 (dir, .zip or .png)
 reader = Readers.n5("/path/to/data.n5")         # Tier 1
 reader = Readers.zarr3("/path/to/data.zarr")    # Tier 1
@@ -649,6 +655,7 @@ print(f"Completed: {result.completed}/{result.total}")
 | ND2 (Nikon) | `.nd2` | 2 | ND2Reader |
 | IMS (Imaris) | `.ims` | 2 | IMSReader |
 | NIfTI | `.nii`, `.nii.gz` | 2 | NIfTIReader |
+| MRC / CCP4 | `.mrc`, `.mrcs`, `.rec`, `.ali`, `.st`, `.map`, `.rec.nad` | 2 | MRCReader |
 | PNG Z-stack | directory, `.zip`, `.png` | 2 | PngReader |
 | CZI (Zeiss) | `.czi` | 2 | CZIReader |
 | HDF5 | `.h5`, `.hdf5` | 2 | HDF5Reader |
@@ -679,6 +686,20 @@ pixi run python -m tensorswitch_v2 -i vol.nii.gz -o out.zarr \
 ```
 
 Reading goes through nibabel's lazy `dataobj` proxy, which preserves the on-disk dtype — unlike `get_fdata()`, which would upcast everything to float64.
+
+### MRC notes (`.mrc`, `.mrcs`, `.rec`, `.ali`, `.st`, `.map`, `.rec.nad`)
+
+MRC/CCP4 files (cryo-ET tomograms, many EM volumes) are read via `mrcfile`, memory-mapped and lazy. The data block is already `(z, y, x)`, 2D images and 3D volumes/stacks are supported, and the on-disk dtype is kept (including signed `int8`). 4D volume stacks and complex-valued data are rejected rather than guessed at.
+
+**The header voxel size is in angstroms and is converted to nm, but it is only trusted when it looks calibrated.** A size that is zero, exactly 1.0 Å on every axis (the uncalibrated default), or below 0.25 Å is treated as missing, so TensorSwitch asks for `--voxel_size` instead of writing a wrong scale. Light-microscopy MRCs such as BioSR store micrometers in the angstrom field (0.0926 for a 92.6 nm pixel), which is caught by the 0.25 Å limit. Values above it cannot be told from real angstroms, so pass `--voxel_size` whenever you know the true size.
+
+### TIFF axes: pages, channels and samples per pixel
+
+A plain multi-page TIFF does not say what its pages are, so the reader calls them `i`; the values stored inside each pixel (RGB, or channels or z slices written as samples) are the TIFF's samples per pixel, called `s`, as in BioIO's `S` dimension. `s` is its own non-spatial axis: it is never a channel, never downsampled in pyramids, is written with type `custom`, and always sits before the spatial axes (`t, c, s, z, y, x`). To give the axes their real meaning pass `--input_axes` (or `input_axes` to `convert` / `submit_job`), e.g. `zyxc` for pages that are z and samples that are channels, or `zyxs` to keep the samples as `s`. This only renames; spatial axes keep the source order, so a TIFF whose slices are stored as samples (`yxz`) is written as `y,x,z` unless you also pass `--axes_order`. `verify_output` takes the same `input_axes` and matches source and output axes by name. Catalog records give the axes in `technical.arrays[].axes`, and the planner passes them on; a TIFF array without `axes` is not planned.
+
+### N5 notes
+
+N5 `pixelResolution.dimensions` (and the `resolution` key) are read as **x, y, z**, the same order as the dataset's `dimensions` and the order the N5 writer emits. The multiscale pyramid planner for N5 pairs these sizes with the array axes by name, so an anisotropic N5 volume gets the right downsampling factors.
 
 ### PNG notes (directory, `.zip`, or single `.png`)
 
@@ -735,7 +756,7 @@ TensorSwitch v2 preserves source data layout by default (RFC-3 compliant):
 | Format | Description | Features |
 |--------|-------------|----------|
 | **Zarr v3** | Primary format | Sharding, OME-NGFF v0.5, zstd compression |
-| **Zarr v2** | Legacy format | OME-NGFF v0.4, blosc compression |
+| **Zarr v2** | Legacy format | OME-NGFF v0.4, blosc compression (zstd is written wrapped in blosc; bare zstd chunks written by tensorstore before 0.1.85 carry no uncompressed size, which zarr-python/numcodecs cannot read, so `tensorstore>=0.1.85` is required) |
 | **N5** | Java tools | BigDataViewer compatible |
 
 ### OME-NGFF Nested Structure
@@ -789,6 +810,22 @@ tensorswitch -i segmentation.tif -o existing.zarr --data-type labels --add-to-ex
 # Auto-detect from folder (Neuroglancer Precomputed)
 tensorswitch -i /path/to/folder/ -o output.zarr
 ```
+
+#### Adding a label to an existing container (also a sparse one)
+
+`--add-to-existing --is_label --label-key NAME` writes `labels/NAME/` next to the container's `raw/` and registers it; the raw and the other labels are not touched. The new label **follows the container's format**: a Zarr2 container (`.zgroup`) gets a Zarr2 label (`.zarray`, `.zattrs` with `_ARRAY_DIMENSIONS`, the label registered in `labels/.zattrs`), a Zarr3 container (`zarr.json`) a Zarr3 label, whatever `--output_format` says. `--output_format zarr2` into a Zarr3 container is refused. Data type and chunk shape follow the same rule in both formats (the source's dtype or `--dtype`; chunks from `--chunk_shape`, default 64 per spatial axis, or 128 with `--preset miaai`, and 1 on t and c; labels are not sharded); Zarr2 uses TensorSwitch's usual compressor (zstd wrapped in blosc).
+
+For a label that covers only part of the container, `--output-offset` and `--target-shape` place it at the right position of a full-size, zero-filled array. Both are given in the container's own axis order (for example `t c x y z` for a Betzig tile crop, `t c z y x` for a Zarr3 time series; a time-series label of one timepoint: `--output-offset 5 0 0 0 0`), and `--axes_order` / `--input_axes` orient the source into that order:
+
+```bash
+# A label of timepoint 5 (a Paintera N5 export stored x,y,z) into a zarr2 time-series crop stored t,c,x,y,z
+tensorswitch -i export.n5 -o crop.zarr --is_label --label-key proofread_t5 --add-to-existing \
+    --input_axes xyz --axes_order xyz --output-offset 5 0 0 0 0 --target-shape 96 1 3328 384 128 --voxel_size 108,108,200 --dtype uint16
+# Then its pyramid (the format of the container is used for the levels too)
+tensorswitch --auto_multiscale --is_label -i crop.zarr/labels/proofread_t5/s0 -o crop.zarr/labels/proofread_t5 --output_format zarr2
+```
+
+Only the target timepoint holds data; every other timepoint stays zero. The source-side flags the sparse path cannot apply (`--bbox`, `--bbox_axes`, `--squeeze_singleton_axes`) are refused, not ignored.
 
 See [OME_NGFF_STRUCTURE_PLAN.md](docs/OME_NGFF_STRUCTURE_PLAN.md) for full documentation.
 
@@ -1289,13 +1326,38 @@ TensorSwitch v2 includes an MCP (Model Context Protocol) server that allows Clau
 |------|-------------|
 | `inspect_dataset` | Returns shape, dtype, voxel sizes, axes, pyramid levels, OME metadata. Supports remote S3/HTTP URLs with auto-discovery: groups with OME-NGFF multiscales auto-resolve; S3 containers use bounded directory listing (BFS, max 4 levels) to find arrays automatically; non-S3 URLs require full array path. |
 | `discover_datasets` | Scans a directory for image/segmentation layers. Supports `pattern` (e.g., `"*.tif"`) and `recursive` for finding proprietary files (TIFF, ND2, CZI, IMS, HDF5) in subdirectories. |
-| `convert` | Converts between formats with full CLI parity. Supports `auto_multiscale` (one-step convert + pyramid), `omero` channel metadata (default ON, opt out with `omero=False`), `no_translation`, `force_order` (C/F memory layout), remote S3/HTTP with `--bbox`, `add_to_existing` (safe label addition to existing containers). 2 GB size guard — larger datasets redirect to `submit_job`. |
+| `convert` | Converts a dataset in-process (up to 2 GB; larger ones are redirected to `submit_job`). Runs the CLI's own parser and conversion code, so every CLI option applies: presets (`webknossos`, `paintera`, `miaai`, alias `mia_lmvd`), `auto_multiscale` (one-step convert + pyramid), N-D `bbox` with `bbox_axes`, `squeeze_singleton_axes`, `relabel_axis`, `add_to_existing` (new label or replaced image), sparse label ingest with `output_offset` / `target_shape`, `omero` channel metadata (default ON), `force_order`, `no_translation`. Sources without a voxel size for every spatial axis are refused unless `voxel_size` is given. With the `miaai` preset, `expansion_factor` and `extra_attributes` are also parameters. The response includes a `warnings` list when the conversion raised any (for example an HDF5 volume with 10 or fewer slices whose first axis was read as a channel: the fix is `relabel_axis="c=z"`). Harmless library notes such as the OME "Casting invalid PixelsID" message are left out of it. |
 | `upsample_to_isotropic` | Resamples anisotropic data to isotropic resolution using `scipy.ndimage.zoom`. Supports zarr2, zarr3, zarr3+sharding output via TensorStore backend. Safe write, auto-pyramid, size guard. |
 | `generate_pyramid` | Creates multiscale pyramid locally with chained downsampling, anisotropic handling, optional `no_translation`, and custom `per_level_factors` |
-| `list_formats` | Lists all supported input/output formats by tier |
+| `list_formats` | Lists input formats by reader tier (with the reader each extension selects and the BioIO plugins actually installed), output formats, presets, remote sources, and the voxel-size rule |
 | `estimate_resources` | Estimates memory, wall time, and cores needed for a conversion |
-| `submit_job` | Submits conversion to LSF cluster. With `auto_multiscale`: auto-detects whether to run pyramid-only or conversion + dependent pyramid coordinator. Supports `force_order`, `add_to_existing`. |
-| `check_job_status` | Checks LSF job status (supports multiple job IDs) |
+| `submit_job` | Submits the same conversion to the LSF cluster, with the same parameters as `convert` plus `project`, `memory`, `wall_time`, `cores`, `job_group`, `log_dir`. With `auto_multiscale` it chains a dependent pyramid coordinator job (or runs pyramid-only when input and output are the same existing dataset). Checks the source's voxel size before queueing and returns a `validation_error` instead of failing later on the node. Jobs run under the project's Unix group. |
+| `fetch_dataset` | Downloads a URL (http, https, ftp, s3), or one member of a remote zip with `"<zip url>::<path in zip>"` (range requests, the rest of the zip is never downloaded), into a folder you choose. Dropped connections are retried and a cut-off download continues from its saved `.part` file when the server supports ranges. 2 GB limit in the call; `background=True` downloads in a detached process (call again with the same arguments to see progress or the result), and the same download can be run by hand with `python -m tensorswitch_v2.utils.fetch <spec> <folder> --max-gb N`. Host allowlist (extend with `TENSORSWITCH_FETCH_HOSTS`), no writes outside the folder, CRC-checked. |
+| `plan_conversion_from_yaml` | Reads a dataset-catalog record ([mia-agentic-search](https://github.com/AI-HHMI/mia-agentic-search) YAML: local path, GitHub URL or record id) and returns the ordered `fetch_dataset` / `convert` / `submit_job` calls for its sample unit (one raw + its labels), with the record's voxel size, `dataset_path` for HDF5, and warnings for anything the record does not settle (no voxel size, unsupported format, no concrete file URL, tables instead of label arrays, 2D records). For a 3-D HDF5 array whose recorded first dimension is 10 or less the step carries `relabel_axis="c=z"`. Each plan ends with a `verify_output` step per container it creates. NIfTI, MRC and HDF5 arrays are not planned when the record has no voxel size (their headers cannot be trusted; the plan gets `needs: ["voxel_size"]`); an array described as 2D in a 3D record gets a note; the unnamed-HDF5-dataset warning appears only when several arrays share one file; a sample over 200 MB gets a note to fetch in the background. A TIFF array is planned only if the record gives its `axes`, which become `input_axes` in the convert and verify steps. With `whole_dataset=True`, a label is paired with its raw only when the record says `alignment: same-grid`; otherwise it is listed in `unpaired`. With `whole_dataset=True` it lists the record's zip download and plans every file instead: one container per sample, raw and labels paired by folder and file name (role words such as `images`/`masks`/`input`/`labels` and a leading `X`/`Y` letter are ignored), files without a partner reported in `unpaired` and converted on their own, datasets over 50 GB skipped and listed. Nothing is downloaded or converted by the planner; run the steps afterwards. 3D and 3D+t records only. |
+| `check_job_status` | Reports LSF jobs: status, exit code, run time, CPU, peak memory, the tail of the stdout and stderr logs, and flags for jobs that look wrong. "DONE" only means the command exited 0, so a job that never started the program (used under 0.5 s of CPU) is flagged as suspicious. Follows the jobs that belong to it (the pyramid coordinator and the level jobs it starts) and reports the chain as one; `chain.state` is `running` until every job has ended, then `failed`, `suspicious` or `done`. |
+| `verify_output` | Checks a converted OME-Zarr container, above all against the data it came from: structure (image and labels present, no `.tmp` leftovers), pyramid levels (consistent shapes; every level on disk listed in its group's metadata and in the root `zarr.json`; no stray zarr2 `.zgroup`/`.zattrs` files in a zarr3 container), voxel size in nm vs the expected one, data not constant, **identity with the source** (the whole array when it is 1 GB or less, otherwise slices spread through it; catches transposed, shifted or dropped data; understands `bbox` and squeezed axes; labels are compared with their own source files, HDF5 labels as `name=file.h5::dataset`), and the Unix group. Axes of source and output are matched by name, so a source whose axes were renamed (`input_axes`) or moved first (non-spatial axes) compares correctly; pass `input_axes` and `label_input_axes` (`name=axes;...`) as used for the conversion. Each check is `pass`, `fail` or `unverified` (could not run, with the reason); the overall result is `unverified` rather than `pass` when a check could not run. Writes a small `verification.json` into the container; never deletes or changes data. |
+
+### Converting a catalog record, end to end
+
+For datasets described by a [mia-agentic-search](https://github.com/AI-HHMI/mia-agentic-search) record, the tools chain like this. Ask the agent in plain language ("convert record `zenodo-7142003-snemi3d-neurites-sstem` into `<folder>`") or call them yourself:
+
+1. **Plan.** `plan_conversion_from_yaml(record, output_dir, project)` reads the record (a path, a GitHub URL or a record id) and returns `status` (`ready`, `partial`, `blocked`, or `skipped` for a dataset over 50 GB), the ordered `steps`, and `warnings`. Nothing is downloaded or converted. By default it plans the record's sample unit (one raw plus its labels); with `whole_dataset=True` it lists the record's zip and plans every file, one container per sample, listing in `unpaired` any file it could not pair with a partner.
+2. **Read what stopped it.** `blocked` or `partial` plans say why in `warnings` and `needs`. The usual reason is `needs: ["voxel_size"]`: for NIfTI, MRC and HDF5 files the header cannot be trusted, so the record must state `imaging.voxel_size_nm`, or you pass `voxel_size` yourself in the `convert` step. TensorSwitch never guesses a voxel size.
+3. **Fetch.** Run each `fetch_dataset` step. Files over a few hundred MB or from slow servers: pass `background=True` and call again with the same arguments until `status` is `success`. A cut-off download resumes from where it stopped.
+4. **Convert.** Run each `convert` step (in-process up to 2 GB). Larger samples come as `submit_job` steps with your LSF `project`; follow them with `check_job_status`, which also catches jobs that finished without doing anything.
+5. **Verify.** Run the `verify_output` step. `pass` means the output matches the source (whole-array identity for arrays up to 1 GB, spread-out slices above that); `fail` lists what is wrong; `unverified` means a check could not run and says why. Only after `pass`, delete `<output_dir>/source/`.
+
+**MIAAI output.** Add `preset="miaai"` to the `convert` / `submit_job` steps for the MIAAI layout (zarr3, 128³ chunks, 512³ shards, zstd-5, no generated `name`, outer `coordinateTransformations`). `expansion_factor` (expansion microscopy) and `extra_attributes` (a JSON file or object merged into the `raw/` or label `zarr.json`, for fields such as `source_path`, `publication`, `label_class`) go with it. The preset's conventions survive cluster pyramids.
+
+### File group ownership
+
+TensorSwitch sets only `umask 0002` (group-writable); the group of the files it writes is chosen as follows.
+- **Cluster jobs (`--submit`, `submit_job`)**: if a Unix group named like the LSF project (`-P`) exists and you belong to it, the job runs under that group (`sg <group>`), so everything it writes gets that group, whatever the output folder's group is. If there is no such group, a warning is printed and the job uses its default group (the folder's, if it is setgid). The LSF log files are created by `bsub` itself and keep your default group.
+- **Local runs**: the finished output takes the group of the folder it was written into, if you belong to that group.
+
+### How the MCP relates to the command line
+
+`convert` and `submit_job` do not re-implement the CLI. Their parameters are turned into a command line (`mcp_args.py`), parsed by the real CLI parser, and run by the same code (`run_conversion`, `submit_job`, `_apply_preset`). A new CLI option therefore reaches the MCP by adding one parameter, and a test fails if a CLI option is neither an MCP parameter nor listed in `mcp_args.NOT_EXPOSED` with a reason. Deliberately not exposed: `sync` (it would block a tool call; use `check_job_status`), folder batch mode (`--pattern`, `--recursive`, `--dry_run`), the pyramid-level and upsample modes (use `generate_pyramid` and `upsample_to_isotropic`), and the internal worker flags.
 
 ### Setup (Claude Code)
 
@@ -1360,7 +1422,9 @@ pixi run pip install "mcp[cli]"
 ```
 tensorswitch_v2/
 ├── __init__.py              # Package root
-├── __main__.py              # CLI entry point
+├── __main__.py              # CLI entry point, run_conversion (shared with the MCP)
+├── mcp_server.py            # MCP server (tools listed above)
+├── mcp_args.py              # MCP parameter -> CLI option table (parity-tested)
 ├── api/
 │   ├── __init__.py          # Public API exports
 │   ├── dataset.py           # TensorSwitchDataset
@@ -1383,8 +1447,17 @@ tensorswitch_v2/
 │   ├── ims.py               # IMSReader (Tier 2)
 │   ├── hdf5.py              # HDF5Reader (Tier 2)
 │   ├── czi.py               # CZIReader (Tier 2)
+│   ├── nifti.py, mrc.py, png.py  # NIfTIReader, MRCReader, PngReader (Tier 2)
 │   ├── bioio_adapter.py     # BIOIOReader (Tier 3)
 │   └── bioformats.py        # BioFormatsReader (Tier 4, Java)
+├── utils/
+│   ├── fetch.py             # fetch_dataset: resumable download, zip members, background mode
+│   ├── record_planner.py    # plan_conversion_from_yaml (sample unit and whole dataset)
+│   ├── verify.py            # verify_output
+│   ├── job_status.py        # check_job_status (LSF chains, silent no-op detection)
+│   ├── output_group.py      # output group follows the LSF project
+│   ├── miaai_metadata.py    # miaai preset metadata conventions, --extra_attributes
+│   └── ...                  # format loaders, metadata, OME structure, pyramid helpers
 └── writers/
     ├── __init__.py          # Writer exports
     ├── base.py              # BaseWriter abstract class
@@ -1403,7 +1476,7 @@ If you use TensorSwitch in your research, please cite it:
 @software{chen2026tensorswitch,
   author = {Chen, Diyi},
   title = {TensorSwitch},
-  version = {2.1.0},
+  version = {2.1.1},
   year = {2026},
   url = {https://github.com/JaneliaSciComp/tensorswitch}
 }

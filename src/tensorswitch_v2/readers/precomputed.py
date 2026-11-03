@@ -9,7 +9,7 @@ import os
 import json
 from typing import Dict, Optional
 import tensorstore as ts
-from .base import BaseReader, build_kvstore, is_remote_path, _default_voxel_sizes
+from .base import BaseReader, build_kvstore, is_remote_path
 from ..utils.format_loaders import extract_precomputed_metadata
 from ..utils import get_tensorstore_context
 
@@ -127,7 +127,7 @@ class PrecomputedReader(BaseReader):
 
         return metadata
 
-    def get_voxel_sizes(self) -> Dict[str, float]:
+    def _read_voxel_sizes(self) -> Optional[Dict[str, float]]:
         """
         Return voxel dimensions from Precomputed metadata.
 
@@ -146,13 +146,9 @@ class PrecomputedReader(BaseReader):
         Notes:
             - Precomputed stores resolution in nanometers (preserved as-is)
             - Resolution is in XYZ order in the info file
-            - Returns 1.0 for each dimension if metadata unavailable
+            - Returns None if metadata unavailable
         """
         _, voxel_sizes = extract_precomputed_metadata(self.path, self.scale_index)
-
-        if voxel_sizes is None:
-            return _default_voxel_sizes("Precomputed")
-
         return voxel_sizes
 
     def supports_remote(self) -> bool:

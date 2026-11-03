@@ -13,7 +13,8 @@ import numpy as np
 import tensorstore as ts
 
 # Set team permissions: rwxrwxr-x (files get rw-rw-r--)
-os.umask(0o0002)
+from ..utils.output_group import default_umask
+os.umask(default_umask())
 
 from ..readers.base import BaseReader
 from ..writers.base import BaseWriter
@@ -55,6 +56,60 @@ class DistributedConverter:
         self._output_store = None
         self._total_chunks = None
 
+    @staticmethod
+    def _relabel_from_input_axes(input_axes: str, axes_order: List[str],
+                                 axis_relabel: Optional[Dict[str, str]]) -> Dict[str, str]:
+        """Turn --input_axes (one letter per source axis, in the reader's order) into an {old: new} map."""
+        wanted = list(input_axes.strip().lower())
+        if len(wanted) != len(axes_order):
+            raise ValueError(
+                f"--input_axes {input_axes!r} names {len(wanted)} axes but the source has {len(axes_order)} "
+                f"({', '.join(axes_order)}). Give one letter per source axis, slowest to fastest.")
+        bad = sorted({a for a in wanted if a not in "tcszyx"})
+        if bad:
+            raise ValueError(f"--input_axes may only use t, c, s, z, y, x; got {bad} in {input_axes!r}")
+        mapping = {old.lower(): new for old, new in zip(axes_order, wanted) if old.lower() != new}
+        for old, new in (axis_relabel or {}).items():
+            if old.lower() in mapping and mapping[old.lower()] != new.lower():
+                raise ValueError(f"--input_axes and --relabel_axis disagree about axis '{old}' "
+                                 f"({mapping[old.lower()]!r} vs {new!r}); use only one of them")
+            mapping[old.lower()] = new.lower()
+        return mapping
+
+    def _warn_if_override_disagrees(self, override: Dict[str, float], unit: str, tolerance: float = 0.01):
+        """Warn when an explicit voxel size differs from a header the reader trusts.
+
+        The override still wins; this only flags a likely typo or unit mix-up.
+        """
+        import warnings
+
+        try:
+            # The caller gave a voxel size, so "the source has none" is not worth a warning here.
+            with warnings.catch_warnings():
+                warnings.filterwarnings("ignore", message="No voxel size found")
+                if not self.reader.has_voxel_metadata():
+                    return
+                header_nm = self.reader.get_voxel_sizes()
+        except Exception:
+            return
+
+        to_nm = {'nanometer': 1.0, 'micrometer': 1e3, 'millimeter': 1e6}
+        factor = to_nm.get(unit)
+        if factor is None:
+            return
+        for axis in ('x', 'y', 'z'):
+            given = override.get(axis)
+            header = header_nm.get(axis)
+            if not given or not header or given <= 0 or header <= 0:
+                continue
+            if abs(given * factor - header) / header > tolerance:
+                warnings.warn(
+                    f"--voxel_size {axis}={given} {unit} differs from the source header "
+                    f"({header:g} nm). Using the value you passed.",
+                    stacklevel=3,
+                )
+                return
+
     def convert(
         self,
         start_idx: int = 0,
@@ -74,8 +129,10 @@ class DistributedConverter:
         bbox: Optional[Tuple[Tuple[int, ...], Tuple[int, ...]]] = None,
         bbox_axes: Optional[Tuple[int, ...]] = None,
         squeeze_singleton_axes: bool = False,
+        squeeze_if_known: bool = False,
         axes_order_override: Optional[List[str]] = None,
         axis_relabel: Optional[Dict[str, str]] = None,
+        input_axes: Optional[str] = None,
         no_ome_meta_export: bool = False,
         no_ome_xml_attr: bool = False,
         output_dtype: Optional[str] = None,
@@ -302,6 +359,11 @@ class DistributedConverter:
             except Exception:
                 pass
 
+        # 2a-input. --input_axes names every source axis by position (e.g. "zyxc" for a TIFF the
+        # reader reports as i,y,x,s). It only renames, through the same path as --relabel_axis.
+        if input_axes and axes_order:
+            axis_relabel = self._relabel_from_input_axes(input_axes, axes_order, axis_relabel)
+
         # 2a-relabel. Apply explicit, user-named axis relabeling (--relabel_axis).
         # This is the ONLY place axis identity is ever changed from what the
         # reader detected -- always explicit, never inferred. Runs before any
@@ -359,7 +421,11 @@ class DistributedConverter:
         # Only squeezes axes identified as non-spatial (NON_SPATIAL_AXES) with
         # size 1 -- never a genuinely-spatial axis that happens to be 1 voxel
         # thick, and never anything when axes_order couldn't be determined.
-        if squeeze_singleton_axes:
+        # squeeze_if_known (the miaai preset): same squeeze, but a source whose axes could not be
+        # determined is left as it is, with a note, instead of failing the conversion.
+        if squeeze_if_known and not squeeze_singleton_axes and not axes_order:
+            print("  Note: axis names are unknown, so singleton axes were not dropped (preset miaai)")
+        if squeeze_singleton_axes or (squeeze_if_known and axes_order):
             if not axes_order:
                 raise ValueError(
                     "--squeeze_singleton_axes requires known axis identity "
@@ -501,13 +567,17 @@ class DistributedConverter:
             source_unit = target_unit  # override already in target unit
             if verbose:
                 print(f"  Using voxel size override ({source_unit}): {voxel_sizes}")
+            self._warn_if_override_disagrees(voxel_size_override, target_unit)
         else:
             try:
                 voxel_sizes = self.reader.get_voxel_sizes()
+                has_meta = self.reader.has_voxel_metadata()
             except Exception:
-                voxel_sizes = None
-            if voxel_sizes and all(v == 1.0 for v in voxel_sizes.values()):
-                # Default placeholder [1,1,1] — no real voxel metadata in source.
+                # Reader could not report voxel sizes at all: unchanged behaviour,
+                # do not block the conversion on it.
+                voxel_sizes, has_meta = None, True
+            if not has_meta:
+                # Some spatial axis has no real value in the source.
                 # Refuse to guess; require user to specify explicitly.
                 raise ValueError(
                     "No voxel size metadata found in source file. "

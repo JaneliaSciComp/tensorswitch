@@ -26,6 +26,7 @@ Usage:
 import os
 import sys
 import subprocess
+import json
 import shlex
 import math
 import argparse
@@ -41,7 +42,8 @@ if hasattr(sys.stdout, 'reconfigure'):
 if hasattr(sys.stderr, 'reconfigure'):
     sys.stderr.reconfigure(line_buffering=True)
 
-os.umask(0o0002)  # Team permissions: rwxrwxr-x
+from .utils.output_group import default_umask
+os.umask(default_umask())  # Team permissions: rwxrwxr-x
 
 __version__ = "2.0.0-beta"
 
@@ -346,14 +348,26 @@ Supported output formats:
     # Presets for common use cases
     parser.add_argument(
         "--preset", default=None,
-        choices=["webknossos", "paintera", "mia_lmvd", ""],
+        choices=["webknossos", "paintera", "miaai", "mia_lmvd", ""],
         help="Use preset configuration. "
              "'webknossos': zarr3, chunk 32x32x32, shard 1024x1024x1024, zstd. "
              "'paintera': n5, xyz axis order, gzip, chunk 64x64x64 "
              "(or zarr2 with zyx if --output_format zarr2). "
-             "'mia_lmvd': zarr3, chunk 128x128x128, shard 512x512x512, zstd-5, "
-             "C-order; axis order and dtype preserved from source; "
+             "'miaai' (alias 'mia_lmvd'): zarr3, chunk 128x128x128, shard 512x512x512, "
+             "zstd-5, C-order; axis order and dtype preserved from source; "
              "voxel size preserved from source.",
+    )
+
+    parser.add_argument(
+        "--expansion_factor", type=float, default=None,
+        help="Expansion microscopy factor (e.g. 4). With --preset miaai the outer "
+             "coordinateTransformations of the OME metadata become 1/factor on the spatial axes.",
+    )
+    parser.add_argument(
+        "--extra_attributes", default=None,
+        help="JSON file, or inline JSON object, of extra attributes to add to the zarr.json of the "
+             "group this conversion writes (raw/ or labels/<name>/). 'ome', '_software' and "
+             "'tensorswitch' cannot be set this way.",
     )
 
     # Dataset paths
@@ -407,7 +421,7 @@ Supported output formats:
         choices=["nanometer", "micrometer", "millimeter"],
         help="Override the spatial unit in OME metadata. "
              "When set, voxel sizes are written as-is in this unit (no nm conversion). "
-             "Without --voxel_size, defaults to scale [1,1,1] in the specified unit.",
+             "Use with --voxel_size; a source with no voxel metadata is refused without it.",
     )
 
     # Label/segmentation mode
@@ -443,13 +457,13 @@ Supported output formats:
     )
     parser.add_argument(
         "--output-offset", nargs="+", type=int, dest="output_offset", default=None,
-        help="TCZYX offset for sparse label ingestion (use with --add-to-existing). "
-             "Fewer dims are zero-padded on the left. "
-             "E.g. '--output-offset 10' sets T=10, C=Z=Y=X=0.",
+        help="Offset for sparse label ingestion (use with --add-to-existing), in the target container's own axis "
+             "order (usually T C Z Y X; a few crops are stored x,y,z). Fewer dims are zero-padded on the left. "
+             "E.g. '--output-offset 10' sets T=10, C=Z=Y=X=0. Orient the source into that order with --axes_order.",
     )
     parser.add_argument(
         "--target-shape", nargs="+", type=int, dest="target_shape", default=None,
-        help="Full output shape TCZYX for --output-offset. "
+        help="Full output shape for --output-offset, in the target container's own axis order. "
              "Auto-inferred from sibling labels in the target container if omitted.",
     )
     parser.add_argument(
@@ -671,6 +685,15 @@ Supported output formats:
              "Example: ND2 source is ZYX, --axes_order xyz transposes to XYZ. "
              "Does NOT relabel axis identity (e.g. does not turn 't' or 'i' into "
              "'z') -- use --relabel_axis for that.",
+    )
+
+    parser.add_argument(
+        "--input_axes", type=str, default=None,
+        help="Name every axis of the source, one letter per axis in the order the reader reports them "
+             "(slowest to fastest), e.g. 'zyxc' for a TIFF read as i,y,x,s or 'yxz' for a TIFF whose z "
+             "slices are stored as samples. Letters: t, c, s (samples per pixel, its own non-spatial axis), "
+             "z, y, x. Only renames: the order of the spatial axes is not changed. Use for sources that "
+             "do not state their axes (a multi-page TIFF reads its pages as 'i').",
     )
 
     # Explicit axis identity correction (does not infer/guess)
@@ -933,6 +956,20 @@ def _finalize_tmp_path(tmp_path: str, final_path: str, verbose: bool = True) -> 
     os.rename(tmp_path, final_path)
     if verbose:
         print(f"Renamed {tmp_path} → {final_path}")
+    from .utils.output_group import apply_parent_group
+    apply_parent_group(final_path)
+
+
+def _apply_group_to_added_label(final_output, subgroup_parent, label_name):
+    """Give a label just added to an existing container the output folder's group.
+
+    Only the new label is touched; the rest of the container keeps its group.
+    """
+    from .utils.output_group import apply_parent_group
+    added = os.path.join(final_output, subgroup_parent, label_name)
+    apply_parent_group(added if os.path.exists(added) else os.path.join(final_output, subgroup_parent))
+    from .utils.output_group import apply_preset_to_container
+    apply_preset_to_container(final_output)          # the labels/ folder and zarr.json files of the container (--preset miaai)
 
 
 def _finalize_add_to_existing(
@@ -1369,6 +1406,46 @@ def _warn_if_axis_voxel_mismatch(args, axes_order) -> None:
     )
 
 
+def _warn_if_inferred_channel_axis(args, reader, axes) -> None:
+    """Warn when a source without axis names (HDF5) has its first axis read as a channel.
+
+    HDF5 stores no axis names, so they are guessed from the shape and a first dimension of
+    10 or less becomes ``c``. A short z-stack then gets axes ``c,y,x`` and no z axis (the
+    voxel size for z is silently dropped). A 3-D file labelled ``c,y,x`` is almost always
+    that, so say so and name the fix. Skipped once the user relabels the axis.
+    """
+    from .readers.hdf5 import HDF5Reader
+
+    if not isinstance(reader, HDF5Reader) or not axes or list(axes) != ['c', 'y', 'x']:
+        return
+    if any(spec.lower().replace(' ', '').startswith('c=') for spec in (getattr(args, 'relabel_axis', None) or [])):
+        return
+    import warnings
+    warnings.warn(
+        "HDF5 files have no axis names. This 3-D dataset's first axis has 10 or fewer entries, so it was "
+        "labelled as a channel (axes c,y,x) and the output has no z axis. If it is a z-stack, pass "
+        "relabel_axis='c=z' (command line: --relabel_axis c=z).",
+        UserWarning, stacklevel=2,
+    )
+
+
+def _renamed_axes(args, axes_order):
+    """The source axes after --input_axes and --relabel_axis, as the converter will see them."""
+    from .core.converter import DistributedConverter
+
+    explicit = {}
+    for spec in (getattr(args, 'relabel_axis', None) or []):
+        if '=' in spec:
+            old, new = spec.lower().split('=', 1)
+            explicit[old.strip()] = new.strip()
+    if getattr(args, 'input_axes', None):
+        explicit = DistributedConverter._relabel_from_input_axes(args.input_axes, list(axes_order), explicit)
+    renamed = [explicit.get(a, a) for a in axes_order]
+    if len(renamed) != len(set(renamed)):
+        raise ValueError(f"the axis names given would create a duplicate axis name: {list(axes_order)} -> {renamed}")
+    return renamed
+
+
 def _get_input_metadata(args):
     """Read input shape, dtype, and axes for resource estimation.
 
@@ -1386,21 +1463,13 @@ def _get_input_metadata(args):
             # Normalize 'channel' to 'c'
             axes_order = ['c' if l.lower() == 'channel' else l.lower() for l in labels]
 
+    _warn_if_inferred_channel_axis(args, reader, axes_order)
+
     # Apply explicit --relabel_axis here too, so resource estimation (chunk/shard
     # sizing) and the mismatch warning below both see the corrected axis identity
     # instead of re-warning about something the user already fixed explicitly.
-    if axes_order and getattr(args, 'relabel_axis', None):
-        relabel = {}
-        for spec in args.relabel_axis:
-            if '=' in spec:
-                old, new = spec.lower().split('=', 1)
-                relabel[old.strip()] = new.strip()
-        relabeled = [relabel.get(a, a) for a in axes_order]
-        if len(relabeled) != len(set(relabeled)):
-            raise ValueError(
-                f"--relabel_axis would create a duplicate axis name: "
-                f"{axes_order} -> {relabeled}")
-        axes_order = relabeled
+    if axes_order:
+        axes_order = _renamed_axes(args, axes_order)
 
     # Catch CYX/IYX/SYX mis-labeling early, before resource estimation silently
     # drops the Z value from --voxel_size.
@@ -1435,6 +1504,7 @@ from .utils.resource_utils import calculate_memory as _calculate_memory
 from .utils.resource_utils import calculate_wall_time as _calculate_wall_time
 from .utils.resource_utils import calculate_job_resources as _calculate_job_resources
 from .utils.resource_utils import is_native_source as _is_native_source
+from .utils.output_group import wrap_for_project
 
 
 def run_local_pyramid(s0_path, root_path, downsample_method="auto",
@@ -1523,6 +1593,70 @@ def run_local_pyramid(s0_path, root_path, downsample_method="auto",
     return plan
 
 
+def _require_voxel_metadata_before_submit(args):
+    """Fail fast, before queueing, when the cluster job would refuse the source.
+
+    The converter refuses a source whose voxel size is not fully stated (see
+    DistributedConverter.convert). Without --voxel_size that would only surface
+    after the job had waited in the queue, so check it here, whether or not
+    resources are auto-calculated.
+    """
+    if getattr(args, 'voxel_size', None):
+        return
+    try:
+        reader = create_reader(args)
+        if reader.has_voxel_metadata():
+            return
+        missing = getattr(reader.get_voxel_sizes(), 'missing', None)
+    except Exception:
+        return  # cannot tell from the submit host; the job will report it
+
+    axes = f" (no value for axis {', '.join(missing)})" if missing else ""
+    raise ValueError(
+        f"No voxel size metadata found in source file{axes}. "
+        "Please provide --voxel_size X,Y,Z (and optionally --voxel_unit) "
+        "so the output metadata is correct. "
+        "Example: --voxel_size 0.108,0.108,0.268 --voxel_unit micrometer"
+    )
+
+
+def _require_voxel_metadata_for_batch(args, files, limit=10):
+    """Check every discovered file before a batch is queued, so one bad file does not fail on the node."""
+    if getattr(args, 'voxel_size', None):
+        return
+    original, bad = args.input, []
+    try:
+        for item in files:
+            args.input = item.input_path
+            try:
+                _require_voxel_metadata_before_submit(args)
+            except ValueError as error:
+                bad.append(f"  {item.input_path}: {str(error).split('. ')[0]}")
+    finally:
+        args.input = original
+    if bad:
+        shown = "\n".join(bad[:limit]) + (f"\n  ... and {len(bad) - limit} more" if len(bad) > limit else "")
+        raise ValueError(
+            f"{len(bad)} of {len(files)} files have no usable voxel size, so the batch was not submitted:\n{shown}\n"
+            "Provide --voxel_size X,Y,Z (and optionally --voxel_unit) or fix those files."
+        )
+
+
+def _warn_inferred_axes_before_submit(args):
+    """Run the HDF5 axis-guess warning at submit time, whatever resources were given."""
+    try:
+        from .readers.hdf5 import HDF5Reader
+
+        reader = create_reader(args)
+        if not isinstance(reader, HDF5Reader):
+            return
+        labels = reader.get_tensorstore().domain.labels
+        if labels and all(labels):
+            _warn_if_inferred_channel_axis(args, reader, [l.lower() for l in labels])
+    except Exception:
+        pass  # best effort; never block a submission
+
+
 def submit_job(args, return_job_id=False):
     """Submit a single LSF bsub job that re-invokes tensorswitch_v2.
 
@@ -1544,30 +1678,19 @@ def submit_job(args, return_job_id=False):
             "The -P flag specifies your LSF project for job accounting."
         )
 
+    _require_voxel_metadata_before_submit(args)
+    _warn_inferred_axes_before_submit(args)
+
     # Auto-calculate resources from source data when not explicitly provided
     memory_gb = args.memory
     wall_time = args.wall_time
     needs_auto = memory_gb is None or wall_time is None or args.cores is None
 
     dataset_size_gb = None
+    is_native = True  # explicit resources: no source-type headroom added to the user's memory
     if needs_auto:
         print("Reading input metadata for resource estimation...")
         volume_shape, dtype_str, axes_order = _get_input_metadata(args)
-
-        # Fast-fail: if no --voxel_size override and source has placeholder [1,1,1] sizes,
-        # reject early before wasting a cluster job.
-        if not getattr(args, 'voxel_size', None):
-            try:
-                _voxels = create_reader(args).get_voxel_sizes()
-            except Exception:
-                _voxels = None
-            if _voxels and all(v == 1.0 for v in _voxels.values()):
-                raise ValueError(
-                    "No voxel size metadata found in source file. "
-                    "Please provide --voxel_size X,Y,Z (and optionally --voxel_unit) "
-                    "so the output metadata is correct. "
-                    "Example: --voxel_size 0.108,0.108,0.268 --voxel_unit micrometer"
-                )
 
         # When --bbox is used, estimate resources from the bbox subvolume, not the full source
         if getattr(args, 'bbox', None):
@@ -1711,6 +1834,14 @@ def submit_job(args, return_job_id=False):
     if getattr(args, 'relabel_axis', None):
         for spec in args.relabel_axis:
             reinvoke += ["--relabel_axis", spec]
+    if getattr(args, 'input_axes', None):
+        reinvoke += ["--input_axes", args.input_axes]
+    if getattr(args, 'preset', None) in ('miaai', 'mia_lmvd'):
+        reinvoke += ["--preset", args.preset]
+    if getattr(args, 'expansion_factor', None):
+        reinvoke += ["--expansion_factor", str(args.expansion_factor)]
+    if getattr(args, 'extra_attributes', None):
+        reinvoke += ["--extra_attributes", _extra_attributes_file_for_job(args)]
     if args.log_dir:
         reinvoke += ["--log_dir", args.log_dir]
     if getattr(args, 'no_ome_meta_export', False):
@@ -1745,7 +1876,7 @@ def submit_job(args, return_job_id=False):
     ]
     if args.job_group:
         command += ["-g", args.job_group]
-    command += ["/bin/bash", "-c", reinvoke_str]
+    command += wrap_for_project(args.project, ["/bin/bash", "-c", reinvoke_str])
 
     # Print summary and submit
     print("=" * 72)
@@ -1787,7 +1918,10 @@ def _submit_dependent_pyramid(args, conversion_job_id: str):
 
     After the conversion job finishes, this coordinator job runs
     --auto_multiscale on the output zarr, which submits chained
-    pyramid level jobs via create_pyramid_parallel().
+    pyramid level jobs via create_pyramid_parallel(). The reinvoke carries
+    --preset forward (when it's 'miaai'/'mia_lmvd') so every per-level
+    downsample job gets finalized the same way as the conversion job's
+    own output, not just s0.
 
     Args:
         args: Parsed command-line arguments
@@ -1812,6 +1946,8 @@ def _submit_dependent_pyramid(args, conversion_job_id: str):
         "--submit",
         "-P", args.project,
     ]
+    if getattr(args, 'preset', None) in ('miaai', 'mia_lmvd'):
+        reinvoke += ["--preset", args.preset]
     if getattr(args, 'downsample_method', 'auto') != 'auto':
         reinvoke += ["--downsample_method", args.downsample_method]
     if getattr(args, 'per_level_factors', None):
@@ -1851,7 +1987,7 @@ def _submit_dependent_pyramid(args, conversion_job_id: str):
     ]
     if args.job_group:
         command += ["-g", args.job_group]
-    command += ["/bin/bash", "-c", reinvoke_str]
+    command += wrap_for_project(args.project, ["/bin/bash", "-c", reinvoke_str])
 
     result = subprocess.run(command, capture_output=True, text=True)
     if result.returncode == 0:
@@ -2005,7 +2141,7 @@ def _submit_upsample_job(args, verbose=True):
     ]
     if args.job_group:
         command += ["-g", args.job_group]
-    command += ["/bin/bash", "-c", reinvoke_str]
+    command += wrap_for_project(args.project, ["/bin/bash", "-c", reinvoke_str])
 
     print("=" * 72)
     print("LSF Upsample Job Submission")
@@ -2102,6 +2238,11 @@ def submit_downsample_job(args, cumulative_factors):
         reinvoke.append("--no_ome_xml_attr")
     if getattr(args, 'cumulative_factor_for_metadata', None):
         reinvoke += ["--cumulative_factor_for_metadata", args.cumulative_factor_for_metadata]
+    if getattr(args, 'preset', None) in ('miaai', 'mia_lmvd'):
+        # Without this, the compute node never sees --preset, so the finalization
+        # step after downsample_level() (group miaai, no group write, 754/755)
+        # never runs for this level -- it silently stays at whatever bare umask gave it.
+        reinvoke += ["--preset", args.preset]
 
     # Convert to properly quoted shell command string
     # This handles paths with spaces correctly when bsub creates its wrapper
@@ -2121,7 +2262,7 @@ def submit_downsample_job(args, cumulative_factors):
     ]
     if args.job_group:
         command += ["-g", args.job_group]
-    command += ["/bin/bash", "-c", reinvoke_str]
+    command += wrap_for_project(args.project, ["/bin/bash", "-c", reinvoke_str])
 
     # Print summary and submit
     print("=" * 72)
@@ -2264,11 +2405,11 @@ def show_conversion_spec(reader, writer, args, chunk_shape, shard_shape):
     print("=" * 72 + "\n")
 
 
-def main(argv=None):
-    """Run single-process conversion, downsampling, or submit LSF job."""
-    args = parse_args(argv)
+def _apply_preset(args):
+    """Fill in the settings a --preset implies (only where the user gave none).
 
-    # Apply preset configurations
+    Shared by main() and the MCP tools so a preset means the same thing everywhere.
+    """
     if args.preset == "webknossos":
         # WebKnossos preset: zarr3, chunk 32x32x32, shard 1024x1024x1024
         if args.output_format == "zarr3":  # Only override if using default
@@ -2293,8 +2434,8 @@ def main(argv=None):
         if not args.quiet:
             print(f"Using Paintera preset: output={args.output_format}, "
                   f"axes={args.axes_order}, chunk=64x64x64, compression=gzip")
-    elif args.preset == "mia_lmvd":
-        # MIA LMVD preset: zarr3, 128^3 inner chunks / 512^3 shards, zstd-5, C-order.
+    elif args.preset in ("miaai", "mia_lmvd"):
+        # MIAAI preset ('mia_lmvd' is the older name for it): zarr3, 128^3 inner chunks / 512^3 shards, zstd-5, C-order.
         # Axis order: preserve source (RFC-3 canonical: t,c,z,y,x or z,y,x if 3D).
         # Dtype and voxel size: preserve from source (no overrides).
         if not args.chunk_shape:
@@ -2304,8 +2445,488 @@ def main(argv=None):
         if not args.force_c_order and not args.force_f_order:
             args.force_c_order = True
         if not args.quiet:
-            print("Using mia_lmvd preset: zarr3, chunk=128³, shard=512³, "
+            print(f"Using {args.preset} preset: zarr3, chunk=128³, shard=512³, "
                   "zstd-5, C-order. Axis order, dtype, and voxel size preserved from source.")
+
+
+def run_conversion(args):
+    """Convert one source to one local output (see _run_conversion). Under --preset miaai the files are written with group miaai, group read+execute and no group write (directories 755, files 754) for the length of the conversion only, so a long-lived caller (the MCP server) is not changed."""
+    from .utils.output_group import preset_permissions
+    with preset_permissions(getattr(args, "preset", None)):
+        return _run_conversion(args)
+
+
+def _run_conversion(args):
+    """Convert one source to one local output (the CLI's standard, non-submit path).
+
+    Writes to a ``.tmp`` path and renames on completion; handles --add-to-existing
+    (new label or replaced image inside an existing container), sparse label ingest
+    (--output-offset), --show_spec, --auto_multiscale, and the output group.
+    Called by main() and by the MCP convert tool, so both behave the same.
+
+    Returns a dict with whatever was measured: ``chunks_processed`` and
+    ``elapsed_time`` of the conversion, and for --auto_multiscale ``pyramid_s0``
+    and ``pyramid_plan``. The CLI ignores it.
+    """
+    info = {}
+    chunk_shape = parse_shape(args.chunk_shape, "chunk_shape") if args.chunk_shape else None
+    shard_shape = parse_shape(args.shard_shape, "shard_shape") if args.shard_shape else None
+    verbose = not args.quiet
+    use_shard = bool(args.use_shard)
+
+    # --- Safe write: write to .tmp, rename on completion ---
+    add_to_existing = getattr(args, 'add_to_existing', False)
+    final_output = args.output
+
+    if add_to_existing:
+        # Subgroup-level safe write: write to labels.tmp/ inside existing container
+        if not os.path.exists(final_output):
+            raise FileNotFoundError(
+                f"--add-to-existing: target container does not exist: {final_output}"
+            )
+        # Validate it's a zarr container
+        is_zarr3 = os.path.exists(os.path.join(final_output, 'zarr.json'))
+        is_zarr2 = os.path.exists(os.path.join(final_output, '.zgroup'))
+        if not is_zarr3 and not is_zarr2:
+            raise ValueError(
+                f"--add-to-existing: target is not a zarr container: {final_output}"
+            )
+        # The new label follows its container: a zarr 2 crop gets a zarr 2 label (also when --output_format was left at its zarr3 default),
+        # a zarr 3 crop never gets a zarr 2 one.
+        container_fmt = 'zarr3' if is_zarr3 else 'zarr2'
+        if args.output_format in ('zarr3', 'zarr2') and args.output_format != container_fmt:
+            if args.output_format == 'zarr2':
+                raise ValueError(
+                    f"--add-to-existing: {final_output} is a zarr3 container, --output_format zarr2 cannot be added to it"
+                )
+            print(f"--add-to-existing: {final_output} is a zarr2 container: writing the label as zarr2")
+            args.output_format = 'zarr2'
+        subgroup = _resolve_conversion_subgroup(args)
+        if not subgroup:
+            raise ValueError(
+                "--add-to-existing requires --data-type labels or --data-type image "
+                "(or --is-label for label data)"
+            )
+        subgroup_parent = subgroup.split('/')[0]   # "labels" or "raw"
+        label_name_orig = subgroup.split('/')[-1]  # "neurons"
+        if subgroup_parent == 'labels':
+            # New approach: write to labels/<label_name>.tmp/ then rename within
+            # the same parent directory.  A same-parent rename is a single atomic
+            # metadata operation on Lustre/GPFS, avoiding cross-directory renames
+            # that can silently drop files on multi-MDT Lustre configurations.
+            tmp_label_path = os.path.join(final_output, subgroup_parent, label_name_orig + '.tmp')
+            # Clean leftover <label_name>.tmp from a prior failed run
+            if os.path.exists(tmp_label_path):
+                shutil.rmtree(tmp_label_path)
+                if verbose:
+                    print(f"Removed leftover temporary label: {tmp_label_path}")
+            # Signal the writer to use '<label_name>.tmp' as the in-flight label key.
+            # args.label_key is intentionally NOT changed so --label-key is propagated
+            # correctly to worker jobs via reinvoke without double-applying .tmp.
+            args._label_tmp_key = label_name_orig + '.tmp'
+            tmp_output = None
+            if verbose:
+                print(f"Writing to temporary label: {tmp_label_path}")
+        else:
+            # Legacy path for non-labels subgroups (raw/image): subgroup_parent.tmp/
+            tmp_subgroup_path = os.path.join(final_output, subgroup_parent + '.tmp')
+            if os.path.exists(tmp_subgroup_path):
+                shutil.rmtree(tmp_subgroup_path)
+                if verbose:
+                    print(f"Removed leftover temporary subgroup: {tmp_subgroup_path}")
+            existing_subgroup = os.path.join(final_output, subgroup_parent)
+            if os.path.exists(existing_subgroup) and verbose:
+                print(f"Warning: existing {subgroup_parent}/ will be replaced on completion")
+            args._image_key_override = subgroup_parent + '.tmp'
+            tmp_output = None
+            if verbose:
+                print(f"Writing to subgroup: {tmp_subgroup_path}")
+    else:
+        tmp_output = _tmp_path_for(final_output)
+        # Clean up leftover .tmp from a prior failed run
+        if os.path.exists(tmp_output):
+            shutil.rmtree(tmp_output)
+            if verbose:
+                print(f"Removed leftover temporary path: {tmp_output}")
+        args.output = tmp_output
+        if verbose:
+            print(f"Writing to temporary path: {tmp_output}")
+
+    # --- --output-offset branch: sparse label ingest at TCZYX position ---
+    # Bypasses the standard converter pipeline. The pyramid coordinator
+    # (submitted separately when --auto_multiscale --submit are used) runs on
+    # the final label path after _finalize_add_to_existing() renames .tmp.
+    if add_to_existing and subgroup_parent == 'labels' and getattr(args, 'output_offset', None) is not None:
+        from .utils.label_ingest import (
+            ingest_label_at_offset, _read_target_shape_from_container,
+            check_offset_flags_supported, orient_label_source,
+        )
+
+        check_offset_flags_supported(args)
+        offset = list(args.output_offset)
+        if getattr(args, 'target_shape', None) is not None:
+            target_shape = list(args.target_shape)
+        else:
+            target_shape = _read_target_shape_from_container(final_output)
+
+        ndim = len(target_shape)
+        offset = [0] * (ndim - len(offset)) + offset
+
+        chunk_shape = parse_shape(args.chunk_shape, 'chunk_shape') if args.chunk_shape else (64, 64, 64)
+
+        _reader = create_reader(args)
+        source_ts = _reader.get_tensorstore()
+        _axes_override = None
+        if getattr(args, 'axes_order', None):
+            _axes_override = list(args.axes_order.lower().replace(',', ''))
+            if not set(_axes_override) <= {'x', 'y', 'z'} or len(set(_axes_override)) != len(_axes_override):
+                raise ValueError(f"--axes_order must be a permutation of x, y, z, got: {args.axes_order}")
+        source_ts = orient_label_source(
+            source_ts, axes_order=_axes_override,
+            input_axes=getattr(args, 'input_axes', None),
+            relabel_axis=getattr(args, 'relabel_axis', None))
+
+        ingest_label_at_offset(
+            source_ts=source_ts,
+            target_container=final_output,
+            label_tmp_key=args._label_tmp_key,
+            offset=offset,
+            target_shape=target_shape,
+            chunk_shape=chunk_shape,
+            dtype=getattr(args, 'dtype', None) or get_dtype_name(source_ts.dtype),
+            compression=getattr(args, 'compression', 'zstd'),
+            compression_level=getattr(args, 'compression_level', 5),
+        )
+        _finalize_add_to_existing(
+            final_output=final_output,
+            subgroup_parent=subgroup_parent,
+            label_name=label_name_orig,
+            output_format=args.output_format,
+            verbose=verbose,
+        )
+        _apply_group_to_added_label(final_output, subgroup_parent, label_name_orig)
+        # --auto_multiscale was previously silently ignored on this branch --
+        # execution returned right here, before the pyramid block below ever
+        # ran, so every --output-offset label stayed at s0 even when
+        # --auto_multiscale was requested. finalize already renamed .tmp ->
+        # final above, so pyramid generation here reads the final (non-.tmp)
+        # label path directly, unlike the standard branch below. Levels with
+        # no real data are still pruned by run_local_pyramid's own
+        # data-presence check, same as any other pyramid generation path.
+        if args.auto_multiscale:
+            s0_path, _ = find_base_level(
+                os.path.join(final_output, 'labels', label_name_orig), verbose=verbose
+            )
+            root_path = os.path.dirname(s0_path)
+            resolved_method = resolve_downsample_method(args.downsample_method, s0_path)
+            custom_per_level_factors = None
+            if args.per_level_factors:
+                custom_per_level_factors = parse_per_level_factors(args.per_level_factors)
+            run_local_pyramid(
+                s0_path=s0_path,
+                root_path=root_path,
+                downsample_method=resolved_method,
+                custom_per_level_factors=custom_per_level_factors,
+                use_shard=use_shard,
+                include_translation=not args.no_translation,
+                verbose=verbose,
+            )
+            from .utils.output_group import apply_parent_group
+            apply_parent_group(root_path)               # levels written after the label's group was applied
+        return info
+
+    reader = create_reader(args)
+
+    # Warn about TIFF CYX/IYX-style axes mislabeling before conversion begins
+    # (for submit paths the same check runs inside _get_input_metadata).
+    try:
+        _axes_for_warning = None
+        _store_for_warning = reader.get_tensorstore()
+        if hasattr(_store_for_warning, 'domain') and hasattr(_store_for_warning.domain, 'labels'):
+            _labels = _store_for_warning.domain.labels
+            if _labels and all(_labels):
+                _axes_for_warning = [
+                    'c' if l.lower() == 'channel' else l.lower() for l in _labels
+                ]
+        _warn_if_inferred_channel_axis(args, reader, _axes_for_warning)
+        if _axes_for_warning:
+            # the user already named the axes: warn about what is left, not about what they fixed
+            _axes_for_warning = _renamed_axes(args, _axes_for_warning)
+        _warn_if_axis_voxel_mismatch(args, _axes_for_warning)
+    except Exception:
+        pass  # warning is best-effort; never block conversion
+
+    # Determine force_order from CLI args (None = auto-detect)
+    force_order = None
+    if args.force_c_order:
+        force_order = 'c'
+    elif args.force_f_order:
+        force_order = 'f'
+
+    # Resolve data_type and is_label consistently
+    # Priority: explicit --data-type > explicit --is-label > auto-detect
+    cli_data_type = getattr(args, 'data_type', 'auto')
+    is_label = getattr(args, 'is_label', False)
+
+    if cli_data_type == 'labels':
+        # Explicit --data-type labels
+        resolved_data_type = 'labels'
+        is_label = True
+    elif is_label:
+        # Explicit --is-label flag
+        resolved_data_type = 'labels'
+    elif cli_data_type == 'auto':
+        # Auto-detect based on dtype
+        resolved_data_type = 'image'  # Default
+        try:
+            store = reader.get_tensorstore()
+            dtype_str = get_dtype_name(store.dtype)
+
+            from .utils.metadata_utils import is_segmentation_dtype
+            if is_segmentation_dtype(dtype_str):
+                is_label = True
+                resolved_data_type = 'labels'
+                if verbose:
+                    print(f"Auto-detected segmentation data (dtype: {dtype_str}), using labels structure")
+        except Exception:
+            pass  # If detection fails, default to image
+    else:
+        # Explicit --data-type image
+        resolved_data_type = 'image'
+
+    writer = create_writer(args, data_type=resolved_data_type)
+
+    # Handle --show_spec: print specs and exit without converting
+    if args.show_spec:
+        show_conversion_spec(reader, writer, args, chunk_shape, shard_shape)
+        return info
+
+    from .core.converter import DistributedConverter
+
+    converter = DistributedConverter(reader, writer)
+
+    # Parse voxel_size override if provided
+    voxel_size_override = None
+    voxel_unit = getattr(args, 'voxel_unit', None)
+    if args.voxel_size:
+        parts = args.voxel_size.split(',')
+        if len(parts) == 3:
+            voxel_size_override = {
+                'x': float(parts[0]),
+                'y': float(parts[1]),
+                'z': float(parts[2]),
+            }
+        else:
+            raise ValueError(
+                f"Invalid --voxel_size: '{args.voxel_size}'\n"
+                f"Expected comma-separated X,Y,Z values (e.g., '0.16,0.16,0.4')"
+            )
+
+    # Get expand_to_5d flag (default False = preserve source layout)
+    expand_to_5d = getattr(args, 'expand_to_5d', False)
+
+    # Parse --axes_order override
+    axes_order_override = None
+    if getattr(args, 'axes_order', None):
+        axes_order_override = list(args.axes_order.lower().replace(',', ''))
+        valid_spatial = {'x', 'y', 'z'}
+        if not all(a in valid_spatial for a in axes_order_override):
+            raise ValueError(f"--axes_order must contain only x, y, z, got: {args.axes_order}")
+        if len(axes_order_override) != len(set(axes_order_override)):
+            raise ValueError(f"--axes_order must not have duplicates, got: {args.axes_order}")
+
+    # Parse --relabel_axis (explicit axis identity correction; repeatable OLD=NEW)
+    axis_relabel = None
+    if getattr(args, 'relabel_axis', None):
+        axis_relabel = {}
+        for spec in args.relabel_axis:
+            if '=' not in spec:
+                raise ValueError(
+                    f"--relabel_axis must be in OLD=NEW form (e.g. 'i=z'), got: {spec}")
+            old, new = spec.lower().split('=', 1)
+            old, new = old.strip(), new.strip()
+            if len(old) != 1 or len(new) != 1:
+                raise ValueError(
+                    f"--relabel_axis expects single-character axis names, got: {spec}")
+            axis_relabel[old] = new
+
+    # Parse bbox for subvolume extraction
+    bbox = parse_bbox(args.bbox) if getattr(args, 'bbox', None) else None
+    bbox_axes = parse_bbox_axes(args.bbox_axes) if getattr(args, 'bbox_axes', None) else None
+    if bbox_axes is not None and bbox is not None and len(bbox_axes) != len(bbox[0]):
+        raise ValueError(
+            f"--bbox_axes has {len(bbox_axes)} indices but --bbox has {len(bbox[0])} "
+            f"origin/size values — they must match 1:1."
+        )
+
+    no_ome_meta_export = getattr(args, 'no_ome_meta_export', False)
+    no_ome_xml_attr = getattr(args, 'no_ome_xml_attr', False)
+
+    conversion = {}
+    if args.start_idx is not None:
+        # Manual chunk-range mode (for bsub workers)
+        converter.convert(
+            start_idx=args.start_idx,
+            stop_idx=args.stop_idx,
+            chunk_shape=chunk_shape,
+            shard_shape=shard_shape,
+            write_metadata=args.write_metadata,
+            delete_existing=False,
+            verbose=verbose,
+            force_order=force_order,
+            voxel_size_override=voxel_size_override,
+            voxel_unit=voxel_unit,
+            is_label=is_label,
+            expand_to_5d=expand_to_5d,
+            bbox=bbox,
+            bbox_axes=bbox_axes,
+            squeeze_singleton_axes=getattr(args, 'squeeze_singleton_axes', False),
+            squeeze_if_known=getattr(args, 'preset', None) in ('miaai', 'mia_lmvd'),
+            axes_order_override=axes_order_override,
+            axis_relabel=axis_relabel,
+            input_axes=getattr(args, 'input_axes', None),
+            no_ome_meta_export=no_ome_meta_export,
+            no_ome_xml_attr=no_ome_xml_attr,
+            output_dtype=getattr(args, 'dtype', None),
+        )
+    else:
+        # Full single-process conversion
+        conversion = converter.convert(
+            chunk_shape=chunk_shape,
+            shard_shape=shard_shape,
+            write_metadata=True,
+            verbose=verbose,
+            force_order=force_order,
+            voxel_size_override=voxel_size_override,
+            voxel_unit=voxel_unit,
+            is_label=is_label,
+            expand_to_5d=expand_to_5d,
+            bbox=bbox,
+            bbox_axes=bbox_axes,
+            squeeze_singleton_axes=getattr(args, 'squeeze_singleton_axes', False),
+            squeeze_if_known=getattr(args, 'preset', None) in ('miaai', 'mia_lmvd'),
+            axes_order_override=axes_order_override,
+            axis_relabel=axis_relabel,
+            input_axes=getattr(args, 'input_axes', None),
+            no_ome_meta_export=no_ome_meta_export,
+            no_ome_xml_attr=no_ome_xml_attr,
+            output_dtype=getattr(args, 'dtype', None),
+        )
+
+    if isinstance(conversion, dict):
+        info.update(chunks_processed=conversion.get("chunks_processed"), elapsed_seconds=conversion.get("elapsed_seconds"))
+
+    # Write source provenance metadata when --bbox is used
+    if bbox:
+        from .utils.metadata_utils import write_source_metadata
+        write_source_metadata(
+            output_path=args.output,
+            source_url=args.input,
+            bbox=bbox,
+            voxel_sizes=voxel_size_override,
+        )
+
+    # Chain pyramid generation after s0 conversion if --auto_multiscale
+    if args.auto_multiscale:
+        # Resolve the subgroup the converter just wrote to (e.g. 'raw' or
+        # 'labels/segmentation'). Without this, find_base_level() on the
+        # container root reads stale multiscales from a prior stage and may
+        # return the wrong subgroup, causing the pyramid to overwrite the
+        # wrong levels.
+        pyramid_subgroup = _resolve_conversion_subgroup(args)
+        if add_to_existing and pyramid_subgroup:
+            if subgroup_parent == 'labels':
+                # New approach: _label_tmp_key is already set so _resolve_conversion_subgroup
+                # returns 'labels/<label_name>.tmp' — use it directly, no transformation needed.
+                base_level_input = os.path.join(final_output, pyramid_subgroup)
+            else:
+                # Legacy: transform 'raw/...' → 'raw.tmp/...'
+                parts = pyramid_subgroup.split('/', 1)
+                pyramid_subgroup = parts[0] + '.tmp' + ('/' + parts[1] if len(parts) > 1 else '')
+                base_level_input = os.path.join(final_output, pyramid_subgroup)
+        else:
+            base_level_input = (
+                os.path.join(args.output, pyramid_subgroup) if pyramid_subgroup else args.output
+            )
+        s0_path, _ = find_base_level(base_level_input, verbose=verbose)
+        # root_path must be the direct parent of s0 (e.g., raw/) not the container root
+        root_path = os.path.dirname(s0_path)
+        resolved_method = resolve_downsample_method(args.downsample_method, s0_path)
+
+        custom_per_level_factors = None
+        if args.per_level_factors:
+            custom_per_level_factors = parse_per_level_factors(args.per_level_factors)
+
+        pyramid_plan = run_local_pyramid(
+            s0_path=s0_path,
+            root_path=root_path,
+            downsample_method=resolved_method,
+            custom_per_level_factors=custom_per_level_factors,
+            use_shard=use_shard,
+            include_translation=not args.no_translation,
+            verbose=verbose,
+        )
+        info.update(pyramid_s0=s0_path, pyramid_plan=pyramid_plan)
+
+    # --- Safe write: rename .tmp → final path ---
+    if add_to_existing:
+        _finalize_add_to_existing(
+            final_output=final_output,
+            subgroup_parent=subgroup_parent,
+            label_name=subgroup.split('/')[-1],
+            output_format=args.output_format,
+            verbose=verbose,
+        )
+        _apply_group_to_added_label(final_output, subgroup_parent, subgroup.split('/')[-1])
+    else:
+        _finalize_tmp_path(tmp_output, final_output, verbose=verbose)
+    written_group = subgroup if add_to_existing else _resolve_conversion_subgroup(args)
+    if not written_group and getattr(args, 'use_nested_structure', True) and not getattr(args, 'is_label', False):
+        written_group = getattr(args, 'image_key', 'raw')      # plain image conversion: --data-type auto
+    _apply_post_conversion_metadata(args, final_output, written_group)
+    return info
+
+
+def _extra_attributes_file_for_job(args) -> str:
+    """A file path for --extra_attributes. Inline JSON is written to a file first: its double quotes would
+    otherwise be mangled by the shell and the scheduler when the job's command line is rebuilt."""
+    import hashlib
+    from .utils import miaai_metadata as mm
+
+    value = args.extra_attributes.strip()
+    if os.path.isfile(value):
+        return os.path.abspath(value)
+    data = mm.load_extra_attributes(value)
+    folder = args.log_dir or os.path.join(os.path.dirname(os.path.abspath(args.output)), "output")
+    os.makedirs(folder, exist_ok=True)
+    digest = hashlib.sha1(json.dumps(data, sort_keys=True).encode()).hexdigest()[:10]
+    path = os.path.join(folder, f"extra_attributes_{digest}.json")
+    with open(path, "w") as handle:
+        json.dump(data, handle, indent=2)
+    return path
+
+
+def _apply_post_conversion_metadata(args, final_output, group):
+    """--extra_attributes, and the miaai preset's metadata conventions, once the data is in place."""
+    from .utils import miaai_metadata as mm
+
+    if getattr(args, 'extra_attributes', None) and group and args.output_format == 'zarr3':
+        group_dir = os.path.join(final_output, *[part.removesuffix('.tmp') for part in group.split('/')])
+        mm.merge_extra_attributes(group_dir, mm.load_extra_attributes(args.extra_attributes))
+    if getattr(args, 'preset', None) in ('miaai', 'mia_lmvd') and args.output_format == 'zarr3':
+        mm.mark_container(final_output, 'miaai', getattr(args, 'expansion_factor', None))
+        mm.finalize_container(final_output, getattr(args, 'expansion_factor', None))
+        from .utils.output_group import apply_preset_to_container
+        apply_preset_to_container(final_output)      # the finalizer rewrote zarr.json files: group miaai, group read+execute, no group write
+
+
+def main(argv=None):
+    """Run single-process conversion, downsampling, or submit LSF job."""
+    args = parse_args(argv)
+
+    _apply_preset(args)
+    from .utils.output_group import apply_preset_permissions
+    apply_preset_permissions(args.preset)       # --preset miaai: group miaai, group read+execute and no group write (directories 755, files 754), this process only
 
     # Parse optional shapes
     chunk_shape = parse_shape(args.chunk_shape, "chunk_shape") if args.chunk_shape else None
@@ -2496,6 +3117,8 @@ def main(argv=None):
                 if not args.project:
                     raise ValueError("--project is required with --submit")
 
+                _require_voxel_metadata_for_batch(args, files)
+
                 # Auto-calculate resources from first discovered file when not overridden
                 memory_gb = args.memory
                 wall_time = args.wall_time
@@ -2662,6 +3285,7 @@ def main(argv=None):
                         custom_per_level_factors=custom_per_level_factors,
                         include_translation=not args.no_translation,
                         log_dir=getattr(args, 'log_dir', None),
+                        preset=getattr(args, 'preset', None),
                     )
                     coordinator_jid = result.get('coordinator_job_id')
                     num_levels = result.get('pyramid_plan', {}).get('num_levels', 0)
@@ -2711,6 +3335,7 @@ def main(argv=None):
                 custom_per_level_factors=custom_per_level_factors,
                 include_translation=not args.no_translation,
                 log_dir=getattr(args, 'log_dir', None),
+                preset=getattr(args, 'preset', None),
             )
             num_levels = result.get('pyramid_plan', {}).get('num_levels', 0)
             coordinator_job_id = result.get('coordinator_job_id')
@@ -2732,6 +3357,8 @@ def main(argv=None):
                 include_translation=not args.no_translation,
                 verbose=verbose,
             )
+            from .utils.output_group import apply_parent_group
+            apply_parent_group(root_path)               # the new levels get the group too (s0 got it when it was written)
         return
 
     # Handle upsample mode (anisotropic → isotropic)
@@ -2866,6 +3493,14 @@ def main(argv=None):
                 verbose=verbose,
                 cumulative_factor_for_metadata=cumulative_factor_for_metadata,
             )
+            # This branch is also what a chained-pyramid coordinator's per-level job
+            # actually runs on the compute node (it reinvokes --downsample without
+            # --submit). Unlike run_conversion(), nothing here finalizes the level
+            # it just wrote -- do that now so s1..sN end up group miaai, no group
+            # write, same as s0 (which run_conversion() already finalizes).
+            if getattr(args, 'preset', None) in ('miaai', 'mia_lmvd'):
+                from .utils.output_group import apply_parent_group
+                apply_parent_group(args.output)
         return
 
     # Standard conversion mode (single level / s0)
@@ -2885,372 +3520,7 @@ def main(argv=None):
 
         return
 
-    # --- Safe write: write to .tmp, rename on completion ---
-    add_to_existing = getattr(args, 'add_to_existing', False)
-    final_output = args.output
-
-    if add_to_existing:
-        # Subgroup-level safe write: write to labels.tmp/ inside existing container
-        if not os.path.exists(final_output):
-            raise FileNotFoundError(
-                f"--add-to-existing: target container does not exist: {final_output}"
-            )
-        # Validate it's a zarr container
-        is_zarr3 = os.path.exists(os.path.join(final_output, 'zarr.json'))
-        is_zarr2 = os.path.exists(os.path.join(final_output, '.zgroup'))
-        if not is_zarr3 and not is_zarr2:
-            raise ValueError(
-                f"--add-to-existing: target is not a zarr container: {final_output}"
-            )
-        subgroup = _resolve_conversion_subgroup(args)
-        if not subgroup:
-            raise ValueError(
-                "--add-to-existing requires --data-type labels or --data-type image "
-                "(or --is-label for label data)"
-            )
-        subgroup_parent = subgroup.split('/')[0]   # "labels" or "raw"
-        label_name_orig = subgroup.split('/')[-1]  # "neurons"
-        if subgroup_parent == 'labels':
-            # New approach: write to labels/<label_name>.tmp/ then rename within
-            # the same parent directory.  A same-parent rename is a single atomic
-            # metadata operation on Lustre/GPFS, avoiding cross-directory renames
-            # that can silently drop files on multi-MDT Lustre configurations.
-            tmp_label_path = os.path.join(final_output, subgroup_parent, label_name_orig + '.tmp')
-            # Clean leftover <label_name>.tmp from a prior failed run
-            if os.path.exists(tmp_label_path):
-                shutil.rmtree(tmp_label_path)
-                if verbose:
-                    print(f"Removed leftover temporary label: {tmp_label_path}")
-            # Signal the writer to use '<label_name>.tmp' as the in-flight label key.
-            # args.label_key is intentionally NOT changed so --label-key is propagated
-            # correctly to worker jobs via reinvoke without double-applying .tmp.
-            args._label_tmp_key = label_name_orig + '.tmp'
-            tmp_output = None
-            if verbose:
-                print(f"Writing to temporary label: {tmp_label_path}")
-        else:
-            # Legacy path for non-labels subgroups (raw/image): subgroup_parent.tmp/
-            tmp_subgroup_path = os.path.join(final_output, subgroup_parent + '.tmp')
-            if os.path.exists(tmp_subgroup_path):
-                shutil.rmtree(tmp_subgroup_path)
-                if verbose:
-                    print(f"Removed leftover temporary subgroup: {tmp_subgroup_path}")
-            existing_subgroup = os.path.join(final_output, subgroup_parent)
-            if os.path.exists(existing_subgroup) and verbose:
-                print(f"Warning: existing {subgroup_parent}/ will be replaced on completion")
-            args._image_key_override = subgroup_parent + '.tmp'
-            tmp_output = None
-            if verbose:
-                print(f"Writing to subgroup: {tmp_subgroup_path}")
-    else:
-        tmp_output = _tmp_path_for(final_output)
-        # Clean up leftover .tmp from a prior failed run
-        if os.path.exists(tmp_output):
-            shutil.rmtree(tmp_output)
-            if verbose:
-                print(f"Removed leftover temporary path: {tmp_output}")
-        args.output = tmp_output
-        if verbose:
-            print(f"Writing to temporary path: {tmp_output}")
-
-    # --- --output-offset branch: sparse label ingest at TCZYX position ---
-    # Bypasses the standard converter pipeline. The pyramid coordinator
-    # (submitted separately when --auto_multiscale --submit are used) runs on
-    # the final label path after _finalize_add_to_existing() renames .tmp.
-    if add_to_existing and subgroup_parent == 'labels' and getattr(args, 'output_offset', None) is not None:
-        from .utils.label_ingest import ingest_label_at_offset, _read_target_shape_from_container
-
-        offset = list(args.output_offset)
-        if getattr(args, 'target_shape', None) is not None:
-            target_shape = list(args.target_shape)
-        else:
-            target_shape = _read_target_shape_from_container(final_output)
-
-        ndim = len(target_shape)
-        offset = [0] * (ndim - len(offset)) + offset
-
-        chunk_shape = parse_shape(args.chunk_shape, 'chunk_shape') if args.chunk_shape else (64, 64, 64)
-
-        _reader = create_reader(args)
-        source_ts = _reader.get_tensorstore()
-
-        ingest_label_at_offset(
-            source_ts=source_ts,
-            target_container=final_output,
-            label_tmp_key=args._label_tmp_key,
-            offset=offset,
-            target_shape=target_shape,
-            chunk_shape=chunk_shape,
-            dtype=getattr(args, 'dtype', None) or get_dtype_name(source_ts.dtype),
-            compression=getattr(args, 'compression', 'zstd'),
-            compression_level=getattr(args, 'compression_level', 5),
-        )
-        _finalize_add_to_existing(
-            final_output=final_output,
-            subgroup_parent=subgroup_parent,
-            label_name=label_name_orig,
-            output_format=args.output_format,
-            verbose=verbose,
-        )
-        # --auto_multiscale was previously silently ignored on this branch --
-        # execution returned right here, before the pyramid block below ever
-        # ran, so every --output-offset label stayed at s0 even when
-        # --auto_multiscale was requested. finalize already renamed .tmp ->
-        # final above, so pyramid generation here reads the final (non-.tmp)
-        # label path directly, unlike the standard branch below. Levels with
-        # no real data are still pruned by run_local_pyramid's own
-        # data-presence check, same as any other pyramid generation path.
-        if args.auto_multiscale:
-            s0_path, _ = find_base_level(
-                os.path.join(final_output, 'labels', label_name_orig), verbose=verbose
-            )
-            root_path = os.path.dirname(s0_path)
-            resolved_method = resolve_downsample_method(args.downsample_method, s0_path)
-            custom_per_level_factors = None
-            if args.per_level_factors:
-                custom_per_level_factors = parse_per_level_factors(args.per_level_factors)
-            run_local_pyramid(
-                s0_path=s0_path,
-                root_path=root_path,
-                downsample_method=resolved_method,
-                custom_per_level_factors=custom_per_level_factors,
-                use_shard=use_shard,
-                include_translation=not args.no_translation,
-                verbose=verbose,
-            )
-        return
-
-    reader = create_reader(args)
-
-    # Warn about TIFF CYX/IYX-style axes mislabeling before conversion begins
-    # (for submit paths the same check runs inside _get_input_metadata).
-    try:
-        _axes_for_warning = None
-        _store_for_warning = reader.get_tensorstore()
-        if hasattr(_store_for_warning, 'domain') and hasattr(_store_for_warning.domain, 'labels'):
-            _labels = _store_for_warning.domain.labels
-            if _labels and all(_labels):
-                _axes_for_warning = [
-                    'c' if l.lower() == 'channel' else l.lower() for l in _labels
-                ]
-        _warn_if_axis_voxel_mismatch(args, _axes_for_warning)
-    except Exception:
-        pass  # warning is best-effort; never block conversion
-
-    # Determine force_order from CLI args (None = auto-detect)
-    force_order = None
-    if args.force_c_order:
-        force_order = 'c'
-    elif args.force_f_order:
-        force_order = 'f'
-
-    # Resolve data_type and is_label consistently
-    # Priority: explicit --data-type > explicit --is-label > auto-detect
-    cli_data_type = getattr(args, 'data_type', 'auto')
-    is_label = getattr(args, 'is_label', False)
-
-    if cli_data_type == 'labels':
-        # Explicit --data-type labels
-        resolved_data_type = 'labels'
-        is_label = True
-    elif is_label:
-        # Explicit --is-label flag
-        resolved_data_type = 'labels'
-    elif cli_data_type == 'auto':
-        # Auto-detect based on dtype
-        resolved_data_type = 'image'  # Default
-        try:
-            store = reader.get_tensorstore()
-            dtype_str = get_dtype_name(store.dtype)
-
-            from .utils.metadata_utils import is_segmentation_dtype
-            if is_segmentation_dtype(dtype_str):
-                is_label = True
-                resolved_data_type = 'labels'
-                if verbose:
-                    print(f"Auto-detected segmentation data (dtype: {dtype_str}), using labels structure")
-        except Exception:
-            pass  # If detection fails, default to image
-    else:
-        # Explicit --data-type image
-        resolved_data_type = 'image'
-
-    writer = create_writer(args, data_type=resolved_data_type)
-
-    # Handle --show_spec: print specs and exit without converting
-    if args.show_spec:
-        show_conversion_spec(reader, writer, args, chunk_shape, shard_shape)
-        return
-
-    from .core.converter import DistributedConverter
-
-    converter = DistributedConverter(reader, writer)
-
-    # Parse voxel_size override if provided
-    voxel_size_override = None
-    voxel_unit = getattr(args, 'voxel_unit', None)
-    if args.voxel_size:
-        parts = args.voxel_size.split(',')
-        if len(parts) == 3:
-            voxel_size_override = {
-                'x': float(parts[0]),
-                'y': float(parts[1]),
-                'z': float(parts[2]),
-            }
-        else:
-            raise ValueError(
-                f"Invalid --voxel_size: '{args.voxel_size}'\n"
-                f"Expected comma-separated X,Y,Z values (e.g., '0.16,0.16,0.4')"
-            )
-
-    # Get expand_to_5d flag (default False = preserve source layout)
-    expand_to_5d = getattr(args, 'expand_to_5d', False)
-
-    # Parse --axes_order override
-    axes_order_override = None
-    if getattr(args, 'axes_order', None):
-        axes_order_override = list(args.axes_order.lower().replace(',', ''))
-        valid_spatial = {'x', 'y', 'z'}
-        if not all(a in valid_spatial for a in axes_order_override):
-            raise ValueError(f"--axes_order must contain only x, y, z, got: {args.axes_order}")
-        if len(axes_order_override) != len(set(axes_order_override)):
-            raise ValueError(f"--axes_order must not have duplicates, got: {args.axes_order}")
-
-    # Parse --relabel_axis (explicit axis identity correction; repeatable OLD=NEW)
-    axis_relabel = None
-    if getattr(args, 'relabel_axis', None):
-        axis_relabel = {}
-        for spec in args.relabel_axis:
-            if '=' not in spec:
-                raise ValueError(
-                    f"--relabel_axis must be in OLD=NEW form (e.g. 'i=z'), got: {spec}")
-            old, new = spec.lower().split('=', 1)
-            old, new = old.strip(), new.strip()
-            if len(old) != 1 or len(new) != 1:
-                raise ValueError(
-                    f"--relabel_axis expects single-character axis names, got: {spec}")
-            axis_relabel[old] = new
-
-    # Parse bbox for subvolume extraction
-    bbox = parse_bbox(args.bbox) if getattr(args, 'bbox', None) else None
-    bbox_axes = parse_bbox_axes(args.bbox_axes) if getattr(args, 'bbox_axes', None) else None
-    if bbox_axes is not None and bbox is not None and len(bbox_axes) != len(bbox[0]):
-        raise ValueError(
-            f"--bbox_axes has {len(bbox_axes)} indices but --bbox has {len(bbox[0])} "
-            f"origin/size values — they must match 1:1."
-        )
-
-    no_ome_meta_export = getattr(args, 'no_ome_meta_export', False)
-    no_ome_xml_attr = getattr(args, 'no_ome_xml_attr', False)
-
-    if args.start_idx is not None:
-        # Manual chunk-range mode (for bsub workers)
-        converter.convert(
-            start_idx=args.start_idx,
-            stop_idx=args.stop_idx,
-            chunk_shape=chunk_shape,
-            shard_shape=shard_shape,
-            write_metadata=args.write_metadata,
-            delete_existing=False,
-            verbose=verbose,
-            force_order=force_order,
-            voxel_size_override=voxel_size_override,
-            voxel_unit=voxel_unit,
-            is_label=is_label,
-            expand_to_5d=expand_to_5d,
-            bbox=bbox,
-            bbox_axes=bbox_axes,
-            squeeze_singleton_axes=getattr(args, 'squeeze_singleton_axes', False),
-            axes_order_override=axes_order_override,
-            axis_relabel=axis_relabel,
-            no_ome_meta_export=no_ome_meta_export,
-            no_ome_xml_attr=no_ome_xml_attr,
-            output_dtype=getattr(args, 'dtype', None),
-        )
-    else:
-        # Full single-process conversion
-        converter.convert(
-            chunk_shape=chunk_shape,
-            shard_shape=shard_shape,
-            write_metadata=True,
-            verbose=verbose,
-            force_order=force_order,
-            voxel_size_override=voxel_size_override,
-            voxel_unit=voxel_unit,
-            is_label=is_label,
-            expand_to_5d=expand_to_5d,
-            bbox=bbox,
-            bbox_axes=bbox_axes,
-            squeeze_singleton_axes=getattr(args, 'squeeze_singleton_axes', False),
-            axes_order_override=axes_order_override,
-            axis_relabel=axis_relabel,
-            no_ome_meta_export=no_ome_meta_export,
-            no_ome_xml_attr=no_ome_xml_attr,
-            output_dtype=getattr(args, 'dtype', None),
-        )
-
-    # Write source provenance metadata when --bbox is used
-    if bbox:
-        from .utils.metadata_utils import write_source_metadata
-        write_source_metadata(
-            output_path=args.output,
-            source_url=args.input,
-            bbox=bbox,
-            voxel_sizes=voxel_size_override,
-        )
-
-    # Chain pyramid generation after s0 conversion if --auto_multiscale
-    if args.auto_multiscale:
-        # Resolve the subgroup the converter just wrote to (e.g. 'raw' or
-        # 'labels/segmentation'). Without this, find_base_level() on the
-        # container root reads stale multiscales from a prior stage and may
-        # return the wrong subgroup, causing the pyramid to overwrite the
-        # wrong levels.
-        pyramid_subgroup = _resolve_conversion_subgroup(args)
-        if add_to_existing and pyramid_subgroup:
-            if subgroup_parent == 'labels':
-                # New approach: _label_tmp_key is already set so _resolve_conversion_subgroup
-                # returns 'labels/<label_name>.tmp' — use it directly, no transformation needed.
-                base_level_input = os.path.join(final_output, pyramid_subgroup)
-            else:
-                # Legacy: transform 'raw/...' → 'raw.tmp/...'
-                parts = pyramid_subgroup.split('/', 1)
-                pyramid_subgroup = parts[0] + '.tmp' + ('/' + parts[1] if len(parts) > 1 else '')
-                base_level_input = os.path.join(final_output, pyramid_subgroup)
-        else:
-            base_level_input = (
-                os.path.join(args.output, pyramid_subgroup) if pyramid_subgroup else args.output
-            )
-        s0_path, _ = find_base_level(base_level_input, verbose=verbose)
-        # root_path must be the direct parent of s0 (e.g., raw/) not the container root
-        root_path = os.path.dirname(s0_path)
-        resolved_method = resolve_downsample_method(args.downsample_method, s0_path)
-
-        custom_per_level_factors = None
-        if args.per_level_factors:
-            custom_per_level_factors = parse_per_level_factors(args.per_level_factors)
-
-        run_local_pyramid(
-            s0_path=s0_path,
-            root_path=root_path,
-            downsample_method=resolved_method,
-            custom_per_level_factors=custom_per_level_factors,
-            use_shard=use_shard,
-            include_translation=not args.no_translation,
-            verbose=verbose,
-        )
-
-    # --- Safe write: rename .tmp → final path ---
-    if add_to_existing:
-        _finalize_add_to_existing(
-            final_output=final_output,
-            subgroup_parent=subgroup_parent,
-            label_name=subgroup.split('/')[-1],
-            output_format=args.output_format,
-            verbose=verbose,
-        )
-    else:
-        _finalize_tmp_path(tmp_output, final_output, verbose=verbose)
+    run_conversion(args)
 
 
 if __name__ == "__main__":
