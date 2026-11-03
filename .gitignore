@@ -15,7 +15,7 @@ output
 *.env
 
 # Local planning notes
-PLAN_TS2.1.1.md
+PLAN_TS*.md
 
 # personal working folders: never part of the repository
 /Beyene/
