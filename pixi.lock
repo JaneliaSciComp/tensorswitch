@@ -353,7 +353,7 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/a6/24/4d91e05817e92e3a61c8a21e08fd0f390f5301f1c448b137c57c4bc6e543/semver-3.0.4-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/f8/7f/3de5402f39890ac5660b86bcf5c03f9d855dad5c4ed764866d7b592b46fd/sse_starlette-3.3.4-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/0b/c9/584bc9651441b4ba60cc4d557d8a547b5aff901af35bda3a4ee30c819b82/starlette-1.0.0-py3-none-any.whl
-      - pypi: https://files.pythonhosted.org/packages/87/4a/60e234147570e21bbab4ac70ab79dd794a5ef9a4945d36c34c1914a73205/tensorstore-0.1.79-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
+      - pypi: https://files.pythonhosted.org/packages/18/c1/d81918c841511d4d8503b87d7f0ea078f6778642dad1bbf09827596d5aa5/tensorstore-0.1.86-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/b7/23/a5bbd9600dd607411fa644c06ff4951bec3a4d82c4b852374024359c19c0/uvicorn-0.44.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/fa/6e/3e955517e22cbdd565f2f8b2e73d52528b14b8bcfdb04f62466b071de847/validators-0.35.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/99/92/545eb2ca17fc0e05456728d7e4378bfee48d66433ae3b7e71948e46826fb/xarray-2026.2.0-py3-none-any.whl
@@ -734,7 +734,7 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/a6/24/4d91e05817e92e3a61c8a21e08fd0f390f5301f1c448b137c57c4bc6e543/semver-3.0.4-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/f8/7f/3de5402f39890ac5660b86bcf5c03f9d855dad5c4ed764866d7b592b46fd/sse_starlette-3.3.4-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/0b/c9/584bc9651441b4ba60cc4d557d8a547b5aff901af35bda3a4ee30c819b82/starlette-1.0.0-py3-none-any.whl
-      - pypi: https://files.pythonhosted.org/packages/87/4a/60e234147570e21bbab4ac70ab79dd794a5ef9a4945d36c34c1914a73205/tensorstore-0.1.79-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
+      - pypi: https://files.pythonhosted.org/packages/18/c1/d81918c841511d4d8503b87d7f0ea078f6778642dad1bbf09827596d5aa5/tensorstore-0.1.86-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/b7/23/a5bbd9600dd607411fa644c06ff4951bec3a4d82c4b852374024359c19c0/uvicorn-0.44.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/fa/6e/3e955517e22cbdd565f2f8b2e73d52528b14b8bcfdb04f62466b071de847/validators-0.35.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/99/92/545eb2ca17fc0e05456728d7e4378bfee48d66433ae3b7e71948e46826fb/xarray-2026.2.0-py3-none-any.whl
@@ -6189,10 +6189,10 @@ packages:
   - pkg:pypi/tblib?source=hash-mapping
   size: 17914
   timestamp: 1743515657639
-- pypi: https://files.pythonhosted.org/packages/87/4a/60e234147570e21bbab4ac70ab79dd794a5ef9a4945d36c34c1914a73205/tensorstore-0.1.79-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
+- pypi: https://files.pythonhosted.org/packages/18/c1/d81918c841511d4d8503b87d7f0ea078f6778642dad1bbf09827596d5aa5/tensorstore-0.1.86-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
   name: tensorstore
-  version: 0.1.79
-  sha256: 608f7178ec6e4e4a3c26545b0a44f44bf83438d04bf2d960cd0e7699eaa99ef6
+  version: 0.1.86
+  sha256: 8440d8f5b7721f51a274d7190d763640a48a11b56fa48fffa5c2fc009192546a
   requires_dist:
   - numpy>=1.22.0
   - ml-dtypes>=0.5.0
@@ -6200,9 +6200,9 @@ packages:
 - pypi: ./
   name: tensorswitch
   version: 2.1.0
-  sha256: 520df5cb480a6dac9114bc0b2d88308a780b2e73e4f880296c9cdd573ecddb43
+  sha256: 3ce34c2fe0bf872017282393ec7861db2bc5cf28635ee99be6646909cac07b87
   requires_dist:
-  - tensorstore>=0.1.79,<0.2
+  - tensorstore>=0.1.85,<0.2
   - psutil
   - requests
   - numpy
