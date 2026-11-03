@@ -417,7 +417,9 @@ def convert(
     Args:
         input_path: Path to source dataset.
         output_path: Path for output (e.g., /data/output.zarr).
-        output_format: Output format — "zarr3" (default), "zarr2", or "n5".
+        output_format: Output format — "zarr3" (default), "zarr2", or "n5". With add_to_existing the new layer follows the
+            existing container (a zarr2 container gets a zarr2 layer, a zarr3 container a zarr3 one); zarr2 into a zarr3
+            container is refused.
         chunk_shape: Comma-separated chunk shape (e.g., "64,64,64"). Auto-calculated if empty.
         shard_shape: Comma-separated shard shape for zarr3 (e.g., "512,512,512"). Auto-calculated if empty.
         no_sharding: Disable sharding for zarr3 output. Default: False (sharding enabled).
@@ -458,7 +460,8 @@ def convert(
                           the group this call writes (raw/ or labels/<name>/). "ome" and "_software" cannot be set.
         output_dtype: Output dtype override (e.g., "uint8", "int16", "uint16"). Empty = preserve source dtype.
         add_to_existing: Add data to existing container without destroying it.
-            Safe write applies to the subgroup (e.g., labels/) not the container root.
+            Safe write applies to the subgroup (e.g., labels/) not the container root. The new layer is written in the
+            container's own format (zarr2 or zarr3), including a sparse label ingest with output_offset.
         bbox_axes: Which source axes bbox refers to, comma-separated indices (e.g. "2,3,4" for z,y,x of a 5D t,c,z,y,x source).
         squeeze_singleton_axes: Drop length-1 axes (e.g. t, c) from the output. Needs known axis identity.
         input_axes: Name every source axis, one letter per axis in the reader's order, slowest to fastest
@@ -931,7 +934,8 @@ def submit_job(
         input_path: Path to source dataset.
         output_path: Path for output (e.g., /data/output.zarr).
         project: LSF project name for billing (required). Ask the user which project to use.
-        output_format: Output format — "zarr3" (default), "zarr2", or "n5".
+        output_format: Output format — "zarr3" (default), "zarr2", or "n5". With add_to_existing the new layer follows the
+            existing container (zarr2 container: zarr2 layer; zarr3: zarr3); zarr2 into a zarr3 container is refused.
         chunk_shape: Comma-separated chunk shape (e.g., "64,64,64"). Auto-calculated if empty.
         shard_shape: Comma-separated shard shape for zarr3. Auto-calculated if empty.
         no_sharding: Disable sharding for zarr3. Default: False.

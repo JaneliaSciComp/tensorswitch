@@ -39,7 +39,7 @@ runnables:
       - flag: --output_format
         name: Output Format
         type: enum
-        description: "Output format. Zarr3 (recommended) supports sharding for large datasets."
+        description: "Output format. Zarr3 (recommended) supports sharding for large datasets. When adding a label to an existing container (Add to Existing), the label follows the container: a Zarr2 container gets a Zarr2 label, a Zarr3 container a Zarr3 label (Zarr2 into a Zarr3 container is refused)."
         default: zarr3
         options:
           - zarr3
@@ -268,7 +268,9 @@ runnables:
           Add an annotation layer into an existing OME-NGFF zarr's labels/ folder.
           Use with --add-to-existing and --is-label (or --data-type labels).
           --output-offset embeds a sparse annotation (e.g. single timepoint crop) at the
-          correct TCZYX position; omit for same-shape ingest.
+          correct TCZYX position; omit for same-shape ingest. The label is written in the
+          existing container's format (Zarr2 crop: Zarr2 label, Zarr3 crop: Zarr3 label), with
+          the same data type and chunk shape rule in both.
         collapsed: true
         parameters:
           - flag: --add-to-existing

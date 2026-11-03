@@ -196,3 +196,31 @@ class TestThePyramidOfAZarr2Label:
         assert [d["path"] for d in ms["datasets"]] == ["s0", "s1"] and json.load(open(c + "/labels/.zattrs"))["labels"] == ["seg"]
         got = np.asarray(ts.open({"driver": "zarr", "kvstore": {"driver": "file", "path": c + "/labels/seg/s1"}}).result().read().result())
         assert got[1].max() == 5 and got[[0, 2]].sum() == 0                              # the mode of the block: the label survives, other timepoints stay empty
+
+
+class TestThroughMcp:
+    """MCP convert runs the same code, so a label added to a zarr 2 crop is zarr 2 there too, and zarr 2 into a zarr 3 crop is refused."""
+
+    def _call(self, tmp_path, crop, **extra):
+        mcp_server = pytest.importorskip("mcp")  # noqa: F841
+        from tensorswitch_v2 import mcp_server as m
+        src = np.zeros((6, 5, 3), np.uint8)
+        src[1, 2, 1] = 7
+        export = str(tmp_path / "export.n5")
+        _n5_export(export, src)
+        return json.loads(m.convert(export, crop, voxel_size="108,108,200", is_label=True, data_type="labels", label_key="seg", add_to_existing=True,
+                                    input_axes="xyz", axes_order="xyz", output_offset="2,0,0,0,0", target_shape=",".join(str(n) for n in SHAPE),
+                                    output_dtype="uint16", **extra))
+
+    def test_a_zarr2_crop_gets_a_zarr2_label(self, tmp_path):
+        c = zarr2_crop(tmp_path, with_label=True)
+        res = self._call(tmp_path, c)
+        assert res.get("status") == "success", res
+        assert os.path.exists(c + "/labels/seg/s0/.zarray") and not os.path.exists(c + "/labels/seg/s0/zarr.json")
+        assert json.load(open(c + "/labels/.zattrs"))["labels"] == ["old", "seg"]
+
+    def test_zarr2_cannot_be_forced_into_a_zarr3_crop(self, tmp_path):
+        c = zarr3_crop(tmp_path)
+        res = self._call(tmp_path, c, output_format="zarr2")
+        assert res.get("status") != "success" and "zarr3 container" in json.dumps(res)
+        assert not os.path.exists(c + "/labels/seg")
