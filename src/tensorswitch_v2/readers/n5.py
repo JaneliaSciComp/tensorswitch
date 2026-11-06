@@ -67,6 +67,31 @@ def _is_remote_url(path: str) -> bool:
     return parsed.scheme.lower() in ('http', 'https', 's3', 'gs')
 
 
+def _cosem_layout(meta: Dict, rank: int = 3) -> Optional[Dict]:
+    """The COSEM `transform` of an N5 array or group, by axis name, in the array's own (stored) axis order.
+
+    COSEM/CellMap N5 arrays keep ``dimensions`` in x, y, z order and describe the sampling in a ``transform`` block whose ``axes`` run
+    z, y, x (``order: "C"``, slowest first) with ``scale`` and ``translate`` in that order. A group has the stored order in ``axes`` and the
+    transform under ``multiscales[0].datasets[0]``. Returns ``{"axes": [...stored names], "scale_nm": {name: nm}, "translate_nm": {name: nm}}``,
+    or None when the metadata has no such block (or it does not fit an array of `rank` dimensions).
+    """
+    t = meta.get('transform')
+    if not t:
+        datasets = ((meta.get('multiscales') or [{}])[0].get('datasets') or [{}])
+        t = datasets[0].get('transform')
+    if not t or not t.get('axes') or not t.get('scale') or len(t['axes']) != rank:
+        return None
+    names = [str(a).lower() for a in t['axes']]
+    stored = [str(a).lower() for a in meta['axes']] if len(meta.get('axes') or []) == rank else (names[::-1] if t.get('order', 'C') == 'C' else names)
+    if sorted(stored) != sorted(names):
+        return None
+    units = t.get('units') or ['nm'] * rank
+    translate = t.get('translate') or [0.0] * rank
+    scale_nm = {a: convert_to_nanometers(float(t['scale'][names.index(a)]), units[names.index(a)]) for a in stored}
+    translate_nm = {a: convert_to_nanometers(float(translate[names.index(a)]), units[names.index(a)]) for a in stored}
+    return {'axes': stored, 'scale_nm': scale_nm, 'translate_nm': translate_nm}
+
+
 class N5Reader(BaseReader):
     """
     Reader for N5 format using native TensorStore driver.
@@ -153,7 +178,7 @@ class N5Reader(BaseReader):
         spec = self._build_spec()
         spec['context'] = get_tensorstore_context()
         try:
-            self._ts_store_cache = ts.open(spec, read=True).result()
+            self._ts_store_cache = self._with_axis_names(ts.open(spec, read=True).result())
         except Exception as e:
             err = str(e)
             if 'member is missing' in err or 'Expected array' in err:
@@ -165,10 +190,30 @@ class N5Reader(BaseReader):
                     UserWarning,
                     stacklevel=2,
                 )
-                self._ts_store_cache = self._n5_pixelres_fallback()
+                self._ts_store_cache = self._with_axis_names(self._n5_pixelres_fallback())
             else:
                 raise
         return self._ts_store_cache
+
+    def _with_axis_names(self, store: ts.TensorStore) -> ts.TensorStore:
+        """`store` with its domain labelled by the COSEM axis names (x, y, z), when the metadata states them and the domain has none yet.
+
+        The labels are how every reader tells the rest of TensorSwitch the axis identity (--axes_order, --bbox_axes, the OME axes), so a source that
+        states its axes needs no --input_axes."""
+        if any(str(l) for l in store.domain.labels):
+            return store
+        layout = self.get_cosem_layout(store.rank)
+        return store[ts.d[:].label[tuple(layout['axes'])]] if layout else store
+
+    def get_cosem_layout(self, rank: int = 3) -> Optional[Dict]:
+        """The COSEM `transform` by axis name (see ``_cosem_layout``): stored axis names, ``scale_nm`` and ``translate_nm`` per name; None when absent."""
+        return _cosem_layout(self.get_metadata(), rank)
+
+    def get_translation(self) -> Optional[Dict[str, float]]:
+        """The position of the array's first voxel in nanometers per axis name (``{'x': ..., 'y': ..., 'z': ...}``), from the COSEM `transform`; None when
+        the metadata states none. As in OME-Zarr it is the centre of the first voxel."""
+        layout = self.get_cosem_layout()
+        return dict(layout['translate_nm']) if layout else None
 
     def _n5_pixelres_fallback(self) -> ts.TensorStore:
         """Auto-discover first scale level for N5 v2.0.0 pixelResolution groups.
@@ -337,6 +382,11 @@ class N5Reader(BaseReader):
             - N5 convention: pixelResolution/resolution are [x, y, z], like the dataset 'dimensions'
         """
         metadata = self.get_metadata()
+
+        # The COSEM `transform` states the sampling by axis name: use it first
+        layout = _cosem_layout(metadata, 3)
+        if layout:
+            return dict(layout['scale_nm'])
 
         # Try different metadata field names used in N5
         voxel_data = None
