@@ -3,7 +3,7 @@ Tests for the COSEM `transform` layout of an N5 (CellMap's old datasets, e.g. jr
 
 The array's attributes.json keeps `dimensions` in x, y, z order next to `pixelResolution` and a `transform`
 block (`axes` z, y, x with `order: "C"`, `scale`, `translate`, `units`); the group has `axes: [x, y, z]` and the
-same transform under `multiscales[0].datasets[0]`. N5Reader reads that once (`_cosem_layout`) and gives it to
+same transform under `multiscales[0].datasets[0]`. N5Reader reads that once (`cosem_layout`) and gives it to
 the TensorStore domain labels, the voxel sizes (by axis name) and `get_translation()`.
 """
 
@@ -14,7 +14,7 @@ import numpy as np
 import pytest
 import tensorstore as ts
 
-from tensorswitch_v2.readers.n5 import N5Reader, _cosem_layout
+from tensorswitch_v2.readers.n5 import N5Reader, cosem_layout
 from tensorswitch_v2.utils.label_ingest import orient_label_source
 
 SHAPE_XYZ = (20, 12, 8)                                   # N5 dimensions: x, y, z
@@ -57,23 +57,29 @@ def make_cosem_n5(root, data=None, transform=None, pixel_resolution=True, group_
 class TestCosemLayoutParser:
     def test_array_transform_names_the_stored_axes_by_reversing_the_c_order_axes(self):
         meta = {"dimensions": list(SHAPE_XYZ), "transform": _transform()}
-        lay = _cosem_layout(meta, 3)
+        lay = cosem_layout(meta, 3)
         assert lay["axes"] == ["x", "y", "z"]
         assert lay["scale_nm"] == {"x": 5.0, "y": 4.0, "z": 30.0} and lay["translate_nm"] == {"x": 2.5, "y": 2.0, "z": 15.0}
 
     def test_group_axes_and_multiscales_transform_are_read_when_the_array_has_none(self):
         meta = {"axes": ["x", "y", "z"], "multiscales": [{"datasets": [{"path": "s0", "transform": _transform()}]}]}
-        assert _cosem_layout(meta, 3)["axes"] == ["x", "y", "z"]
+        assert cosem_layout(meta, 3)["axes"] == ["x", "y", "z"]
+
+    def test_a_group_level_is_picked_by_its_path(self):
+        t1 = _transform(scale_zyx=(60.0, 8.0, 10.0), translate_zyx=(45.0, 6.0, 7.5))
+        meta = {"axes": ["x", "y", "z"], "multiscales": [{"datasets": [{"path": "s0", "transform": _transform()}, {"path": "s1", "transform": t1}]}]}
+        assert cosem_layout(meta, 3, "s1")["scale_nm"] == {"x": 10.0, "y": 8.0, "z": 60.0} and cosem_layout(meta, 3, "s1")["translate_nm"]["z"] == 45.0
+        assert cosem_layout(meta, 3)["scale_nm"]["z"] == 30.0 and cosem_layout(meta, 3, "s9") is None
 
     def test_units_are_converted_to_nanometers(self):
         meta = {"transform": _transform(scale_zyx=(0.03, 0.004, 0.005), translate_zyx=(0.015, 0.002, 0.0025), units="um")}
-        lay = _cosem_layout(meta, 3)
+        lay = cosem_layout(meta, 3)
         assert lay["scale_nm"]["z"] == pytest.approx(30.0) and lay["translate_nm"]["x"] == pytest.approx(2.5)
 
     def test_no_transform_or_a_rank_that_does_not_fit_gives_none(self):
-        assert _cosem_layout({"pixelResolution": {"dimensions": [4, 4, 4], "unit": "nm"}}, 3) is None
-        assert _cosem_layout({"transform": _transform()}, 4) is None
-        assert _cosem_layout({"axes": ["x", "y", "q"], "transform": _transform()}, 3) is None
+        assert cosem_layout({"pixelResolution": {"dimensions": [4, 4, 4], "unit": "nm"}}, 3) is None
+        assert cosem_layout({"transform": _transform()}, 4) is None
+        assert cosem_layout({"axes": ["x", "y", "q"], "transform": _transform()}, 3) is None
 
 
 class TestN5Reader:
