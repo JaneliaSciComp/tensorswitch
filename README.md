@@ -701,6 +701,8 @@ A plain multi-page TIFF does not say what its pages are, so the reader calls the
 
 N5 `pixelResolution.dimensions` (and the `resolution` key) are read as **x, y, z**, the same order as the dataset's `dimensions` and the order the N5 writer emits. The multiscale pyramid planner for N5 pairs these sizes with the array axes by name, so an anisotropic N5 volume gets the right downsampling factors.
 
+**COSEM-layout N5 (CellMap's old datasets, e.g. `jrc_hela-1_labels.n5`).** An array whose `attributes.json` has a `transform` block (`axes` z, y, x with `order: "C"`, `scale`, `translate`, `units`), or a group with `axes: [x, y, z]` and the same transform under `multiscales[0].datasets[0]`, states its axes and sampling by name. The reader labels the array's axes (`x, y, z`, the stored order), takes the voxel sizes from the transform by name (`pixelResolution` stays the fallback), and `N5Reader.get_translation()` returns the position of the first voxel in nm per axis name. Because the axes are named, `--axes_order zyx` turns such an array into z, y, x with no `--input_axes`; without `--axes_order` the stored order is kept. TensorSwitch does not write the source's position into the output (only the scale); a caller that needs it reads `get_translation()`.
+
 ### PNG notes (directory, `.zip`, or single `.png`)
 
 PNG slice stacks are a common EM release format — Harvard's mEMbrain GT and PyTC's EM30 both ship this way. Three behaviours are worth knowing:
